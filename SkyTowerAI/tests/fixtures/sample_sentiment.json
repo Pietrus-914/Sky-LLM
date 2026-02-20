@@ -1,0 +1,42 @@
+{
+  "NZDUSD": {
+    "pair": "NZDUSD",
+    "retail_long_percent": 72.5,
+    "retail_short_percent": 27.5,
+    "contrarian_signal": "BEARISH",
+    "long_positions": 14500,
+    "short_positions": 5500,
+    "timestamp": "2026-01-20T12:00:00Z",
+    "sources": ["myfxbook", "fxssi"]
+  },
+  "USDCAD": {
+    "pair": "USDCAD",
+    "retail_long_percent": 35.2,
+    "retail_short_percent": 64.8,
+    "contrarian_signal": "BULLISH",
+    "long_positions": 8800,
+    "short_positions": 16200,
+    "timestamp": "2026-01-20T12:00:00Z",
+    "sources": ["myfxbook", "fxssi"]
+  },
+  "AUDUSD": {
+    "pair": "AUDUSD",
+    "retail_long_percent": 55.0,
+    "retail_short_percent": 45.0,
+    "contrarian_signal": "NEUTRAL",
+    "long_positions": 11000,
+    "short_positions": 9000,
+    "timestamp": "2026-01-20T12:00:00Z",
+    "sources": ["myfxbook"]
+  },
+  "GBPUSD": {
+    "pair": "GBPUSD",
+    "retail_long_percent": 28.5,
+    "retail_short_percent": 71.5,
+    "contrarian_signal": "BULLISH",
+    "long_positions": 5700,
+    "short_positions": 14300,
+    "timestamp": "2026-01-20T12:00:00Z",
+    "sources": ["myfxbook", "fxssi", "dukascopy"]
+  }
+}

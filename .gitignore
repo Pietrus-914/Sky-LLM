@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+ENV/
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Logs
+*.log
+logs/
+
+# Large files
+*.pdf
+
+# MT5 compiled
+*.ex5
+
+# Claude Code
+.claude/
+
+# Windows special files
+nul
+SkyTowerAI/python/nul
+
+# Strategy PDF (too large)
+SkyTower-FX_V.3.0.txt

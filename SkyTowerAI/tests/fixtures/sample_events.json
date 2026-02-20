@@ -1,0 +1,54 @@
+{
+  "events": [
+    {
+      "id": "nzd-rate-001",
+      "title": "Interest Rate Decision",
+      "currency": "NZD",
+      "impact": "HIGH",
+      "datetime": "2026-01-22T21:00:00Z",
+      "forecast": "4.25%",
+      "previous": "4.00%",
+      "actual": null
+    },
+    {
+      "id": "cad-rate-001",
+      "title": "Interest Rate Decision",
+      "currency": "CAD",
+      "impact": "HIGH",
+      "datetime": "2026-01-23T15:00:00Z",
+      "forecast": "4.50%",
+      "previous": "4.50%",
+      "actual": null
+    },
+    {
+      "id": "us-nfp-001",
+      "title": "Non-Farm Payrolls",
+      "currency": "USD",
+      "impact": "HIGH",
+      "datetime": "2026-02-07T13:30:00Z",
+      "forecast": "180K",
+      "previous": "256K",
+      "actual": null
+    },
+    {
+      "id": "aud-cpi-001",
+      "title": "CPI q/q",
+      "currency": "AUD",
+      "impact": "HIGH",
+      "datetime": "2026-01-29T00:30:00Z",
+      "forecast": "0.8%",
+      "previous": "0.9%",
+      "actual": null
+    },
+    {
+      "id": "gbp-gdp-001",
+      "title": "GDP m/m",
+      "currency": "GBP",
+      "impact": "HIGH",
+      "datetime": "2026-02-13T07:00:00Z",
+      "forecast": "0.2%",
+      "previous": "-0.1%",
+      "actual": null
+    }
+  ]
+}

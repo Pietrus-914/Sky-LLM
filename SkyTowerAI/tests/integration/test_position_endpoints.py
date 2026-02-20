@@ -1,0 +1,190 @@
+"""
+Integration tests for AI Position Management endpoints.
+Tests Flask endpoints for position lifecycle.
+
+NOTE: These tests import the real server module with all its dependencies.
+The python/ directory must be on the path and all dependencies installed.
+"""
+import pytest
+import sys
+import os
+
+# Add python directory to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'python'))
+
+from position_manager import PositionManager, PositionCommand
+from server import app
+
+
+@pytest.fixture
+def client():
+    """Create test client with isolated position manager.
+    Prevents ensure_services() from overwriting our test PM.
+    Restores originals after test.
+    """
+    from unittest.mock import MagicMock
+    app.config['TESTING'] = True
+
+    import server
+
+    # Save originals
+    orig_de = server.decision_engine
+    orig_cal = server.calendar
+    orig_pm = server.position_manager
+
+    # Prevent ensure_services() from calling init_services()
+    if server.decision_engine is None:
+        server.decision_engine = MagicMock()
+    if server.calendar is None:
+        server.calendar = MagicMock()
+
+    server.position_manager = PositionManager(exit_engine=None)
+
+    with app.test_client() as client:
+        yield client
+
+    # Restore originals
+    server.decision_engine = orig_de
+    server.calendar = orig_cal
+    server.position_manager = orig_pm
+
+
+def open_position(client, **overrides):
+    """Helper to open a position via API."""
+    data = {
+        "ticket": 12345,
+        "symbol": "NZDUSD",
+        "direction": "BUY",
+        "entry_price": 0.6200,
+        "lots": 0.50,
+        "sl": 0.6170,
+        "tp": 0.0,
+        "tick_value": 10.0,
+        "account_balance": 5000.00,
+        "event_name": "Official Cash Rate",
+    }
+    data.update(overrides)
+    return client.post('/api/position/opened', json=data)
+
+
+def report_position(client, **overrides):
+    """Helper to send position report via API."""
+    data = {
+        "ticket": 12345,
+        "current_price": 0.6210,
+        "remaining_lots": 0.50,
+        "sl": 0.6170,
+        "tp": 0.0,
+        "profit_usd": 20.0,
+        "tick_value": 10.0,
+        "spread_pips": 2.5,
+        "account_balance": 5000.00,
+        "zone_bias": 0.0,
+        "nearest_resistance": 0.6250,
+        "nearest_support": 0.6180,
+    }
+    data.update(overrides)
+    return client.post('/api/position/report', json=data)
+
+
+def close_position(client, **overrides):
+    """Helper to close a position via API."""
+    data = {
+        "ticket": 12345,
+        "close_price": 0.6230,
+        "profit": 150.0,
+        "reason": "AI: TP reached",
+    }
+    data.update(overrides)
+    return client.post('/api/position/closed', json=data)
+
+
+# ============================================================================
+# TestPositionEndpoints
+# ============================================================================
+
+class TestPositionEndpoints:
+    """Test AI Position Management Flask endpoints."""
+
+    def test_position_opened(self, client):
+        """POST /api/position/opened should return status ok."""
+        resp = open_position(client)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['status'] == 'ok'
+
+    def test_position_report_no_position(self, client):
+        """Position report without open position should return HOLD."""
+        resp = report_position(client)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['command']['action'] == 'HOLD'
+
+    def test_position_report_with_position(self, client):
+        """Position report with open position should return command."""
+        open_position(client)
+        resp = report_position(client, profit_usd=20.0)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert 'command' in data
+        assert 'action' in data['command']
+
+    def test_position_report_guardrail_triggers(self, client):
+        """Position report with high loss should trigger CLOSE."""
+        open_position(client)
+        resp = report_position(client, profit_usd=-110.0)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['has_command'] is True
+        assert data['command']['action'] == 'CLOSE'
+
+    def test_position_closed(self, client):
+        """POST /api/position/closed should return status ok."""
+        open_position(client)
+        resp = close_position(client, profit=75.0)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['status'] == 'ok'
+
+    def test_position_status(self, client):
+        """GET /api/position/status should return status info."""
+        resp = client.get('/api/position/status')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['status'] == 'ok'
+        assert 'has_position' in data
+        assert 'daily_pnl_usd' in data
+
+    def test_position_status_with_open_position(self, client):
+        """Status should show position details when open."""
+        open_position(client)
+        resp = client.get('/api/position/status')
+        data = resp.get_json()
+        assert data['has_position'] is True
+        assert data['position']['ticket'] == 12345
+        assert data['daily_trades'] == 1
+
+    def test_full_lifecycle(self, client):
+        """Full lifecycle: open → report → close → verify daily P/L."""
+        # 1. Open position
+        resp = open_position(client)
+        assert resp.get_json()['status'] == 'ok'
+
+        # 2. Send a few reports
+        resp = report_position(client, profit_usd=20.0)
+        assert resp.get_json()['command']['action'] == 'HOLD'
+
+        resp = report_position(client, profit_usd=50.0)
+        assert resp.status_code == 200
+
+        # 3. Close position
+        resp = close_position(client, profit=50.0)
+        assert resp.get_json()['status'] == 'ok'
+
+        # 4. Verify daily P/L
+        resp = client.get('/api/position/status')
+        data = resp.get_json()
+        assert data['has_position'] is False
+        assert data['daily_pnl_usd'] == 50.0
+        assert data['daily_trades'] == 1
+        assert data['closed_trades_today'] == 1

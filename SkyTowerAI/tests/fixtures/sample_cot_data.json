@@ -1,0 +1,58 @@
+{
+  "NZD": {
+    "currency": "NZD",
+    "contract": "NEW ZEALAND DOLLAR",
+    "date": "2026-01-14",
+    "non_commercial_long": 45230,
+    "non_commercial_short": 32150,
+    "commercial_long": 28400,
+    "commercial_short": 41500,
+    "net_position": 13080,
+    "net_change": 2450,
+    "open_interest": 125000,
+    "signal": "BULLISH",
+    "confidence": 0.65
+  },
+  "CAD": {
+    "currency": "CAD",
+    "contract": "CANADIAN DOLLAR",
+    "date": "2026-01-14",
+    "non_commercial_long": 38500,
+    "non_commercial_short": 52300,
+    "commercial_long": 55200,
+    "commercial_short": 41000,
+    "net_position": -13800,
+    "net_change": -3200,
+    "open_interest": 180000,
+    "signal": "BEARISH",
+    "confidence": 0.58
+  },
+  "AUD": {
+    "currency": "AUD",
+    "contract": "AUSTRALIAN DOLLAR",
+    "date": "2026-01-14",
+    "non_commercial_long": 62100,
+    "non_commercial_short": 58900,
+    "commercial_long": 45000,
+    "commercial_short": 48200,
+    "net_position": 3200,
+    "net_change": 800,
+    "open_interest": 210000,
+    "signal": "NEUTRAL",
+    "confidence": 0.45
+  },
+  "GBP": {
+    "currency": "GBP",
+    "contract": "BRITISH POUND",
+    "date": "2026-01-14",
+    "non_commercial_long": 71200,
+    "non_commercial_short": 45800,
+    "commercial_long": 38500,
+    "commercial_short": 63900,
+    "net_position": 25400,
+    "net_change": 4100,
+    "open_interest": 195000,
+    "signal": "BULLISH",
+    "confidence": 0.72
+  }
+}
