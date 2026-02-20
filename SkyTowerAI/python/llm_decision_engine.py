@@ -170,13 +170,34 @@ SKIP the trade if:
     def _gather_data(self, event: EconomicEvent) -> Dict:
         """Gather all relevant data for decision making"""
         currency = event.currency.upper()
+        source_status = {}
 
         # Get COT positioning
         cot_data = self.cot_analyzer.analyze_currency(currency)
+        if isinstance(cot_data, dict) and 'error' in cot_data:
+            logger.warning(f"COT data unavailable for {currency}: {cot_data.get('error')}")
+            source_status["cot"] = f"error: {cot_data.get('error', 'unknown')}"
+        elif isinstance(cot_data, dict):
+            logger.info(f"COT data: {currency} signal={cot_data.get('signal', 'UNKNOWN')}, "
+                        f"confidence={cot_data.get('confidence', 0):.0%}")
+            source_status["cot"] = "ok"
+        else:
+            source_status["cot"] = "unknown_format"
 
         # Get sentiment
         pair = DEFAULT_PAIRS.get(currency, f"{currency}/USD")
         sentiment_data = self.sentiment.get_currency_sentiment(currency)
+        if isinstance(sentiment_data, dict):
+            pairs_analyzed = sentiment_data.get('pairs_analyzed', 0)
+            if pairs_analyzed == 0:
+                logger.warning(f"Sentiment data unavailable for {currency} (0 pairs analyzed)")
+                source_status["sentiment"] = "no_data"
+            else:
+                logger.info(f"Sentiment: {currency} signal={sentiment_data.get('signal', 'UNKNOWN')}, "
+                            f"pairs={pairs_analyzed}")
+                source_status["sentiment"] = "ok"
+        else:
+            source_status["sentiment"] = "unknown_format"
 
         # Get forecast info
         forecast_info = {
@@ -184,6 +205,11 @@ SKIP the trade if:
             "previous_value": event.previous,
             "forecast_vs_previous": self._compare_values(event.forecast, event.previous)
         }
+        if not event.forecast and not event.previous:
+            logger.warning(f"No forecast/previous values for {event.event_name}")
+            source_status["forecast"] = "no_data"
+        else:
+            source_status["forecast"] = "ok"
 
         return {
             "event": {
@@ -198,6 +224,7 @@ SKIP the trade if:
             "sentiment_analysis": sentiment_data,
             "forecast_info": forecast_info,
             "suggested_pair": pair,
+            "_source_status": source_status,
         }
 
     def _compare_values(self, forecast: str, previous: str) -> str:

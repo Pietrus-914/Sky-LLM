@@ -2,15 +2,17 @@
 SkyTower-AI Flask Server
 Provides REST API for MT5 Expert Advisor communication
 """
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import json
+import os
 import threading
 import time
 from loguru import logger
 
 from config import SERVER_CONFIG, TRADING_CONFIG, ZONE_CONFIG, EXIT_CONFIG, POSITION_MANAGEMENT_CONFIG
+from config import HIGH_IMPACT_EVENTS, CURRENCY_PAIRS
 from calendar_fetcher import CalendarAggregator
 from cot_analyzer import COTAnalyzer
 from sentiment_analyzer import SentimentAggregator
@@ -19,6 +21,7 @@ from zone_analyzer import ZoneAnalyzer, PriceBar, analyze_from_ohlc_data
 from target_calculator import TargetCalculator, calculate_trade_targets
 from position_manager import PositionManager
 from exit_decision_engine import ExitDecisionEngine
+from decision_history import DecisionHistory
 
 app = Flask(__name__)
 CORS(app)
@@ -30,8 +33,13 @@ zone_analyzer = None
 target_calculator = None
 position_manager = None
 exit_engine = None
+decision_history = None
 next_decision = None
 decision_lock = threading.Lock()
+
+# Event analysis tracking (BUG-6 FIX)
+# Tracks which events have been analyzed (SKIP) to avoid re-analyzing
+analyzed_events = {}  # {"event_key": datetime_analyzed}
 
 # Multi-instance coordination
 # Structure: { "event_key": { "pair": {...data...}, "pair2": {...} }, ... }
@@ -44,7 +52,7 @@ executed_trades = set()  # Tracks executed event_keys to prevent duplicates
 
 def init_services():
     """Initialize all services"""
-    global decision_engine, calendar, zone_analyzer, target_calculator, position_manager, exit_engine
+    global decision_engine, calendar, zone_analyzer, target_calculator, position_manager, exit_engine, decision_history
     logger.info("Initializing SkyTower-AI services...")
 
     decision_engine = LLMDecisionEngine()
@@ -53,15 +61,127 @@ def init_services():
     target_calculator = TargetCalculator(ZONE_CONFIG)
     exit_engine = ExitDecisionEngine()
     position_manager = PositionManager(exit_engine=exit_engine)
+    decision_history = DecisionHistory()
 
-    logger.info("Services initialized successfully (with AI Position Manager)")
+    logger.info("Services initialized successfully (with AI Position Manager + Decision History)")
 
 
 def ensure_services():
     """Ensure services are initialized (lazy initialization)"""
-    global decision_engine, calendar, zone_analyzer, target_calculator, position_manager, exit_engine
+    global decision_engine, calendar, zone_analyzer, target_calculator, position_manager, exit_engine, decision_history
     if decision_engine is None or calendar is None:
         init_services()
+
+
+@app.route('/')
+def dashboard():
+    """Serve the web dashboard"""
+    return render_template('dashboard.html')
+
+
+@app.route('/api/logs', methods=['GET'])
+def get_logs():
+    """Return recent log lines for dashboard"""
+    import os
+    lines = request.args.get('lines', 50, type=int)
+    log_path = os.path.join(os.path.dirname(__file__), 'logs', 'server.log')
+    try:
+        if os.path.exists(log_path):
+            with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+                all_lines = f.readlines()
+                recent = all_lines[-lines:] if len(all_lines) > lines else all_lines
+                return jsonify({"status": "ok", "lines": [l.rstrip() for l in recent]})
+        return jsonify({"status": "ok", "lines": ["No log file found"]})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/config/events', methods=['GET', 'POST'])
+def config_events():
+    """Get or update event filter configuration"""
+    import config as cfg
+
+    if request.method == 'GET':
+        return jsonify({
+            "status": "ok",
+            "tier1_events": cfg.TIER1_EVENTS,
+            "tier2_events": cfg.TIER2_EVENTS,
+            "all_events": cfg.HIGH_IMPACT_EVENTS,
+            "currencies": list(cfg.CURRENCY_PAIRS.keys()),
+        })
+
+    # POST: update event config at runtime
+    data = request.json or {}
+    if 'tier1_events' in data:
+        cfg.TIER1_EVENTS = data['tier1_events']
+    if 'tier2_events' in data:
+        cfg.TIER2_EVENTS = data['tier2_events']
+    if 'tier1_events' in data or 'tier2_events' in data:
+        cfg.HIGH_IMPACT_EVENTS = cfg.TIER1_EVENTS + cfg.TIER2_EVENTS
+    return jsonify({"status": "ok", "message": "Event config updated"})
+
+
+@app.route('/api/decisions/history', methods=['GET'])
+def get_decision_history():
+    """Get decision audit log — all LLM decisions (BUY/SELL/SKIP)"""
+    ensure_services()
+    limit = request.args.get('limit', 20, type=int)
+    today_only = request.args.get('today', 'false').lower() == 'true'
+
+    if decision_history is None:
+        return jsonify({"status": "ok", "count": 0, "decisions": []})
+
+    if today_only:
+        decisions = decision_history.get_today()
+    else:
+        decisions = decision_history.get_recent(limit=limit)
+
+    return jsonify({
+        "status": "ok",
+        "count": len(decisions),
+        "decisions": decisions
+    })
+
+
+@app.route('/api/datasources/status', methods=['GET'])
+def get_datasource_status():
+    """Check which data sources are currently responding."""
+    ensure_services()
+    status = {}
+
+    # Test COT
+    try:
+        cot_result = decision_engine.cot_analyzer.analyze_currency("USD")
+        has_error = 'error' in cot_result if isinstance(cot_result, dict) else True
+        status["cot"] = {
+            "status": "error" if has_error else "ok",
+            "detail": cot_result.get("error", f"signal={cot_result.get('signal', 'UNKNOWN')}") if isinstance(cot_result, dict) else "unknown",
+        }
+    except Exception as e:
+        status["cot"] = {"status": "error", "detail": str(e)}
+
+    # Test sentiment
+    try:
+        sent_result = decision_engine.sentiment.get_currency_sentiment("USD")
+        pairs = sent_result.get("pairs_analyzed", 0) if isinstance(sent_result, dict) else 0
+        status["sentiment"] = {
+            "status": "ok" if pairs > 0 else "no_data",
+            "pairs_analyzed": pairs,
+        }
+    except Exception as e:
+        status["sentiment"] = {"status": "error", "detail": str(e)}
+
+    # Test calendar
+    try:
+        events = calendar.get_upcoming_events(hours_ahead=168)
+        status["calendar"] = {
+            "status": "ok" if len(events) > 0 else "no_events",
+            "events_found": len(events),
+        }
+    except Exception as e:
+        status["calendar"] = {"status": "error", "detail": str(e)}
+
+    return jsonify({"status": "ok", "data_sources": status})
 
 
 @app.route('/health', methods=['GET'])
@@ -70,7 +190,7 @@ def health_check():
     return jsonify({
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
-        "version": "4.0.0"
+        "version": "4.1.0"
     })
 
 
@@ -104,9 +224,10 @@ def get_upcoming_events():
         hours = request.args.get('hours', 168, type=int)  # Default 1 week
         currencies = request.args.get('currencies', 'NZD,CAD,AUD,USD,GBP').split(',')
 
+        impact = request.args.get('impact', 'MEDIUM').upper()
         events = calendar.get_upcoming_events(
             currencies=currencies,
-            impact_filter="HIGH",
+            impact_filter=impact,
             hours_ahead=hours
         )
 
@@ -160,6 +281,10 @@ def refresh_decision():
     try:
         with decision_lock:
             next_decision = decision_engine.get_next_trade_recommendation()
+
+            # Record to decision history
+            if next_decision and decision_history:
+                decision_history.record(next_decision)
 
             if next_decision:
                 return jsonify({
@@ -1246,117 +1371,218 @@ def cleanup_stale_registrations():
     executed_trades -= stale_executed
 
 
+def _analyzed_event_key(event) -> str:
+    """Create unique key for tracking analyzed events."""
+    dt_str = event.datetime_utc.strftime("%Y%m%d_%H%M") if hasattr(event, 'datetime_utc') else str(event)
+    name = getattr(event, 'event_name', '')
+    currency = getattr(event, 'currency', '')
+    return f"{currency}_{name}_{dt_str}"
+
+
+def _mark_event_analyzed(event):
+    """Mark an event as already analyzed (SKIP). Prevents re-analysis."""
+    key = _analyzed_event_key(event)
+    analyzed_events[key] = datetime.utcnow()
+    logger.info(f"Event marked as analyzed (SKIP): {key}")
+
+
+def _is_event_analyzed(event) -> bool:
+    """Check if event was already analyzed."""
+    return _analyzed_event_key(event) in analyzed_events
+
+
+def _cleanup_analyzed_events():
+    """Remove analyzed event records older than 24 hours."""
+    now = datetime.utcnow()
+    stale = [k for k, v in analyzed_events.items() if (now - v).total_seconds() > 86400]
+    for k in stale:
+        del analyzed_events[k]
+    if stale:
+        logger.debug(f"Cleaned up {len(stale)} stale analyzed event records")
+
+
+def _get_next_unanalyzed_events() -> list:
+    """
+    Get upcoming tradeable events, excluding already-analyzed ones.
+    Returns list of events sorted by time (nearest first).
+    """
+    events = calendar.get_tradeable_events(
+        event_keywords=HIGH_IMPACT_EVENTS,
+        currencies=list(CURRENCY_PAIRS.keys())
+    )
+
+    result = []
+    for event in events:
+        # Skip already-analyzed events
+        if _is_event_analyzed(event):
+            continue
+
+        # Skip events that already passed by more than 2 minutes
+        event_time = event.datetime_utc
+        if event_time.tzinfo is not None:
+            event_time = event_time.replace(tzinfo=None)
+        if (event_time - datetime.utcnow()).total_seconds() < -120:
+            continue
+
+        result.append(event)
+
+    return result
+
+
 def background_decision_updater():
     """
     Intelligent background thread that:
-    1. Pre-loads decisions 5 minutes before events
-    2. Resets decisions after events pass
-    3. Ensures LLM has time to process before entry
-    4. Cleans up stale registrations periodically
+    1. Pre-loads decisions before events (within PRELOAD window)
+    2. Handles SKIP decisions immediately — moves to next event (BUG-6 FIX)
+    3. Releases decision_lock during LLM calls for API responsiveness
+    4. Records all decisions to audit log
+    5. Cleans up stale registrations periodically
     """
     global next_decision
 
-    PRELOAD_SECONDS = 120  # 2 minutes before event - decision must be ready
-    CHECK_INTERVAL = 15    # Check every 15 seconds for better responsiveness
+    PRELOAD_SECONDS = 180  # 3 minutes before event - decision must be ready
+    CHECK_INTERVAL = 15    # Check every 15 seconds
     CLEANUP_INTERVAL = 300  # Cleanup every 5 minutes
 
-    last_event_time = None
-    decision_ready_for_event = False
+    last_logged_event_key = None
     last_cleanup_time = time.time()
 
     while True:
         try:
             time.sleep(CHECK_INTERVAL)
 
-            # Periodic cleanup of stale registrations
+            # Periodic cleanup
             if time.time() - last_cleanup_time > CLEANUP_INTERVAL:
                 cleanup_stale_registrations()
+                _cleanup_analyzed_events()
                 last_cleanup_time = time.time()
 
+            # === PHASE 1: Check state & find event to analyze (under lock, fast) ===
+            event_to_analyze = None
+
             with decision_lock:
-                # Check current decision state
                 if next_decision:
+                    # We have an active (non-SKIP) decision — check if event passed
                     try:
-                        # Event time is in UTC
                         event_time = datetime.fromisoformat(
                             next_decision.data_summary['event']['datetime']
                         )
                         if event_time.tzinfo is not None:
                             event_time = event_time.replace(tzinfo=None)
 
-                        # Use utcnow() to compare UTC with UTC
                         time_until = (event_time - datetime.utcnow()).total_seconds()
 
                         # Event passed - reset decision
                         if time_until < -120:  # 2 minutes after event
                             logger.info(f"Event passed ({next_decision.event}). Resetting decision.")
                             next_decision = None
-                            decision_ready_for_event = False
-                            last_event_time = None
+                            last_logged_event_key = None
                             continue
 
-                        # Track that we have a decision for this event
-                        if last_event_time != event_time:
-                            last_event_time = event_time
-                            decision_ready_for_event = True
-                            logger.info(f"Decision ready for {next_decision.event} @ {event_time}")
-                            logger.info(f"  Direction: {next_decision.direction} | Confidence: {next_decision.confidence:.0%}")
-                            logger.info(f"  Time until event: {int(time_until)}s ({int(time_until/60)}min)")
+                        # Log active decision once
+                        evt_key = _analyzed_event_key_from_decision(next_decision)
+                        if last_logged_event_key != evt_key:
+                            last_logged_event_key = evt_key
+                            logger.info(f"Decision ready: {next_decision.event} @ {event_time}")
+                            logger.info(f"  Direction: {next_decision.direction} | "
+                                        f"Confidence: {next_decision.confidence:.0%} | "
+                                        f"Time until: {int(time_until)}s")
 
                     except Exception as e:
                         logger.debug(f"Error checking event time: {e}")
 
                 else:
-                    # No current decision - check if we need to pre-load one
-                    decision_ready_for_event = False
+                    # No active decision — scan for events to analyze
+                    events = _get_next_unanalyzed_events()
 
-                    # Check for upcoming events
-                    event = calendar.get_next_tradeable_event()
-
-                    if event:
-                        # Event time is in UTC
+                    for event in events:
                         event_time = event.datetime_utc
                         if event_time.tzinfo is not None:
                             event_time = event_time.replace(tzinfo=None)
 
-                        # Use utcnow() to compare UTC with UTC
                         time_until = (event_time - datetime.utcnow()).total_seconds()
 
-                        # Pre-load decision 5 minutes before
-                        if 0 < time_until <= PRELOAD_SECONDS:
-                            logger.info(f"")
-                            logger.info(f"{'='*60}")
-                            logger.info(f"PRE-LOADING DECISION - Event in {int(time_until)}s")
-                            logger.info(f"Event: {event.event_name} ({event.currency})")
-                            logger.info(f"{'='*60}")
+                        if time_until < -30:
+                            # Event already passed, skip
+                            continue
+                        elif 0 < time_until <= PRELOAD_SECONDS:
+                            # In pre-load window — analyze this event
+                            event_to_analyze = event
+                            break
+                        elif time_until > PRELOAD_SECONDS:
+                            # Next event is too far away, stop scanning
+                            break
 
-                            # Generate decision (this may take 20-60 seconds for LLM)
-                            start_time = time.time()
-                            new_decision = decision_engine.get_next_trade_recommendation()
-                            elapsed = time.time() - start_time
+            # === PHASE 2: LLM call OUTSIDE lock (can take 20-60s) ===
+            if event_to_analyze:
+                logger.info(f"")
+                logger.info(f"{'='*60}")
+                logger.info(f"ANALYZING EVENT - {event_to_analyze.event_name} ({event_to_analyze.currency})")
 
-                            if new_decision:
-                                next_decision = new_decision
-                                logger.info(f"Decision generated in {elapsed:.1f}s")
-                                logger.info(f"  Direction: {new_decision.direction}")
-                                logger.info(f"  Confidence: {new_decision.confidence:.0%}")
-                                logger.info(f"  Reasoning: {new_decision.reasoning[:100]}...")
-                            else:
-                                logger.info(f"No trade signal generated (SKIP or no data)")
+                evt_time = event_to_analyze.datetime_utc
+                if evt_time.tzinfo is not None:
+                    evt_time = evt_time.replace(tzinfo=None)
+                secs_until = int((evt_time - datetime.utcnow()).total_seconds())
+                logger.info(f"Time until event: {secs_until}s ({secs_until // 60}min)")
+                logger.info(f"{'='*60}")
+
+                start_time = time.time()
+                try:
+                    new_decision = decision_engine.analyze_event(event_to_analyze)
+                    elapsed = time.time() - start_time
+
+                    # Record ALL decisions to audit log
+                    if decision_history:
+                        decision_history.record(new_decision)
+
+                    # === PHASE 3: Apply decision (under lock) ===
+                    with decision_lock:
+                        if new_decision.direction != "SKIP":
+                            # Actionable decision — store it
+                            next_decision = new_decision
+                            logger.info(f"DECISION: {new_decision.direction} in {elapsed:.1f}s")
+                            logger.info(f"  Pair: {new_decision.pair} | "
+                                        f"Confidence: {new_decision.confidence:.0%}")
+                            logger.info(f"  Reasoning: {new_decision.reasoning[:150]}...")
+                        else:
+                            # SKIP — mark as analyzed, do NOT block pipeline
+                            _mark_event_analyzed(event_to_analyze)
+                            logger.info(f"SKIP in {elapsed:.1f}s for {new_decision.event}")
+                            logger.info(f"  Confidence: {new_decision.confidence:.0%}")
+                            logger.info(f"  Reasoning: {new_decision.reasoning[:150]}...")
+                            # next_decision stays None → next iteration scans for more events
+
+                except Exception as e:
+                    logger.error(f"Error analyzing event {event_to_analyze.event_name}: {e}")
+                    # Mark as analyzed to avoid infinite retry loop
+                    _mark_event_analyzed(event_to_analyze)
 
         except Exception as e:
             logger.error(f"Background updater error: {e}")
             time.sleep(60)
 
 
+def _analyzed_event_key_from_decision(decision) -> str:
+    """Create event key from a TradingDecision object."""
+    try:
+        evt = decision.data_summary.get('event', {})
+        dt_str = evt.get('datetime', '')[:16].replace('-', '').replace(':', '').replace('T', '_')
+        return f"{evt.get('currency', '')}_{decision.event}_{dt_str}"
+    except Exception:
+        return str(id(decision))
+
+
 if __name__ == '__main__':
     import sys
 
-    # Setup logging
+    # Setup logging with absolute path (BUG-8 FIX)
+    _log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+    os.makedirs(_log_dir, exist_ok=True)
+
     logger.remove()
     logger.add(sys.stdout, level="INFO",
                format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
-    logger.add("logs/server.log", rotation="1 day", retention="30 days")
+    logger.add(os.path.join(_log_dir, "server.log"), rotation="1 day", retention="30 days")
 
     print("=" * 60)
     print("SkyTower-AI Server")
@@ -1372,22 +1598,24 @@ if __name__ == '__main__':
     # Run server
     print(f"\nServer starting on http://{SERVER_CONFIG['host']}:{SERVER_CONFIG['port']}")
     print("Endpoints:")
-    print("  GET  /health              - Health check")
-    print("  GET  /api/signal          - Get MT5 trade signal")
-    print("  GET  /api/decision        - Get full trading decision")
-    print("  POST /api/decision/refresh - Force refresh decision")
-    print("  GET  /api/events          - Get upcoming events")
-    print("  GET  /api/cot/<currency>  - Get COT data")
-    print("  GET  /api/sentiment/<pair> - Get sentiment")
-    print("  POST /api/zones           - Analyze market structure zones")
-    print("  GET  /api/zones/<symbol>  - Simple zone query (test)")
-    print("  POST /api/targets         - Calculate trade targets")
-    print("  GET  /api/config          - Get configuration")
+    print("  GET  /health                - Health check")
+    print("  GET  /api/signal            - Get MT5 trade signal")
+    print("  GET  /api/decision          - Get full trading decision")
+    print("  POST /api/decision/refresh  - Force refresh decision")
+    print("  GET  /api/events            - Get upcoming events")
+    print("  GET  /api/cot/<currency>    - Get COT data")
+    print("  GET  /api/sentiment/<pair>  - Get sentiment")
+    print("  POST /api/zones             - Analyze market structure zones")
+    print("  POST /api/targets           - Calculate trade targets")
+    print("  GET  /api/config            - Get configuration")
+    print("  --- AI Decision Audit ---")
+    print("  GET  /api/decisions/history  - Decision audit log")
+    print("  GET  /api/datasources/status - Data source health")
     print("  --- AI Position Management ---")
-    print("  POST /api/position/opened - EA reports position opened")
-    print("  POST /api/position/report - EA reports status + gets AI command")
-    print("  POST /api/position/closed - EA reports position closed")
-    print("  GET  /api/position/status - Position manager status")
+    print("  POST /api/position/opened   - EA reports position opened")
+    print("  POST /api/position/report   - EA reports status + gets AI command")
+    print("  POST /api/position/closed   - EA reports position closed")
+    print("  GET  /api/position/status   - Position manager status")
     print("=" * 60)
 
     app.run(

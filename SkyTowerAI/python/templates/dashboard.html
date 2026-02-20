@@ -1,0 +1,1924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkyTower-AI Dashboard</title>
+    <style>
+        /* ================================================================
+           CSS RESET & BASE
+           ================================================================ */
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --bg-card: #1c2333;
+            --border-color: #30363d;
+            --border-accent: #3b82f6;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --accent-blue: #3b82f6;
+            --accent-blue-dim: #1d4ed8;
+            --accent-green: #22c55e;
+            --accent-green-dim: #15803d;
+            --accent-red: #ef4444;
+            --accent-red-dim: #991b1b;
+            --accent-orange: #f59e0b;
+            --accent-orange-dim: #92400e;
+            --accent-purple: #a78bfa;
+            --accent-gray: #6b7280;
+            --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+            --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 14px;
+            --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.3);
+            --shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.4);
+        }
+
+        html {
+            font-size: 15px;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        /* ================================================================
+           HEADER
+           ================================================================ */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 56px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header-brand .logo-icon {
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 14px;
+            color: #fff;
+        }
+
+        .header-brand h1 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+
+        .header-brand h1 span {
+            color: var(--accent-blue);
+        }
+
+        .header-meta {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .header-meta .version {
+            background: var(--bg-tertiary);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+        }
+
+        .clock {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: var(--text-primary);
+        }
+
+        /* ================================================================
+           TAB NAVIGATION
+           ================================================================ */
+        .tab-bar {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            padding: 0 24px;
+            gap: 2px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .tab-btn {
+            padding: 10px 18px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-family: var(--font-sans);
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            white-space: nowrap;
+            transition: color 0.15s, border-color 0.15s, background 0.15s;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-primary);
+            background: var(--bg-tertiary);
+        }
+
+        .tab-btn.active {
+            color: var(--accent-blue);
+            border-bottom-color: var(--accent-blue);
+        }
+
+        /* ================================================================
+           TAB CONTENT
+           ================================================================ */
+        .tab-content {
+            display: none;
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+            animation: fadeIn 0.2s ease;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ================================================================
+           CARDS
+           ================================================================ */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 20px;
+            box-shadow: var(--shadow-card);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .card-title {
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-secondary);
+        }
+
+        .card-badge {
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: 500;
+        }
+
+        /* ================================================================
+           GRID LAYOUTS
+           ================================================================ */
+        .grid-overview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .grid-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+        }
+
+        /* ================================================================
+           STATUS INDICATOR
+           ================================================================ */
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+            flex-shrink: 0;
+        }
+
+        .status-dot.online {
+            background: var(--accent-green);
+            box-shadow: 0 0 6px var(--accent-green);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status-dot.offline {
+            background: var(--accent-red);
+            box-shadow: 0 0 6px var(--accent-red);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* ================================================================
+           STAT CELLS
+           ================================================================ */
+        .stat-cell {
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            padding: 14px 16px;
+            text-align: center;
+        }
+
+        .stat-cell .label {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 4px;
+        }
+
+        .stat-cell .value {
+            font-size: 1.3rem;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            color: var(--text-primary);
+        }
+
+        .stat-cell .value.positive {
+            color: var(--accent-green);
+        }
+
+        .stat-cell .value.negative {
+            color: var(--accent-red);
+        }
+
+        .stat-cell .value.neutral {
+            color: var(--text-secondary);
+        }
+
+        /* ================================================================
+           SERVER STATUS CARD
+           ================================================================ */
+        .server-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .server-info {
+            margin-top: 12px;
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+        }
+
+        .server-info div {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+
+        .server-info div:last-child {
+            border-bottom: none;
+        }
+
+        .server-info .key {
+            color: var(--text-muted);
+        }
+
+        .server-info .val {
+            font-family: var(--font-mono);
+            color: var(--text-primary);
+        }
+
+        /* ================================================================
+           NEXT EVENT
+           ================================================================ */
+        .event-highlight {
+            margin-top: 12px;
+        }
+
+        .event-name {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+        }
+
+        .event-detail {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+            margin-bottom: 3px;
+        }
+
+        .countdown {
+            font-family: var(--font-mono);
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--accent-blue);
+            margin-top: 10px;
+            letter-spacing: 0.02em;
+        }
+
+        .countdown.imminent {
+            color: var(--accent-orange);
+            animation: pulse 1s ease-in-out infinite;
+        }
+
+        .countdown.passed {
+            color: var(--text-muted);
+            font-size: 1rem;
+        }
+
+        /* ================================================================
+           POSITION CARD
+           ================================================================ */
+        .position-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            font-size: 0.85rem;
+        }
+
+        .position-row .key {
+            color: var(--text-muted);
+        }
+
+        .position-row .val {
+            font-family: var(--font-mono);
+            font-weight: 600;
+        }
+
+        .direction-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 4px;
+            font-weight: 700;
+            font-size: 0.78rem;
+            font-family: var(--font-mono);
+        }
+
+        .direction-badge.buy {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--accent-green);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .direction-badge.sell {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--accent-red);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        /* ================================================================
+           EVENTS TABLE
+           ================================================================ */
+        .table-wrapper {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        thead th {
+            text-align: left;
+            padding: 10px 12px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border-color);
+            white-space: nowrap;
+        }
+
+        tbody td {
+            padding: 10px 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+            color: var(--text-primary);
+        }
+
+        tbody tr:hover {
+            background: rgba(59, 130, 246, 0.04);
+        }
+
+        .impact-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .impact-badge.high {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--accent-red);
+            border: 1px solid rgba(239, 68, 68, 0.25);
+        }
+
+        .impact-badge.medium {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--accent-orange);
+            border: 1px solid rgba(245, 158, 11, 0.25);
+        }
+
+        .impact-badge.low {
+            background: rgba(107, 114, 128, 0.15);
+            color: var(--accent-gray);
+            border: 1px solid rgba(107, 114, 128, 0.25);
+        }
+
+        .currency-tag {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            font-weight: 600;
+            background: var(--bg-tertiary);
+            color: var(--accent-blue);
+        }
+
+        .data-mono {
+            font-family: var(--font-mono);
+            font-size: 0.82rem;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        /* ================================================================
+           EVENT CONFIG TAB
+           ================================================================ */
+        .config-section {
+            margin-bottom: 24px;
+        }
+
+        .config-section h3 {
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--text-primary);
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 8px;
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .checkbox-item:hover {
+            background: rgba(59, 130, 246, 0.08);
+        }
+
+        .checkbox-item input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent-blue);
+            cursor: pointer;
+        }
+
+        .checkbox-item label {
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .config-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .config-row label {
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+            min-width: 120px;
+        }
+
+        select {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 6px 12px;
+            font-family: var(--font-sans);
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .btn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-family: var(--font-sans);
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s;
+        }
+
+        .btn:active {
+            transform: scale(0.97);
+        }
+
+        .btn-primary {
+            background: var(--accent-blue);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-blue-dim);
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border-color);
+        }
+
+        .config-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: var(--accent-green-dim);
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: var(--radius-sm);
+            font-size: 0.85rem;
+            font-weight: 500;
+            box-shadow: var(--shadow-elevated);
+            transform: translateY(80px);
+            opacity: 0;
+            transition: transform 0.3s, opacity 0.3s;
+            z-index: 200;
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .toast.error {
+            background: var(--accent-red-dim);
+        }
+
+        /* ================================================================
+           AI DECISIONS TAB
+           ================================================================ */
+        .decision-card {
+            margin-bottom: 20px;
+        }
+
+        .decision-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .decision-direction {
+            font-size: 1.3rem;
+            font-weight: 700;
+            font-family: var(--font-mono);
+        }
+
+        .decision-direction.buy { color: var(--accent-green); }
+        .decision-direction.sell { color: var(--accent-red); }
+        .decision-direction.skip { color: var(--text-muted); }
+
+        .decision-confidence {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            padding: 2px 10px;
+            border-radius: 4px;
+            background: var(--bg-tertiary);
+        }
+
+        .decision-reasoning {
+            background: var(--bg-tertiary);
+            border-left: 3px solid var(--accent-blue);
+            padding: 14px 16px;
+            border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+            font-size: 0.85rem;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .decision-meta {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .decision-meta-item {
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            padding: 10px 12px;
+        }
+
+        .decision-meta-item .label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .decision-meta-item .value {
+            font-family: var(--font-mono);
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin-top: 2px;
+        }
+
+        .ai-log-entry {
+            padding: 8px 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+            font-size: 0.82rem;
+            display: flex;
+            gap: 10px;
+        }
+
+        .ai-log-entry .time {
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            flex-shrink: 0;
+            min-width: 65px;
+        }
+
+        .ai-log-entry .action {
+            font-weight: 600;
+            flex-shrink: 0;
+            min-width: 90px;
+        }
+
+        .ai-log-entry .action.hold { color: var(--text-secondary); }
+        .ai-log-entry .action.close { color: var(--accent-red); }
+        .ai-log-entry .action.modify { color: var(--accent-orange); }
+        .ai-log-entry .action.partial { color: var(--accent-purple); }
+
+        .ai-log-entry .reason {
+            color: var(--text-secondary);
+        }
+
+        /* ================================================================
+           LOGS TAB
+           ================================================================ */
+        .log-terminal {
+            background: #0a0e14;
+            border: 1px solid #1a1f2e;
+            border-radius: var(--radius-md);
+            padding: 16px;
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            line-height: 1.7;
+            color: #39d353;
+            max-height: 70vh;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .log-terminal .log-line {
+            padding: 1px 0;
+        }
+
+        .log-terminal .log-line .ts {
+            color: #6e7681;
+        }
+
+        .log-terminal .log-line .level-info {
+            color: #3b82f6;
+        }
+
+        .log-terminal .log-line .level-warning {
+            color: #f59e0b;
+        }
+
+        .log-terminal .log-line .level-error {
+            color: #ef4444;
+            font-weight: 600;
+        }
+
+        .log-controls {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .log-controls .label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .auto-scroll-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        /* ================================================================
+           REFRESH INDICATOR
+           ================================================================ */
+        .refresh-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 2px;
+            background: var(--accent-blue);
+            transition: width 0.3s;
+            z-index: 200;
+        }
+
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 768px) {
+            .header {
+                padding: 0 14px;
+                height: 50px;
+            }
+
+            .header-brand h1 {
+                font-size: 0.95rem;
+            }
+
+            .header-meta .version,
+            .header-meta .clock-label {
+                display: none;
+            }
+
+            .tab-bar {
+                padding: 0 8px;
+            }
+
+            .tab-btn {
+                padding: 8px 12px;
+                font-size: 0.78rem;
+            }
+
+            .tab-content {
+                padding: 14px;
+            }
+
+            .grid-overview {
+                grid-template-columns: 1fr;
+            }
+
+            .grid-stats {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .config-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .decision-meta {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 480px) {
+            .grid-stats {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- REFRESH BAR -->
+    <div class="refresh-bar" id="refreshBar"></div>
+
+    <!-- HEADER -->
+    <header class="header">
+        <div class="header-brand">
+            <div class="logo-icon">ST</div>
+            <h1>Sky<span>Tower</span>-AI</h1>
+        </div>
+        <div class="header-meta">
+            <span class="version" id="serverVersion">v--</span>
+            <span class="clock-label">CET</span>
+            <span class="clock" id="clock">--:--:--</span>
+        </div>
+    </header>
+
+    <!-- TAB NAVIGATION -->
+    <nav class="tab-bar" role="tablist">
+        <button class="tab-btn active" data-tab="dashboard" role="tab">Dashboard</button>
+        <button class="tab-btn" data-tab="events" role="tab">Events</button>
+        <button class="tab-btn" data-tab="config" role="tab">Event Config</button>
+        <button class="tab-btn" data-tab="ai" role="tab">AI Decisions</button>
+        <button class="tab-btn" data-tab="logs" role="tab">Logs</button>
+    </nav>
+
+    <!-- ================================================================
+         TAB 1: DASHBOARD
+         ================================================================ -->
+    <div class="tab-content active" id="tab-dashboard">
+        <div class="grid-overview">
+            <!-- Server Status -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Server Status</span>
+                    <span class="card-badge" id="serverStatusBadge" style="background:var(--bg-tertiary);color:var(--text-muted);">checking...</span>
+                </div>
+                <div class="server-status" id="serverStatusLine">
+                    <span class="status-dot offline" id="statusDot"></span>
+                    <span id="statusText">Connecting...</span>
+                </div>
+                <div class="server-info" id="serverInfo">
+                    <div><span class="key">Host</span><span class="val">127.0.0.1:5555</span></div>
+                    <div><span class="key">Version</span><span class="val" id="infoVersion">--</span></div>
+                    <div><span class="key">Last Check</span><span class="val" id="infoLastCheck">--</span></div>
+                    <div><span class="key">Uptime</span><span class="val" id="infoUptime">--</span></div>
+                </div>
+            </div>
+
+            <!-- Next Event -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Next Event</span>
+                </div>
+                <div id="nextEventContent">
+                    <div class="no-data">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Position Status -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Current Position</span>
+                </div>
+                <div id="positionContent">
+                    <div class="no-data">No open position</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Daily Stats -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Daily Statistics</span>
+            </div>
+            <div class="grid-stats" id="dailyStats">
+                <div class="stat-cell">
+                    <div class="label">Trades Today</div>
+                    <div class="value neutral" id="statTrades">--</div>
+                </div>
+                <div class="stat-cell">
+                    <div class="label">Daily P/L</div>
+                    <div class="value neutral" id="statPnl">--</div>
+                </div>
+                <div class="stat-cell">
+                    <div class="label">Remaining Limit</div>
+                    <div class="value neutral" id="statLimit">--</div>
+                </div>
+                <div class="stat-cell">
+                    <div class="label">Max Daily Loss</div>
+                    <div class="value neutral" id="statMaxLoss">$300</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         TAB 2: EVENTS
+         ================================================================ -->
+    <div class="tab-content" id="tab-events">
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Upcoming Events (24h)</span>
+                <span class="card-badge" id="eventCount" style="background:var(--bg-tertiary);color:var(--text-secondary);">0 events</span>
+            </div>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time (CET)</th>
+                            <th>Currency</th>
+                            <th>Event Name</th>
+                            <th>Impact</th>
+                            <th>Forecast</th>
+                            <th>Previous</th>
+                        </tr>
+                    </thead>
+                    <tbody id="eventsTableBody">
+                        <tr><td colspan="6" class="no-data">Loading events...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         TAB 3: EVENT CONFIG
+         ================================================================ -->
+    <div class="tab-content" id="tab-config">
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Event Trading Configuration</span>
+            </div>
+
+            <!-- Tier 1 Events -->
+            <div class="config-section">
+                <h3>Tier 1 Events (Best Reactions - Always Trade)</h3>
+                <div class="config-grid" id="tier1Grid">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Tier 2 Events -->
+            <div class="config-section">
+                <h3>Tier 2 Events (Good Reactions - Trade with Caution)</h3>
+                <div class="config-grid" id="tier2Grid">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Impact Filter -->
+            <div class="config-section">
+                <h3>Filter Settings</h3>
+                <div class="config-row">
+                    <label for="minImpact">Min. Impact Level</label>
+                    <select id="minImpact">
+                        <option value="HIGH">HIGH only</option>
+                        <option value="MEDIUM" selected>MEDIUM and above</option>
+                        <option value="LOW">LOW and above</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Active Currencies -->
+            <div class="config-section">
+                <h3>Active Currencies</h3>
+                <div class="config-grid" id="currencyGrid">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Save Button -->
+            <div class="config-actions">
+                <button class="btn btn-primary" id="btnSaveConfig">Save Configuration</button>
+                <button class="btn btn-secondary" id="btnResetConfig">Reset Defaults</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         TAB 4: AI DECISIONS
+         ================================================================ -->
+    <div class="tab-content" id="tab-ai">
+        <!-- Last Decision -->
+        <div class="card decision-card">
+            <div class="card-header">
+                <span class="card-title">Last AI Decision</span>
+                <button class="btn btn-secondary" id="btnRefreshDecision" style="padding:4px 12px;font-size:0.78rem;">Refresh</button>
+            </div>
+            <div id="decisionContent">
+                <div class="no-data">No decision available</div>
+            </div>
+        </div>
+
+        <!-- Position Management Log -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">AI Position Management Log</span>
+            </div>
+            <div id="aiLogContent">
+                <div class="no-data">No position management data</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         TAB 5: LOGS
+         ================================================================ -->
+    <div class="tab-content" id="tab-logs">
+        <div class="log-controls">
+            <span class="label">Server Logs (last 50 lines, refreshes every 5s)</span>
+            <div class="auto-scroll-toggle">
+                <input type="checkbox" id="autoScroll" checked>
+                <label for="autoScroll">Auto-scroll</label>
+            </div>
+        </div>
+        <div class="log-terminal" id="logTerminal">
+            <div class="log-line"><span class="ts">Waiting for log data...</span></div>
+        </div>
+    </div>
+
+    <!-- TOAST NOTIFICATION -->
+    <div class="toast" id="toast"></div>
+
+    <!-- ================================================================
+         JAVASCRIPT
+         ================================================================ -->
+    <script>
+    (function() {
+        'use strict';
+
+        // ============================================================
+        // CONSTANTS
+        // ============================================================
+        var BASE_URL = window.location.origin || 'http://127.0.0.1:5555';
+        var DASHBOARD_REFRESH_MS = 10000;
+        var EVENTS_REFRESH_MS = 60000;
+        var LOGS_REFRESH_MS = 5000;
+        var CET_OFFSET_HOURS = 1; // CET = UTC+1 (CEST = UTC+2 in summer)
+
+        // Detect CET/CEST automatically
+        // CET is UTC+1, CEST (summer) is UTC+2
+        // European summer time: last Sunday of March to last Sunday of October
+        function getCETOffset() {
+            var now = new Date();
+            var jan = new Date(now.getFullYear(), 0, 1);
+            var jul = new Date(now.getFullYear(), 6, 1);
+            var stdOffset = Math.max(jan.getTimezoneOffset(), jul.getTimezoneOffset());
+            // Check if we're in CET zone - if not, calculate CET offset
+            // Simple approach: calculate CET by checking if DST is active in Europe
+            var month = now.getUTCMonth(); // 0-based
+            var day = now.getUTCDate();
+            // Rough DST check for Europe (last Sunday March - last Sunday October)
+            if (month > 2 && month < 9) {
+                return 2; // CEST
+            } else if (month === 2) {
+                // March: DST starts last Sunday
+                var lastSunday = 31 - (new Date(now.getUTCFullYear(), 2, 31).getUTCDay());
+                return day >= lastSunday ? 2 : 1;
+            } else if (month === 9) {
+                // October: DST ends last Sunday
+                var lastSunday = 31 - (new Date(now.getUTCFullYear(), 9, 31).getUTCDay());
+                return day < lastSunday ? 2 : 1;
+            }
+            return 1; // CET
+        }
+
+        CET_OFFSET_HOURS = getCETOffset();
+
+        // Event tier definitions
+        var TIER1_EVENTS = [
+            'Interest Rate Decision',
+            'Cash Rate',
+            'Official Cash Rate',
+            'Non-Farm Payrolls',
+            'NFP',
+            'CPI'
+        ];
+
+        var TIER2_EVENTS = [
+            'Employment Change',
+            'Unemployment Rate',
+            'GDP',
+            'Advance GDP',
+            'Retail Sales',
+            'New Home Sales',
+            'Existing Home Sales'
+        ];
+
+        var CURRENCIES = ['NZD', 'CAD', 'AUD', 'USD', 'GBP', 'EUR', 'SEK', 'NOK'];
+
+        // ============================================================
+        // STATE
+        // ============================================================
+        var state = {
+            activeTab: 'dashboard',
+            serverOnline: false,
+            serverStartTime: null,
+            intervals: {},
+            lastDecision: null
+        };
+
+        // ============================================================
+        // UTILITIES
+        // ============================================================
+        function $(id) {
+            return document.getElementById(id);
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            var div = document.createElement('div');
+            div.appendChild(document.createTextNode(str));
+            return div.innerHTML;
+        }
+
+        function formatUSD(val) {
+            if (val === null || val === undefined || isNaN(val)) return '--';
+            var prefix = val >= 0 ? '+$' : '-$';
+            return prefix + Math.abs(val).toFixed(2);
+        }
+
+        function pnlClass(val) {
+            if (val > 0) return 'positive';
+            if (val < 0) return 'negative';
+            return 'neutral';
+        }
+
+        function utcToCET(dateStr) {
+            if (!dateStr) return '--';
+            var d = new Date(dateStr);
+            if (isNaN(d.getTime())) return dateStr;
+            // Add CET offset
+            var cet = new Date(d.getTime() + CET_OFFSET_HOURS * 3600000);
+            var hh = String(cet.getUTCHours()).padStart(2, '0');
+            var mm = String(cet.getUTCMinutes()).padStart(2, '0');
+            var dd = String(cet.getUTCDate()).padStart(2, '0');
+            var mo = String(cet.getUTCMonth() + 1).padStart(2, '0');
+            return dd + '/' + mo + ' ' + hh + ':' + mm;
+        }
+
+        function utcToCETFull(dateStr) {
+            if (!dateStr) return '--';
+            var d = new Date(dateStr);
+            if (isNaN(d.getTime())) return dateStr;
+            var cet = new Date(d.getTime() + CET_OFFSET_HOURS * 3600000);
+            var hh = String(cet.getUTCHours()).padStart(2, '0');
+            var mm = String(cet.getUTCMinutes()).padStart(2, '0');
+            var ss = String(cet.getUTCSeconds()).padStart(2, '0');
+            var dd = String(cet.getUTCDate()).padStart(2, '0');
+            var mo = String(cet.getUTCMonth() + 1).padStart(2, '0');
+            var yr = cet.getUTCFullYear();
+            return yr + '-' + mo + '-' + dd + ' ' + hh + ':' + mm + ':' + ss;
+        }
+
+        function formatCountdown(seconds) {
+            if (seconds <= 0) return 'PASSED';
+            var h = Math.floor(seconds / 3600);
+            var m = Math.floor((seconds % 3600) / 60);
+            var s = Math.floor(seconds % 60);
+            if (h > 0) {
+                return String(h).padStart(2, '0') + ':' +
+                       String(m).padStart(2, '0') + ':' +
+                       String(s).padStart(2, '0');
+            }
+            return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds || seconds <= 0) return '--';
+            var m = Math.floor(seconds / 60);
+            var s = Math.floor(seconds % 60);
+            if (m === 0) return s + 's';
+            return m + 'm ' + s + 's';
+        }
+
+        function showToast(message, isError) {
+            var toast = $('toast');
+            toast.textContent = message;
+            toast.className = 'toast' + (isError ? ' error' : '');
+            toast.classList.add('show');
+            setTimeout(function() {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        async function apiFetch(path) {
+            var resp = await fetch(BASE_URL + path, { signal: AbortSignal.timeout(8000) });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+        }
+
+        function showRefreshBar() {
+            var bar = $('refreshBar');
+            bar.style.width = '30%';
+            setTimeout(function() { bar.style.width = '70%'; }, 100);
+            setTimeout(function() {
+                bar.style.width = '100%';
+                setTimeout(function() { bar.style.width = '0%'; }, 300);
+            }, 400);
+        }
+
+        // ============================================================
+        // CLOCK
+        // ============================================================
+        function updateClock() {
+            var now = new Date();
+            var cet = new Date(now.getTime() + (CET_OFFSET_HOURS * 3600000) + (now.getTimezoneOffset() * 60000));
+            var hh = String(cet.getHours()).padStart(2, '0');
+            var mm = String(cet.getMinutes()).padStart(2, '0');
+            var ss = String(cet.getSeconds()).padStart(2, '0');
+            $('clock').textContent = hh + ':' + mm + ':' + ss;
+        }
+
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // ============================================================
+        // TAB SWITCHING
+        // ============================================================
+        document.querySelectorAll('.tab-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var tabId = this.getAttribute('data-tab');
+                switchTab(tabId);
+            });
+        });
+
+        function switchTab(tabId) {
+            state.activeTab = tabId;
+
+            document.querySelectorAll('.tab-btn').forEach(function(btn) {
+                btn.classList.toggle('active', btn.getAttribute('data-tab') === tabId);
+            });
+
+            document.querySelectorAll('.tab-content').forEach(function(tc) {
+                tc.classList.toggle('active', tc.id === 'tab-' + tabId);
+            });
+
+            // Trigger immediate refresh for the activated tab
+            if (tabId === 'dashboard') refreshDashboard();
+            else if (tabId === 'events') refreshEvents();
+            else if (tabId === 'ai') refreshDecision();
+            else if (tabId === 'logs') refreshLogs();
+        }
+
+        // ============================================================
+        // DASHBOARD TAB
+        // ============================================================
+        var nextEventTime = null; // Store for countdown updates
+
+        async function refreshDashboard() {
+            showRefreshBar();
+            await Promise.allSettled([
+                refreshServerStatus(),
+                refreshNextEvent(),
+                refreshPositionStatus()
+            ]);
+        }
+
+        async function refreshServerStatus() {
+            try {
+                var data = await apiFetch('/health');
+                state.serverOnline = true;
+
+                $('statusDot').className = 'status-dot online';
+                $('statusText').textContent = 'Online';
+                $('serverStatusBadge').textContent = 'ONLINE';
+                $('serverStatusBadge').style.background = 'rgba(34,197,94,0.12)';
+                $('serverStatusBadge').style.color = 'var(--accent-green)';
+
+                var version = data.version || '--';
+                $('infoVersion').textContent = version;
+                $('serverVersion').textContent = 'v' + version;
+                $('infoLastCheck').textContent = utcToCETFull(data.timestamp);
+
+                if (!state.serverStartTime) state.serverStartTime = new Date();
+                var uptimeSec = (Date.now() - state.serverStartTime.getTime()) / 1000;
+                $('infoUptime').textContent = formatDuration(uptimeSec);
+            } catch(e) {
+                state.serverOnline = false;
+                $('statusDot').className = 'status-dot offline';
+                $('statusText').textContent = 'Offline';
+                $('serverStatusBadge').textContent = 'OFFLINE';
+                $('serverStatusBadge').style.background = 'rgba(239,68,68,0.12)';
+                $('serverStatusBadge').style.color = 'var(--accent-red)';
+                $('infoLastCheck').textContent = 'Failed';
+                state.serverStartTime = null;
+            }
+        }
+
+        async function refreshNextEvent() {
+            try {
+                var data = await apiFetch('/api/next-event');
+                var container = $('nextEventContent');
+
+                if (data.event) {
+                    var ev = data.event;
+                    nextEventTime = ev.datetime_utc || ev.datetime || null;
+
+                    var impactClass = (ev.impact || '').toLowerCase();
+                    if (impactClass !== 'high' && impactClass !== 'medium' && impactClass !== 'low') impactClass = 'medium';
+
+                    container.innerHTML =
+                        '<div class="event-highlight">' +
+                            '<div class="event-name">' + escapeHtml(ev.event_name || ev.name || 'Unknown') + '</div>' +
+                            '<div class="event-detail">' +
+                                '<span class="currency-tag">' + escapeHtml(ev.currency || '--') + '</span>' +
+                                '<span class="impact-badge ' + impactClass + '">' + escapeHtml(ev.impact || '--') + '</span>' +
+                            '</div>' +
+                            '<div class="event-detail">Time (CET): ' + utcToCET(nextEventTime) + '</div>' +
+                            '<div class="event-detail">Forecast: <span class="data-mono">' + escapeHtml(ev.forecast || '--') + '</span> | Previous: <span class="data-mono">' + escapeHtml(ev.previous || '--') + '</span></div>' +
+                            '<div class="countdown" id="eventCountdown">--:--</div>' +
+                        '</div>';
+
+                    updateEventCountdown();
+                } else {
+                    nextEventTime = null;
+                    container.innerHTML = '<div class="no-data">No upcoming events scheduled</div>';
+                }
+            } catch(e) {
+                $('nextEventContent').innerHTML = '<div class="no-data" style="color:var(--accent-red)">Failed to load events</div>';
+                nextEventTime = null;
+            }
+        }
+
+        function updateEventCountdown() {
+            var el = $('eventCountdown');
+            if (!el || !nextEventTime) return;
+
+            var eventDate = new Date(nextEventTime);
+            if (isNaN(eventDate.getTime())) { el.textContent = '--'; return; }
+
+            var now = new Date();
+            var diffSec = (eventDate.getTime() - now.getTime()) / 1000;
+
+            if (diffSec <= 0) {
+                el.textContent = 'EVENT PASSED';
+                el.className = 'countdown passed';
+            } else if (diffSec < 120) {
+                el.textContent = formatCountdown(diffSec);
+                el.className = 'countdown imminent';
+            } else {
+                el.textContent = formatCountdown(diffSec);
+                el.className = 'countdown';
+            }
+        }
+
+        // Update countdown every second
+        setInterval(updateEventCountdown, 1000);
+
+        async function refreshPositionStatus() {
+            try {
+                var data = await apiFetch('/api/position/status');
+                var container = $('positionContent');
+
+                // Daily stats
+                var dailyTrades = data.daily_trades || 0;
+                var dailyPnl = data.daily_pnl_usd || 0;
+                var maxDailyTrades = 5;
+
+                $('statTrades').textContent = dailyTrades;
+                $('statTrades').className = 'value ' + (dailyTrades > 0 ? '' : 'neutral');
+
+                $('statPnl').textContent = formatUSD(dailyPnl);
+                $('statPnl').className = 'value ' + pnlClass(dailyPnl);
+
+                var remaining = maxDailyTrades - dailyTrades;
+                $('statLimit').textContent = remaining + ' / ' + maxDailyTrades;
+                $('statLimit').className = 'value ' + (remaining > 0 ? 'neutral' : 'negative');
+
+                // Position info
+                if (data.has_position && data.position) {
+                    var pos = data.position;
+                    var dirClass = (pos.direction || '').toLowerCase();
+                    var profitVal = pos.profit_usd || 0;
+                    var durationSec = 0;
+                    if (pos.open_time) {
+                        durationSec = (Date.now() - new Date(pos.open_time).getTime()) / 1000;
+                    }
+
+                    container.innerHTML =
+                        '<div class="position-row">' +
+                            '<span class="key">Symbol</span>' +
+                            '<span class="val">' + escapeHtml(pos.symbol) + '</span>' +
+                        '</div>' +
+                        '<div class="position-row">' +
+                            '<span class="key">Direction</span>' +
+                            '<span class="direction-badge ' + dirClass + '">' + escapeHtml(pos.direction) + '</span>' +
+                        '</div>' +
+                        '<div class="position-row">' +
+                            '<span class="key">Entry Price</span>' +
+                            '<span class="val data-mono">' + (pos.entry_price || '--') + '</span>' +
+                        '</div>' +
+                        '<div class="position-row">' +
+                            '<span class="key">Current Price</span>' +
+                            '<span class="val data-mono">' + (pos.current_price || '--') + '</span>' +
+                        '</div>' +
+                        '<div class="position-row">' +
+                            '<span class="key">Profit/Loss</span>' +
+                            '<span class="val ' + pnlClass(profitVal) + '">' + formatUSD(profitVal) + '</span>' +
+                        '</div>' +
+                        '<div class="position-row">' +
+                            '<span class="key">Max Profit</span>' +
+                            '<span class="val data-mono positive">' + formatUSD(pos.max_profit_usd || 0) + '</span>' +
+                        '</div>' +
+                        '<div class="position-row">' +
+                            '<span class="key">Lots</span>' +
+                            '<span class="val data-mono">' + (pos.remaining_lots || pos.lots || '--') + '</span>' +
+                        '</div>' +
+                        '<div class="position-row">' +
+                            '<span class="key">Duration</span>' +
+                            '<span class="val data-mono">' + formatDuration(durationSec) + '</span>' +
+                        '</div>' +
+                        '<div class="position-row">' +
+                            '<span class="key">Event</span>' +
+                            '<span class="val">' + escapeHtml(pos.event_name || '--') + '</span>' +
+                        '</div>';
+                } else {
+                    container.innerHTML = '<div class="no-data">No open position</div>';
+                }
+            } catch(e) {
+                $('positionContent').innerHTML = '<div class="no-data">Unable to fetch position status</div>';
+                $('statTrades').textContent = '--';
+                $('statPnl').textContent = '--';
+                $('statLimit').textContent = '--';
+            }
+        }
+
+        // ============================================================
+        // EVENTS TAB
+        // ============================================================
+        async function refreshEvents() {
+            showRefreshBar();
+            try {
+                var data = await apiFetch('/api/events?hours=24&impact=MEDIUM');
+                var tbody = $('eventsTableBody');
+                var countBadge = $('eventCount');
+
+                var events = data.events || [];
+                countBadge.textContent = events.length + ' event' + (events.length !== 1 ? 's' : '');
+
+                if (events.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="no-data">No upcoming events in the next 24 hours</td></tr>';
+                    return;
+                }
+
+                var html = '';
+                events.forEach(function(ev) {
+                    var impactClass = (ev.impact || 'medium').toLowerCase();
+                    if (impactClass !== 'high' && impactClass !== 'medium' && impactClass !== 'low') impactClass = 'medium';
+
+                    var timeStr = utcToCET(ev.datetime_utc || ev.datetime || '');
+
+                    html += '<tr>' +
+                        '<td class="data-mono">' + escapeHtml(timeStr) + '</td>' +
+                        '<td><span class="currency-tag">' + escapeHtml(ev.currency || '--') + '</span></td>' +
+                        '<td>' + escapeHtml(ev.event_name || ev.name || '--') + '</td>' +
+                        '<td><span class="impact-badge ' + impactClass + '">' + escapeHtml(ev.impact || '--') + '</span></td>' +
+                        '<td class="data-mono">' + escapeHtml(ev.forecast || '--') + '</td>' +
+                        '<td class="data-mono">' + escapeHtml(ev.previous || '--') + '</td>' +
+                    '</tr>';
+                });
+
+                tbody.innerHTML = html;
+            } catch(e) {
+                $('eventsTableBody').innerHTML = '<tr><td colspan="6" class="no-data" style="color:var(--accent-red)">Failed to load events: ' + escapeHtml(e.message) + '</td></tr>';
+            }
+        }
+
+        // ============================================================
+        // EVENT CONFIG TAB
+        // ============================================================
+        function initConfigTab() {
+            // Tier 1
+            var grid1 = $('tier1Grid');
+            TIER1_EVENTS.forEach(function(name) {
+                var id = 'tier1_' + name.replace(/\s+/g, '_');
+                grid1.innerHTML += '<div class="checkbox-item">' +
+                    '<input type="checkbox" id="' + id + '" checked>' +
+                    '<label for="' + id + '">' + escapeHtml(name) + '</label>' +
+                '</div>';
+            });
+
+            // Tier 2
+            var grid2 = $('tier2Grid');
+            TIER2_EVENTS.forEach(function(name) {
+                var id = 'tier2_' + name.replace(/\s+/g, '_');
+                grid2.innerHTML += '<div class="checkbox-item">' +
+                    '<input type="checkbox" id="' + id + '" checked>' +
+                    '<label for="' + id + '">' + escapeHtml(name) + '</label>' +
+                '</div>';
+            });
+
+            // Currencies
+            var gridC = $('currencyGrid');
+            CURRENCIES.forEach(function(cur) {
+                var id = 'cur_' + cur;
+                var checked = ['NZD','CAD','AUD','USD','GBP','EUR'].indexOf(cur) >= 0 ? ' checked' : '';
+                gridC.innerHTML += '<div class="checkbox-item">' +
+                    '<input type="checkbox" id="' + id + '"' + checked + '>' +
+                    '<label for="' + id + '"><span class="currency-tag">' + cur + '</span></label>' +
+                '</div>';
+            });
+
+            // Save button
+            $('btnSaveConfig').addEventListener('click', saveConfig);
+            $('btnResetConfig').addEventListener('click', resetConfig);
+        }
+
+        function getConfigState() {
+            var enabledEvents = [];
+
+            TIER1_EVENTS.forEach(function(name) {
+                var id = 'tier1_' + name.replace(/\s+/g, '_');
+                var el = $(id);
+                if (el && el.checked) enabledEvents.push(name);
+            });
+
+            TIER2_EVENTS.forEach(function(name) {
+                var id = 'tier2_' + name.replace(/\s+/g, '_');
+                var el = $(id);
+                if (el && el.checked) enabledEvents.push(name);
+            });
+
+            var enabledCurrencies = [];
+            CURRENCIES.forEach(function(cur) {
+                var el = $('cur_' + cur);
+                if (el && el.checked) enabledCurrencies.push(cur);
+            });
+
+            return {
+                events: enabledEvents,
+                currencies: enabledCurrencies,
+                min_impact: $('minImpact').value
+            };
+        }
+
+        async function saveConfig() {
+            var config = getConfigState();
+
+            try {
+                var resp = await fetch(BASE_URL + '/api/config/events', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                if (resp.ok) {
+                    showToast('Configuration saved successfully');
+                } else {
+                    // API may not exist yet - show a message
+                    showToast('Config saved locally (API endpoint not yet implemented)', false);
+                }
+            } catch(e) {
+                // Endpoint not implemented yet - save to localStorage as fallback
+                localStorage.setItem('skytower_event_config', JSON.stringify(config));
+                showToast('Config saved locally (server endpoint not available yet)', false);
+            }
+        }
+
+        function resetConfig() {
+            // Check all Tier 1
+            TIER1_EVENTS.forEach(function(name) {
+                var id = 'tier1_' + name.replace(/\s+/g, '_');
+                var el = $(id);
+                if (el) el.checked = true;
+            });
+            // Check all Tier 2
+            TIER2_EVENTS.forEach(function(name) {
+                var id = 'tier2_' + name.replace(/\s+/g, '_');
+                var el = $(id);
+                if (el) el.checked = true;
+            });
+            // Reset currencies
+            CURRENCIES.forEach(function(cur) {
+                var el = $('cur_' + cur);
+                if (el) el.checked = ['NZD','CAD','AUD','USD','GBP','EUR'].indexOf(cur) >= 0;
+            });
+            // Reset impact
+            $('minImpact').value = 'MEDIUM';
+
+            showToast('Configuration reset to defaults');
+        }
+
+        // ============================================================
+        // AI DECISIONS TAB
+        // ============================================================
+        async function refreshDecision() {
+            showRefreshBar();
+            try {
+                var data = await apiFetch('/api/decision');
+                var container = $('decisionContent');
+
+                if (data.decision) {
+                    var d = data.decision;
+                    state.lastDecision = d;
+
+                    var dir = (d.direction || 'SKIP').toUpperCase();
+                    var dirClass = dir.toLowerCase();
+                    if (dirClass !== 'buy' && dirClass !== 'sell') dirClass = 'skip';
+
+                    var confPct = d.confidence ? (d.confidence * 100).toFixed(0) + '%' : '--';
+
+                    var html =
+                        '<div class="decision-header">' +
+                            '<span class="decision-direction ' + dirClass + '">' + escapeHtml(dir) + '</span>' +
+                            '<span class="decision-confidence">' + confPct + ' confidence</span>' +
+                            (d.pair ? '<span class="currency-tag">' + escapeHtml(d.pair) + '</span>' : '') +
+                        '</div>';
+
+                    // Meta info
+                    html += '<div class="decision-meta">';
+
+                    if (d.event) {
+                        html += '<div class="decision-meta-item"><div class="label">Event</div><div class="value">' + escapeHtml(d.event) + '</div></div>';
+                    }
+                    if (d.currency) {
+                        html += '<div class="decision-meta-item"><div class="label">Currency</div><div class="value">' + escapeHtml(d.currency) + '</div></div>';
+                    }
+                    if (d.lot_percent !== undefined) {
+                        html += '<div class="decision-meta-item"><div class="label">Lot %</div><div class="value">' + d.lot_percent + '%</div></div>';
+                    }
+                    if (d.entry_seconds_before !== undefined) {
+                        html += '<div class="decision-meta-item"><div class="label">Entry Before</div><div class="value">' + d.entry_seconds_before + 's</div></div>';
+                    }
+                    if (d.exit_minutes_after !== undefined) {
+                        html += '<div class="decision-meta-item"><div class="label">Exit After</div><div class="value">' + d.exit_minutes_after + 'min</div></div>';
+                    }
+                    if (d.stop_loss_pips) {
+                        html += '<div class="decision-meta-item"><div class="label">SL Pips</div><div class="value negative">' + d.stop_loss_pips + '</div></div>';
+                    }
+                    if (d.take_profit_pips) {
+                        html += '<div class="decision-meta-item"><div class="label">TP Pips</div><div class="value positive">' + d.take_profit_pips + '</div></div>';
+                    }
+                    if (d.timestamp) {
+                        html += '<div class="decision-meta-item"><div class="label">Generated</div><div class="value" style="font-size:0.78rem">' + utcToCETFull(d.timestamp) + '</div></div>';
+                    }
+
+                    html += '</div>';
+
+                    // Reasoning
+                    if (d.reasoning) {
+                        html += '<div style="margin-top:16px"><div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px;letter-spacing:0.05em">AI Reasoning</div>';
+                        html += '<div class="decision-reasoning">' + escapeHtml(d.reasoning) + '</div>';
+                        html += '</div>';
+                    }
+
+                    // Data summary
+                    if (d.data_summary) {
+                        html += '<div style="margin-top:16px"><div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px;letter-spacing:0.05em">Data Summary</div>';
+                        html += '<div class="decision-reasoning" style="font-size:0.78rem;color:var(--text-muted)">' + escapeHtml(JSON.stringify(d.data_summary, null, 2)) + '</div>';
+                        html += '</div>';
+                    }
+
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="no-data">' + escapeHtml(data.message || 'No decision available') + '</div>';
+                }
+
+            } catch(e) {
+                $('decisionContent').innerHTML = '<div class="no-data" style="color:var(--accent-red)">Failed to load decision: ' + escapeHtml(e.message) + '</div>';
+            }
+
+            // Also refresh position management log
+            refreshAILog();
+        }
+
+        async function refreshAILog() {
+            try {
+                var data = await apiFetch('/api/position/status');
+                var container = $('aiLogContent');
+
+                if (data.has_position && data.position && data.position.ai_decisions && data.position.ai_decisions.length > 0) {
+                    var decisions = data.position.ai_decisions;
+                    var html = '';
+
+                    // Show most recent first
+                    for (var i = decisions.length - 1; i >= 0; i--) {
+                        var dec = decisions[i];
+                        var action = (dec.action || 'HOLD').toUpperCase();
+                        var actionClass = 'hold';
+                        if (action === 'CLOSE' || action === 'CLOSE_ALL') actionClass = 'close';
+                        else if (action.indexOf('MODIFY') >= 0) actionClass = 'modify';
+                        else if (action.indexOf('PARTIAL') >= 0) actionClass = 'partial';
+
+                        var timeStr = dec.timestamp ? utcToCET(dec.timestamp) : '--';
+
+                        html += '<div class="ai-log-entry">' +
+                            '<span class="time">' + escapeHtml(timeStr) + '</span>' +
+                            '<span class="action ' + actionClass + '">' + escapeHtml(action) + '</span>' +
+                            '<span class="reason">' + escapeHtml(dec.reason || dec.reasoning || '--') + '</span>' +
+                        '</div>';
+                    }
+
+                    container.innerHTML = html;
+                } else if (data.pending_command) {
+                    var cmd = data.pending_command;
+                    container.innerHTML =
+                        '<div class="ai-log-entry">' +
+                            '<span class="time">pending</span>' +
+                            '<span class="action modify">' + escapeHtml(cmd.action || '--') + '</span>' +
+                            '<span class="reason">' + escapeHtml(cmd.reason || '--') + '</span>' +
+                        '</div>';
+                } else {
+                    container.innerHTML = '<div class="no-data">No position management actions recorded</div>';
+                }
+
+            } catch(e) {
+                $('aiLogContent').innerHTML = '<div class="no-data">Unable to fetch AI log</div>';
+            }
+        }
+
+        $('btnRefreshDecision').addEventListener('click', function() {
+            refreshDecision();
+        });
+
+        // ============================================================
+        // LOGS TAB
+        // ============================================================
+        async function refreshLogs() {
+            try {
+                var data = await apiFetch('/api/logs?lines=50');
+                var terminal = $('logTerminal');
+                var autoScroll = $('autoScroll').checked;
+
+                var lines = data.lines || data.logs || [];
+                if (typeof data === 'string') {
+                    lines = data.split('\n');
+                }
+                // If the response is an error or not an array, handle gracefully
+                if (!Array.isArray(lines)) {
+                    if (data.message) {
+                        terminal.innerHTML = '<div class="log-line"><span class="ts">Log endpoint not available: ' + escapeHtml(data.message) + '</span></div>';
+                    }
+                    return;
+                }
+
+                var html = '';
+                lines.forEach(function(line) {
+                    if (!line) return;
+                    var lineStr = typeof line === 'string' ? line : JSON.stringify(line);
+
+                    // Color-code log levels
+                    var levelClass = '';
+                    if (lineStr.indexOf('ERROR') >= 0) levelClass = 'level-error';
+                    else if (lineStr.indexOf('WARNING') >= 0) levelClass = 'level-warning';
+                    else if (lineStr.indexOf('INFO') >= 0) levelClass = 'level-info';
+
+                    // Try to separate timestamp from message
+                    var parts = lineStr.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s*\|\s*(.*)/);
+                    if (parts) {
+                        html += '<div class="log-line"><span class="ts">' + escapeHtml(parts[1]) + '</span> | <span class="' + levelClass + '">' + escapeHtml(parts[2]) + '</span></div>';
+                    } else {
+                        html += '<div class="log-line"><span class="' + levelClass + '">' + escapeHtml(lineStr) + '</span></div>';
+                    }
+                });
+
+                if (html) {
+                    terminal.innerHTML = html;
+                } else {
+                    terminal.innerHTML = '<div class="log-line"><span class="ts">No log entries</span></div>';
+                }
+
+                if (autoScroll) {
+                    terminal.scrollTop = terminal.scrollHeight;
+                }
+            } catch(e) {
+                var terminal = $('logTerminal');
+                terminal.innerHTML = '<div class="log-line"><span class="ts" style="color:#f59e0b">Log endpoint not available (/api/logs). Server may not expose this endpoint yet.</span></div>' +
+                    '<div class="log-line"><span class="ts" style="color:#6e7681">Error: ' + escapeHtml(e.message) + '</span></div>';
+            }
+        }
+
+        // ============================================================
+        // REFRESH INTERVALS
+        // ============================================================
+        function startIntervals() {
+            // Dashboard auto-refresh every 10s
+            state.intervals.dashboard = setInterval(function() {
+                if (state.activeTab === 'dashboard') refreshDashboard();
+            }, DASHBOARD_REFRESH_MS);
+
+            // Events auto-refresh every 60s
+            state.intervals.events = setInterval(function() {
+                if (state.activeTab === 'events') refreshEvents();
+            }, EVENTS_REFRESH_MS);
+
+            // Logs auto-refresh every 5s
+            state.intervals.logs = setInterval(function() {
+                if (state.activeTab === 'logs') refreshLogs();
+            }, LOGS_REFRESH_MS);
+
+            // AI tab refresh every 10s when active
+            state.intervals.ai = setInterval(function() {
+                if (state.activeTab === 'ai') refreshAILog();
+            }, DASHBOARD_REFRESH_MS);
+        }
+
+        // ============================================================
+        // INITIALIZATION
+        // ============================================================
+        function init() {
+            initConfigTab();
+            refreshDashboard();
+            startIntervals();
+
+            // Load saved config from localStorage if available
+            try {
+                var saved = localStorage.getItem('skytower_event_config');
+                if (saved) {
+                    var config = JSON.parse(saved);
+                    // Restore event checkboxes
+                    if (config.events) {
+                        TIER1_EVENTS.forEach(function(name) {
+                            var id = 'tier1_' + name.replace(/\s+/g, '_');
+                            var el = $(id);
+                            if (el) el.checked = config.events.indexOf(name) >= 0;
+                        });
+                        TIER2_EVENTS.forEach(function(name) {
+                            var id = 'tier2_' + name.replace(/\s+/g, '_');
+                            var el = $(id);
+                            if (el) el.checked = config.events.indexOf(name) >= 0;
+                        });
+                    }
+                    // Restore currencies
+                    if (config.currencies) {
+                        CURRENCIES.forEach(function(cur) {
+                            var el = $('cur_' + cur);
+                            if (el) el.checked = config.currencies.indexOf(cur) >= 0;
+                        });
+                    }
+                    // Restore impact
+                    if (config.min_impact) {
+                        $('minImpact').value = config.min_impact;
+                    }
+                }
+            } catch(e) {
+                // Ignore localStorage errors
+            }
+        }
+
+        init();
+
+    })();
+    </script>
+</body>
+</html>

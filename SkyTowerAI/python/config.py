@@ -90,7 +90,10 @@ TIER2_EVENTS = [
     "Unemployment Rate",
     "GDP",
     "Gross Domestic Product",
+    "Advance GDP",
     "Retail Sales",
+    "New Home Sales",
+    "Existing Home Sales",
 ]
 
 # Wszystkie high impact events (dla kompatybilności)

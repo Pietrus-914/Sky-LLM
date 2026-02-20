@@ -460,7 +460,8 @@ class CalendarAggregator:
             currencies: List[str] = None
     ) -> Optional[EconomicEvent]:
         """
-        Get the next event that matches SkyTower-FX criteria
+        Get the next event that matches SkyTower-FX criteria.
+        BUG-7 FIX: Post-filters cached results to exclude passed events.
 
         Args:
             event_keywords: Keywords to match in event name
@@ -478,11 +479,16 @@ class CalendarAggregator:
 
         events = self.get_upcoming_events(
             currencies=currencies,
-            impact_filter="HIGH",
+            impact_filter="MEDIUM",
             hours_ahead=168  # 1 week
         )
 
+        # BUG-7 FIX: Post-filter passed events from cache
+        now = datetime.now(pytz.UTC)
         for event in events:
+            # Skip events that already passed (cache may be stale)
+            if event.datetime_utc < now:
+                continue
             # Check if event matches any keyword
             event_lower = event.event_name.lower()
             for keyword in event_keywords:
@@ -490,6 +496,46 @@ class CalendarAggregator:
                     return event
 
         return None
+
+    def get_tradeable_events(
+            self,
+            event_keywords: List[str] = None,
+            currencies: List[str] = None
+    ) -> List[EconomicEvent]:
+        """
+        Get ALL upcoming events matching SkyTower-FX criteria.
+        Unlike get_next_tradeable_event(), returns the full list.
+        Post-filters cached results to exclude passed events.
+
+        Args:
+            event_keywords: Keywords to match in event name
+            currencies: Currencies to consider
+
+        Returns:
+            List of matching future events sorted by time
+        """
+        from config import HIGH_IMPACT_EVENTS, CURRENCY_PAIRS
+
+        if event_keywords is None:
+            event_keywords = HIGH_IMPACT_EVENTS
+        if currencies is None:
+            currencies = list(CURRENCY_PAIRS.keys())
+
+        events = self.get_upcoming_events(
+            currencies=currencies,
+            impact_filter="MEDIUM",
+            hours_ahead=168  # 1 week
+        )
+
+        now = datetime.now(pytz.UTC)
+        result = []
+        for event in events:
+            if event.datetime_utc < now:
+                continue
+            event_lower = event.event_name.lower()
+            if any(kw.lower() in event_lower for kw in event_keywords):
+                result.append(event)
+        return result
 
     def _deduplicate(self, events: List[EconomicEvent]) -> List[EconomicEvent]:
         """Remove duplicate events from multiple sources"""
