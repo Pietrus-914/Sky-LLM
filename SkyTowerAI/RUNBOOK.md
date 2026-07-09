@@ -109,7 +109,48 @@ Copy-Item "C:\Users\pietr\Documents\Sky tower\SkyTowerAI\mt5\SkyTowerAI_EA.ex5" 
 Potem w MT5: prawym na wykres → Expert Advisors → usuń i podepnij ponownie
 (albo restart terminala).
 
-## Migracja na komputer 24/7
+## Migracja na komputer 24/7 — wariant BEZ DOCKERA (słabszy sprzęt)
+
+Serwer działa natywnie w Pythonie — Docker nie jest wymagany. Ten wariant jest
+lżejszy (bez WSL2) i zalecany na słabszych maszynach.
+
+### Instalacja (raz)
+1. Zainstaluj **Python 3.10+** z https://python.org — przy instalacji zaznacz
+   **"Add Python to PATH"**. Zainstaluj też Git i Purple Trading MT5.
+2. `git clone https://github.com/Pietrus-914/Sky-LLM.git`
+3. Skopiuj ze starego komputera plik `.env` do `<repo>\SkyTowerAI\python\.env`
+   i dopisz w nim linię (w Dockerze robił to compose, natywnie robi to .env):
+   ```
+   SKYTOWER_FORCE_DECISION=true
+   ```
+4. Pierwszy start serwera (utworzy venv i zainstaluje zależności, potrwa parę minut):
+   ```
+   <repo>\SkyTowerAI\start_server_24_7.bat
+   ```
+   Ten launcher ma pętlę watchdog — po każdej awarii serwer wstaje sam po 10 s
+   (restarty zapisują się w `python\logs\watchdog.log`).
+5. Weryfikacja: `curl http://127.0.0.1:5555/health` + w oknie serwera banner
+   FORCE_DECISION.
+6. MT5: jak w KROKU 3 głównej instrukcji (allowlist WebRequest
+   `http://127.0.0.1:5555`, Algo Trading ON, 4 wykresy + EA). Skompilowane
+   `.ex5` przenieś ręcznie albo skompiluj na miejscu (sekcja B6 niżej).
+7. **Autostart + zasilanie** — uruchom raz (prawym → Run with PowerShell):
+   ```
+   <repo>\SkyTowerAI\install_autostart.ps1
+   ```
+   Tworzy skróty autostartu (serwer + MT5) i wyłącza usypianie. Zostają dwa
+   kroki ręczne, które skrypt wypisze na końcu: auto-logon (`netplwiz`)
+   i synchronizacja zegara (`w32tm /resync` w Task Schedulerze).
+8. Restart komputera na próbę: po zalogowaniu mają same wstać serwer
+   (okno "SkyTower-AI Server (24/7)") i MT5 z wykresami.
+
+### Aktualizacja kodu na maszynie 24/7
+```powershell
+cd <repo>; git pull
+# zrestartuj okno serwera (zamknij i odpal start_server_24_7.bat, albo restart komputera)
+```
+
+## Migracja na komputer 24/7 — wariant z Dockerem
 
 Wymaganie: docelowa maszyna to **Windows** (MT5 działa natywnie; w Dockerze jest
 tylko serwer Python).
