@@ -6,16 +6,15 @@ lxml>=5.0.0
 pandas>=2.1.0
 numpy>=1.26.0
 
-# COT Reports
-cot-reports>=1.0.0
+# COT data comes straight from the CFTC Socrata API via requests — no package needed
 
 # Scheduling & Async
 schedule>=1.2.0
 apscheduler>=3.10.0
 asyncio-throttle>=1.0.0
 
-# MT5 Integration
-MetaTrader5>=5.0.45
+# MT5 Integration: MetaTrader5 is Windows-only — see requirements-windows.txt
+# (this file must stay Linux-installable for the Docker image)
 
 # LLM Integration (choose one)
 openai>=1.0.0
@@ -27,9 +26,8 @@ anthropic>=0.18.0
 flask>=3.0.0
 flask-cors>=4.0.0
 
-# Database for caching
-sqlite3  # built-in
-redis>=5.0.0  # optional for production
+# Database for caching: sqlite3 is built into Python (do not pip install)
+# redis>=5.0.0  # optional for production
 
 # Utilities
 python-dotenv>=1.0.0

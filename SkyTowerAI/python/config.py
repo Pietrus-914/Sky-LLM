@@ -6,6 +6,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _env_int(name: str, default: int) -> int:
+    """Read an int env var, falling back on empty/garbage values instead of
+    crashing the whole server at import time (a blank line in .env or
+    docker-compose would otherwise put the container in a restart loop)."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        print(f"WARNING: {name}='{raw}' is not a valid integer — using default {default}")
+        return default
+
 # =============================================================================
 # API KEYS (set in .env file or environment)
 # =============================================================================
@@ -34,7 +48,12 @@ TRADING_CONFIG = {
     "leverage": 500,                 # 1:500 leverage
 
     # Entry/Exit Timing
-    "decision_seconds_before": 120, # Decision must be ready 2 min before event
+    # preload_seconds: how early the background updater starts analyzing an event.
+    # Default 150s (not 120): the updater scans every decision_check_interval (15s)
+    # and the LLM call can take 30-60s — the decision must be ready before the
+    # EA's entry at T-15s. Override via env for tuning.
+    "preload_seconds": _env_int("SKYTOWER_PRELOAD_SECONDS", 150),
+    "decision_check_interval": _env_int("SKYTOWER_CHECK_INTERVAL", 15),
     "entry_seconds_before": 15,     # Enter 15 seconds before news
     "exit_minutes_after": 10,       # Default exit after 10 minutes (10 candles M1)
     "max_hold_minutes": 30,         # Maximum hold time
@@ -248,11 +267,22 @@ POSITION_MANAGEMENT_CONFIG = {
 # =============================================================================
 # SERVER CONFIGURATION
 # =============================================================================
+# Host/port are env-overridable: Docker sets SKYTOWER_HOST=0.0.0.0 so the
+# published port is reachable from the Windows host; native runs keep loopback.
 SERVER_CONFIG = {
-    "host": "127.0.0.1",
-    "port": 5555,
+    "host": os.getenv("SKYTOWER_HOST", "127.0.0.1"),
+    "port": _env_int("SKYTOWER_PORT", 5555),
     "debug": False,
 }
+
+# =============================================================================
+# TEST MODE: FORCE DECISION (never SKIP)
+# =============================================================================
+# When enabled, the entry decision engine must always pick BUY or SELL —
+# SKIP is disabled at every level (LLM prompt, parse fallback, rule fallback).
+# Intended ONLY for the demo-account data-collection phase. Set explicitly in
+# docker-compose.yml, not in .env, so it stays visible and deliberate.
+FORCE_DECISION = os.getenv("SKYTOWER_FORCE_DECISION", "false").lower() in ("1", "true", "yes")
 
 # =============================================================================
 # LOGGING

@@ -176,6 +176,7 @@ class ForexFactoryCalendar:
                     impact_str = event.find('impact').text if event.find('impact') is not None else ''
                     forecast = event.find('forecast').text if event.find('forecast') is not None else None
                     previous = event.find('previous').text if event.find('previous') is not None else None
+                    actual = event.find('actual').text if event.find('actual') is not None else None
 
                     # Map impact
                     impact_map = {'High': 'HIGH', 'Medium': 'MEDIUM', 'Low': 'LOW', 'Holiday': 'LOW'}
@@ -188,6 +189,7 @@ class ForexFactoryCalendar:
                         impact=impact,
                         forecast=forecast,
                         previous=previous,
+                        actual=actual,
                         source="forexfactory"
                     ))
 

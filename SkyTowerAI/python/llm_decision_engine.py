@@ -13,7 +13,8 @@ import os
 from calendar_fetcher import CalendarAggregator, EconomicEvent
 from cot_analyzer import COTAnalyzer
 from sentiment_analyzer import SentimentAggregator
-from config import LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS, HIGH_IMPACT_EVENTS, OPENROUTER_API_KEY
+from event_reaction_history import EventReactionHistory
+from config import LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS, HIGH_IMPACT_EVENTS, OPENROUTER_API_KEY, FORCE_DECISION
 
 
 @dataclass
@@ -33,6 +34,7 @@ class TradingDecision:
     reasoning: str = ""
     data_summary: Dict = None
     timestamp: datetime = None
+    forced: bool = False  # True when FORCE_DECISION test mode influenced this decision
 
     def to_dict(self):
         d = asdict(self)
@@ -68,11 +70,16 @@ KEY PRINCIPLES:
 2. COT DATA: Follow institutional money (non-commercial traders)
 3. RETAIL SENTIMENT: Trade AGAINST retail majority (contrarian)
 4. PRICE ACTION: If price moved up before release, often moves opposite after (bank manipulation)
+5. MARKET STRUCTURE: When current market data is provided, prefer the direction aligned
+   with the higher-timeframe (H1) trend, and use nearby support/resistance and ATR
+   volatility to judge entry quality and size stop_loss_pips / take_profit_pips
+6. HISTORICAL REACTIONS: When past reactions to this event are provided, weigh how the
+   pair actually moved on similar beat/miss outcomes
 
 DECISION OUTPUT FORMAT:
 You must respond with a JSON object containing:
 {
-    "direction": "BUY" or "SELL" or "SKIP",
+    "direction": %DIRECTION_VALUES%,
     "confidence": 0.0 to 1.0,
     "lot_percent": 60 to 85 (percent of max lot),
     "exit_minutes": 5 to 15,
@@ -81,11 +88,29 @@ You must respond with a JSON object containing:
     "reasoning": "Brief explanation of decision"
 }
 
-SKIP the trade if:
+%SKIP_POLICY%"""
+
+    SKIP_POLICY_NORMAL = """SKIP the trade if:
 - Confidence is below 0.5
 - Data is conflicting with no clear signal
 - Event is marked as preliminary ("P" flag)
 - No clear directional bias from combined analysis"""
+
+    SKIP_POLICY_FORCED = """IMPORTANT — TEST MODE (data collection on a demo account):
+You MUST choose BUY or SELL. SKIP is NOT allowed.
+If the evidence is weak or conflicting, pick the MORE PROBABLE direction and
+express your uncertainty through a LOW confidence value. Report honest
+confidence — do NOT inflate it just because a direction is required."""
+
+    def _system_prompt(self) -> str:
+        """Build the system prompt for the current mode (normal vs FORCE_DECISION)."""
+        if FORCE_DECISION:
+            return (self.SYSTEM_PROMPT
+                    .replace("%DIRECTION_VALUES%", '"BUY" or "SELL"')
+                    .replace("%SKIP_POLICY%", self.SKIP_POLICY_FORCED))
+        return (self.SYSTEM_PROMPT
+                .replace("%DIRECTION_VALUES%", '"BUY" or "SELL" or "SKIP"')
+                .replace("%SKIP_POLICY%", self.SKIP_POLICY_NORMAL))
 
     def __init__(self, api_key: str = None, provider: str = None):
         """
@@ -103,6 +128,7 @@ SKIP the trade if:
         self.calendar = CalendarAggregator()
         self.cot_analyzer = COTAnalyzer()
         self.sentiment = SentimentAggregator()
+        self.reaction_history = EventReactionHistory()
 
         # Initialize LLM client
         self._init_llm_client()
@@ -144,18 +170,21 @@ SKIP the trade if:
             self.client = None
             logger.info("Using rule-based decision engine (no LLM)")
 
-    def analyze_event(self, event: EconomicEvent) -> TradingDecision:
+    def analyze_event(self, event: EconomicEvent, market_context: Dict = None) -> TradingDecision:
         """
         Analyze an upcoming economic event and make a trading decision
 
         Args:
             event: The economic event to analyze
+            market_context: Optional dict from market_context.build_market_context()
+                (trend, ATR, S/R zones from EA-pushed OHLC). None when no EA
+                has pushed data for this event yet.
 
         Returns:
             TradingDecision object
         """
         # Gather all data
-        data_context = self._gather_data(event)
+        data_context = self._gather_data(event, market_context)
 
         # Make decision (LLM or rule-based)
         if self.client:
@@ -167,10 +196,16 @@ SKIP the trade if:
 
         return decision
 
-    def _gather_data(self, event: EconomicEvent) -> Dict:
+    def _gather_data(self, event: EconomicEvent, market_context: Dict = None) -> Dict:
         """Gather all relevant data for decision making"""
         currency = event.currency.upper()
         source_status = {}
+
+        if market_context:
+            age = market_context.get('data_age_minutes')
+            source_status["market"] = "ok" if age is None or age <= 15 else f"stale ({age} min old)"
+        else:
+            source_status["market"] = "no_data"
 
         # Get COT positioning
         cot_data = self.cot_analyzer.analyze_currency(currency)
@@ -211,6 +246,14 @@ SKIP the trade if:
         else:
             source_status["forecast"] = "ok"
 
+        # Historical reactions to this event (builds up over time)
+        reaction_summary = None
+        try:
+            reaction_summary = self.reaction_history.summarize(event.event_name, currency)
+        except Exception as e:
+            logger.debug(f"Reaction history lookup failed: {e}")
+        source_status["reaction_history"] = "ok" if reaction_summary else "no_data"
+
         return {
             "event": {
                 "name": event.event_name,
@@ -223,28 +266,40 @@ SKIP the trade if:
             "cot_analysis": cot_data,
             "sentiment_analysis": sentiment_data,
             "forecast_info": forecast_info,
-            "suggested_pair": pair,
+            "suggested_pair": (market_context or {}).get('pair') or pair,
+            "market_context": market_context,
+            "reaction_history": reaction_summary,
             "_source_status": source_status,
         }
+
+    def _market_context_section(self, data_context: Dict) -> str:
+        """Prompt section for live market data (trend/ATR/zones), or a degraded-source note."""
+        market = data_context.get('market_context')
+        if not market:
+            return "NOT AVAILABLE (no price data pushed by the EA for this event)"
+        text = json.dumps(market, indent=2)
+        age = market.get('data_age_minutes')
+        if age is not None and age > 15:
+            text += f"\nNOTE: this market data is {age} minutes old — treat with caution."
+        return text
 
     def _compare_values(self, forecast: str, previous: str) -> str:
         """Compare forecast to previous value"""
         if not forecast or not previous:
             return "UNKNOWN"
 
-        try:
-            # Extract numeric values
-            forecast_num = float(''.join(c for c in forecast if c.isdigit() or c in '.-'))
-            previous_num = float(''.join(c for c in previous if c.isdigit() or c in '.-'))
-
-            if forecast_num > previous_num:
-                return "IMPROVEMENT"
-            elif forecast_num < previous_num:
-                return "DETERIORATION"
-            else:
-                return "UNCHANGED"
-        except:
+        # Shared unit-aware parser (handles 210K vs 1.2M correctly)
+        from event_reaction_history import parse_numeric
+        forecast_num = parse_numeric(forecast)
+        previous_num = parse_numeric(previous)
+        if forecast_num is None or previous_num is None:
             return "UNKNOWN"
+
+        if forecast_num > previous_num:
+            return "IMPROVEMENT"
+        elif forecast_num < previous_num:
+            return "DETERIORATION"
+        return "UNCHANGED"
 
     def _llm_decision(self, event: EconomicEvent, data_context: Dict) -> TradingDecision:
         """Use LLM to make trading decision"""
@@ -262,62 +317,57 @@ RETAIL SENTIMENT (USE AS CONTRARIAN):
 FORECAST COMPARISON:
 {json.dumps(data_context['forecast_info'], indent=2)}
 
+CURRENT MARKET STRUCTURE ({data_context['suggested_pair']}):
+{self._market_context_section(data_context)}
+
+HISTORICAL REACTIONS TO THIS EVENT:
+{data_context.get('reaction_history') or "No history yet (the system is building this dataset)"}
+
 SUGGESTED PAIR: {data_context['suggested_pair']}
 
 Based on this data, provide your trading decision in JSON format."""
 
         try:
             logger.info(f"Calling LLM ({self.provider}/{self.model}) for trading decision...")
-            if self.provider == "openrouter":
-                # OpenRouter uses OpenAI-compatible API
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=1000,
-                    temperature=0.3,
-                    timeout=60.0,  # 60 second timeout
-                    extra_headers={
-                        "HTTP-Referer": "https://skytower-ai.local",
-                        "X-Title": "SkyTower-AI Trading"
-                    }
-                )
-                response_text = response.choices[0].message.content
-                logger.info(f"OpenRouter response received from {self.model}")
-
-            elif self.provider == "anthropic":
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=1000,
-                    system=self.SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
-                    timeout=60.0  # 60 second timeout
-                )
-                response_text = response.content[0].text
-
-            elif self.provider == "openai":
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=1000,
-                    temperature=0.3,
-                    timeout=60.0  # 60 second timeout
-                )
-                response_text = response.choices[0].message.content
+            response_text = self._chat(prompt)
 
             # Parse JSON response
             decision_data = self._parse_llm_response(response_text)
+
+            # FORCE_DECISION: unparseable response must not silently become SKIP —
+            # retry once (only if the event is far enough for a second 60s call),
+            # then fall back to the rule-based engine
+            if FORCE_DECISION and decision_data.get('_parse_failed'):
+                if self._seconds_until(event) > 90:
+                    logger.warning("LLM response unparseable — retrying once (force mode)")
+                    response_text = self._chat(
+                        prompt + "\n\nReturn ONLY a valid JSON object matching the schema. No other text."
+                    )
+                    decision_data = self._parse_llm_response(response_text)
+                else:
+                    logger.warning("LLM response unparseable and event too close for a retry")
+                if decision_data.get('_parse_failed'):
+                    logger.warning("LLM response unparseable — using rule-based fallback")
+                    return self._rule_based_decision(event, data_context)
+
+            # Whitelist chokepoint: anything that isn't exactly BUY/SELL
+            # (HOLD, NO_TRADE, lowercase skip, ...) is treated as SKIP so it
+            # can't slip past the server and die silently in the EA
+            direction = self._normalize_direction(decision_data.get('direction'))
+            reasoning = decision_data.get('reasoning', 'LLM decision')
+
+            # FORCE_DECISION: if the model returned SKIP anyway, remap to the
+            # rule-based direction but keep the model's (honest) confidence
+            if FORCE_DECISION and direction == 'SKIP':
+                direction, note = self._forced_direction(data_context)
+                reasoning = f"{reasoning} (LLM chose SKIP; {note})"
+                logger.warning(f"LLM returned SKIP despite force mode — remapped to {direction}")
 
             return TradingDecision(
                 event=event.event_name,
                 currency=event.currency,
                 pair=data_context['suggested_pair'],
-                direction=decision_data.get('direction', 'SKIP'),
+                direction=direction,
                 confidence=decision_data.get('confidence', 0.0),
                 lot_percent=decision_data.get('lot_percent', 70),
                 entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
@@ -325,14 +375,141 @@ Based on this data, provide your trading decision in JSON format."""
                 stop_loss_percent=decision_data.get('stop_loss_percent', 40),
                 stop_loss_pips=decision_data.get('stop_loss_pips', 0),
                 take_profit_pips=decision_data.get('take_profit_pips', 0),
-                reasoning=decision_data.get('reasoning', 'LLM decision'),
+                reasoning=reasoning,
                 data_summary=data_context,
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
+                forced=FORCE_DECISION
             )
 
         except Exception as e:
             logger.error(f"LLM decision error: {e}")
             return self._rule_based_decision(event, data_context)
+
+    def _chat(self, prompt: str) -> str:
+        """Send one prompt to the configured LLM provider and return the raw text."""
+        system_prompt = self._system_prompt()
+        if self.provider == "openrouter":
+            # OpenRouter uses OpenAI-compatible API
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=1000,
+                temperature=0.3,
+                timeout=60.0,  # 60 second timeout
+                extra_headers={
+                    "HTTP-Referer": "https://skytower-ai.local",
+                    "X-Title": "SkyTower-AI Trading"
+                }
+            )
+            logger.info(f"OpenRouter response received from {self.model}")
+            return response.choices[0].message.content
+
+        elif self.provider == "anthropic":
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=1000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=60.0  # 60 second timeout
+            )
+            return response.content[0].text
+
+        elif self.provider == "openai":
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=1000,
+                temperature=0.3,
+                timeout=60.0  # 60 second timeout
+            )
+            return response.choices[0].message.content
+
+        raise RuntimeError(f"No LLM client for provider '{self.provider}'")
+
+    @staticmethod
+    def _normalize_direction(raw) -> str:
+        """Whitelist LLM direction output: anything but BUY/SELL becomes SKIP."""
+        direction = str(raw or "").strip().upper()
+        if direction in ("BUY", "SELL"):
+            return direction
+        if direction != "SKIP":
+            logger.warning(f"LLM returned unexpected direction '{raw}' — treating as SKIP")
+        return "SKIP"
+
+    @staticmethod
+    def _seconds_until(event) -> float:
+        """Seconds until the event (UTC), or a large number when unknown."""
+        try:
+            event_time = event.datetime_utc
+            if event_time.tzinfo is not None:
+                event_time = event_time.replace(tzinfo=None)
+            return (event_time - datetime.utcnow()).total_seconds()
+        except (AttributeError, TypeError):
+            return float('inf')
+
+    def _score_direction(self, data_context: Dict) -> tuple:
+        """
+        Single scoring table shared by the rule-based engine and the forced
+        tie-break: forecast +2, COT +3, contrarian sentiment +2.
+        Returns (bullish, bearish, reasons, confidence_boost).
+        """
+        bullish, bearish = 0, 0
+        reasons = []
+        confidence_boost = 0.0
+
+        forecast_cmp = data_context.get('forecast_info', {}).get('forecast_vs_previous', 'UNKNOWN')
+        if forecast_cmp == "IMPROVEMENT":
+            bullish += 2
+            reasons.append("Forecast better than previous")
+        elif forecast_cmp == "DETERIORATION":
+            bearish += 2
+            reasons.append("Forecast worse than previous")
+
+        cot = data_context.get('cot_analysis') or {}
+        if isinstance(cot, dict):
+            if cot.get('signal') == "BULLISH":
+                bullish += 3
+                confidence_boost += cot.get('confidence', 0) * 0.2
+                reasons.append(f"COT: Institutions bullish ({cot.get('reasoning', '')})")
+            elif cot.get('signal') == "BEARISH":
+                bearish += 3
+                confidence_boost += cot.get('confidence', 0) * 0.2
+                reasons.append(f"COT: Institutions bearish ({cot.get('reasoning', '')})")
+
+        sentiment = data_context.get('sentiment_analysis') or {}
+        if isinstance(sentiment, dict):
+            if sentiment.get('signal') == "BULLISH":  # already contrarian
+                bullish += 2
+                confidence_boost += sentiment.get('confidence', 0) * 0.15
+                reasons.append("Retail heavily short (contrarian bullish)")
+            elif sentiment.get('signal') == "BEARISH":
+                bearish += 2
+                confidence_boost += sentiment.get('confidence', 0) * 0.15
+                reasons.append("Retail heavily long (contrarian bearish)")
+
+        return bullish, bearish, reasons, confidence_boost
+
+    def _forced_direction(self, data_context: Dict) -> tuple:
+        """
+        Pick BUY/SELL from the shared rule scores when SKIP is not allowed
+        (FORCE_DECISION test mode). Tie-break: forecast comparison, then BUY.
+        """
+        bullish, bearish, _, _ = self._score_direction(data_context)
+        forecast_cmp = data_context.get('forecast_info', {}).get('forecast_vs_previous', 'UNKNOWN')
+
+        if bullish > bearish:
+            return "BUY", f"direction forced from rule fallback (bullish {bullish} vs bearish {bearish})"
+        if bearish > bullish:
+            return "SELL", f"direction forced from rule fallback (bearish {bearish} vs bullish {bullish})"
+        if forecast_cmp == "DETERIORATION":
+            return "SELL", "forced tie-break via forecast deterioration"
+        return "BUY", "forced tie-break (no directional signal)"
 
     def _parse_llm_response(self, response: str) -> Dict:
         """Parse JSON from LLM response"""
@@ -345,11 +522,13 @@ Based on this data, provide your trading decision in JSON format."""
         except:
             pass
 
-        # Default response if parsing fails
+        # Default response if parsing fails (_parse_failed lets callers
+        # distinguish a broken response from a genuine SKIP)
         return {
             "direction": "SKIP",
             "confidence": 0.0,
-            "reasoning": "Could not parse LLM response"
+            "reasoning": "Could not parse LLM response",
+            "_parse_failed": True
         }
 
     def _rule_based_decision(self, event: EconomicEvent, data_context: Dict) -> TradingDecision:
@@ -360,48 +539,22 @@ Based on this data, provide your trading decision in JSON format."""
         currency = event.currency.upper()
         pair = data_context['suggested_pair']
 
-        # Initialize scores
-        bullish_score = 0
-        bearish_score = 0
-        confidence = 0.5
-        reasons = []
-
-        # 1. Forecast Analysis
-        forecast_comparison = data_context['forecast_info']['forecast_vs_previous']
-        if forecast_comparison == "IMPROVEMENT":
-            bullish_score += 2
-            reasons.append("Forecast better than previous")
-        elif forecast_comparison == "DETERIORATION":
-            bearish_score += 2
-            reasons.append("Forecast worse than previous")
-
-        # 2. COT Analysis
-        cot = data_context['cot_analysis']
-        if cot.get('signal') == "BULLISH":
-            bullish_score += 3
-            confidence += cot.get('confidence', 0) * 0.2
-            reasons.append(f"COT: Institutions bullish ({cot.get('reasoning', '')})")
-        elif cot.get('signal') == "BEARISH":
-            bearish_score += 3
-            confidence += cot.get('confidence', 0) * 0.2
-            reasons.append(f"COT: Institutions bearish ({cot.get('reasoning', '')})")
-
-        # 3. Sentiment Analysis (Contrarian)
-        sentiment = data_context['sentiment_analysis']
-        if sentiment.get('signal') == "BULLISH":  # This is already contrarian
-            bullish_score += 2
-            confidence += sentiment.get('confidence', 0) * 0.15
-            reasons.append("Retail heavily short (contrarian bullish)")
-        elif sentiment.get('signal') == "BEARISH":
-            bearish_score += 2
-            confidence += sentiment.get('confidence', 0) * 0.15
-            reasons.append("Retail heavily long (contrarian bearish)")
+        bullish_score, bearish_score, reasons, confidence_boost = self._score_direction(data_context)
+        confidence = 0.5 + confidence_boost
 
         # Determine direction
         if bullish_score > bearish_score + 2:
             direction = "BUY"
         elif bearish_score > bullish_score + 2:
             direction = "SELL"
+        elif FORCE_DECISION:
+            # Test mode: no margin requirement — pick the stronger side
+            direction, note = self._forced_direction(data_context)
+            reasons.append(note)
+            if bullish_score == 0 and bearish_score == 0:
+                # Evidence-free coin flip: report it honestly instead of
+                # shipping the 0.5 baseline as if it meant something
+                confidence = 0.3
         else:
             direction = "SKIP"
             confidence = 0.3
@@ -421,7 +574,8 @@ Based on this data, provide your trading decision in JSON format."""
             stop_loss_percent=40,
             reasoning="; ".join(reasons) if reasons else "No strong signals",
             data_summary=data_context,
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
+            forced=FORCE_DECISION
         )
 
     def get_next_trade_recommendation(self) -> Optional[TradingDecision]:
@@ -567,53 +721,22 @@ Respond with JSON:
 }}"""
 
         try:
-            if self.provider == "openrouter":
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=1000,
-                    temperature=0.3,
-                    timeout=60.0,  # 60 second timeout
-                    extra_headers={
-                        "HTTP-Referer": "https://skytower-ai.local",
-                        "X-Title": "SkyTower-AI Trading"
-                    }
-                )
-                response_text = response.choices[0].message.content
-            elif self.provider == "anthropic":
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=1000,
-                    system=self.SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
-                    timeout=60.0  # 60 second timeout
-                )
-                response_text = response.content[0].text
-            elif self.provider == "openai":
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=1000,
-                    temperature=0.3,
-                    timeout=60.0  # 60 second timeout
-                )
-                response_text = response.choices[0].message.content
-            else:
+            if not self.client:
                 return self._rule_based_multi_pair_decision(data_context, pairs_data)
+
+            response_text = self._chat(prompt)
 
             # Parse response
             decision_data = self._parse_llm_response(response_text)
             selected_pair = decision_data.get('selected_pair')
+            direction = self._normalize_direction(decision_data.get('direction'))
 
             # Handle various forms of null/empty response
             if not selected_pair or selected_pair == 'null' or selected_pair == 'None' \
-               or decision_data.get('direction') == 'SKIP':
+               or direction == 'SKIP':
+                if FORCE_DECISION:
+                    logger.warning("LLM recommends SKIP for all pairs — force mode, using rule-based fallback")
+                    return self._rule_based_multi_pair_decision(data_context, pairs_data)
                 logger.info("LLM recommends SKIP for all pairs")
                 return None
 
@@ -624,7 +747,7 @@ Respond with JSON:
                 event=data_context['event']['name'],
                 currency=data_context['event']['currency'],
                 pair=selected_pair,
-                direction=decision_data.get('direction', 'SKIP'),
+                direction=direction,
                 confidence=decision_data.get('confidence', 0.0),
                 lot_percent=decision_data.get('lot_percent', 70),
                 entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
@@ -634,7 +757,8 @@ Respond with JSON:
                 take_profit_pips=decision_data.get('take_profit_pips', 0),
                 reasoning=decision_data.get('reasoning', 'Multi-pair LLM decision'),
                 data_summary=data_context,
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
+                forced=FORCE_DECISION
             )
 
         except Exception as e:
@@ -648,43 +772,17 @@ Respond with JSON:
     ) -> Optional[TradingDecision]:
         """Rule-based pair selection when LLM is unavailable"""
 
-        # First, determine direction from fundamentals
-        bullish_score = 0
-        bearish_score = 0
-        reasons = []
-
-        # Forecast analysis
-        forecast_comparison = data_context['forecast_info']['forecast_vs_previous']
-        if forecast_comparison == "IMPROVEMENT":
-            bullish_score += 2
-            reasons.append("Forecast improving")
-        elif forecast_comparison == "DETERIORATION":
-            bearish_score += 2
-            reasons.append("Forecast deteriorating")
-
-        # COT analysis
-        cot = data_context['cot_analysis']
-        if cot.get('signal') == "BULLISH":
-            bullish_score += 3
-            reasons.append("COT bullish")
-        elif cot.get('signal') == "BEARISH":
-            bearish_score += 3
-            reasons.append("COT bearish")
-
-        # Sentiment (contrarian)
-        sentiment = data_context['sentiment_analysis']
-        if sentiment.get('signal') == "BULLISH":
-            bullish_score += 2
-            reasons.append("Contrarian bullish")
-        elif sentiment.get('signal') == "BEARISH":
-            bearish_score += 2
-            reasons.append("Contrarian bearish")
+        # First, determine direction from fundamentals (shared scoring table)
+        bullish_score, bearish_score, reasons, _ = self._score_direction(data_context)
 
         # Determine direction
         if bullish_score > bearish_score + 1:
             direction = "BUY"
         elif bearish_score > bullish_score + 1:
             direction = "SELL"
+        elif FORCE_DECISION:
+            direction, note = self._forced_direction(data_context)
+            reasons.append(note)
         else:
             logger.info("Rule-based: No clear direction, recommending SKIP")
             return None
@@ -770,7 +868,8 @@ Respond with JSON:
             stop_loss_percent=40,
             reasoning=f"Selected {best_pair}: {'; '.join(reasons)}",
             data_summary=data_context,
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
+            forced=FORCE_DECISION
         )
 
 

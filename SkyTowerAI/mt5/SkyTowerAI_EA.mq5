@@ -64,6 +64,11 @@ input bool     InpMultiInstance = false;         // Enable Multi-Instance Mode
 input int      InpRegisterMinBefore = 5;         // Register pair X minutes before event
 input int      InpMagicNumber = 0;               // Magic Number (0=auto from symbol)
 
+input group "=== Market Data & Reaction Reporting ==="
+input bool     InpPushMarketData = true;         // Push OHLC to server (LLM market context)
+input int      InpMarketDataSeconds = 60;        // Market data push interval (seconds)
+input bool     InpReportReactions = true;        // Report post-event price reactions
+
 //--- Global variables
 CTrade         trade;
 CPositionInfo  positionInfo;
@@ -111,6 +116,21 @@ bool           g_aiManagementActive = false; // AI is managing the position
 bool           g_pairRegistered = false;
 string         g_registeredEventKey = "";
 datetime       g_lastRegisterAttempt = 0;
+
+// Market data push (LLM market context)
+datetime       g_lastMarketDataPush = 0;
+
+// Event reaction tracking (post-release price snapshots for the server).
+// Slot array: clustered releases (e.g. 13:30 + 13:33) may overlap within the
+// 5-minute measurement window — one slot per pending event, no overwrites.
+#define REACTION_SLOTS 4
+bool           g_reactionPending[REACTION_SLOTS];
+datetime       g_reactionEventTime[REACTION_SLOTS];   // broker time of the event
+string         g_reactionEventName[REACTION_SLOTS];
+string         g_reactionCurrency[REACTION_SLOTS];
+string         g_reactionEventTimeUTC[REACTION_SLOTS]; // ISO UTC string from the server signal
+double         g_reactionPrice0[REACTION_SLOTS];       // bid at event time
+double         g_reactionPrice1[REACTION_SLOTS];       // bid at T+60s
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -393,6 +413,10 @@ void OnTick()
    //--- Check for open positions that need to be closed
    ManageOpenPositions();
 
+   //--- Track post-event price reaction (runs independently of trade state)
+   if(InpReportReactions)
+      HandleEventReaction();
+
    //--- If we're waiting for an event, check if it's time to trade
    if(g_waitingForEvent)
    {
@@ -479,6 +503,13 @@ void OnTick()
             }
          }
       }
+   }
+
+   //--- Push current OHLC so the server's LLM sees fresh market structure
+   if(InpPushMarketData && currentTime - g_lastMarketDataPush >= InpMarketDataSeconds)
+   {
+      g_lastMarketDataPush = currentTime;
+      PushMarketData();
    }
 
    //--- Check for new signals from server
@@ -676,6 +707,121 @@ void ReportZoneToServer()
 }
 
 //+------------------------------------------------------------------+
+//| Append one timeframe's OHLC as JSON array to the payload           |
+//+------------------------------------------------------------------+
+bool AppendOhlcJson(string &json, string tfName, ENUM_TIMEFRAMES period, int count)
+{
+   MqlRates rates[];
+   ArraySetAsSeries(rates, false);  // index 0 = oldest (server expects chronological order)
+   int copied = CopyRates(_Symbol, period, 0, count, rates);
+   if(copied <= 0)
+      return false;
+
+   if(StringLen(json) > 0)
+      json += ",";  // separator handled here — callers just chain appends
+   json += "\"" + tfName + "\":[";
+   for(int i = 0; i < copied; i++)
+   {
+      if(i > 0)
+         json += ",";
+      json += "{\"time\":" + IntegerToString((long)rates[i].time) +
+              StringFormat(",\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f}",
+                           rates[i].open, rates[i].high, rates[i].low, rates[i].close);
+   }
+   json += "]";
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Push current OHLC (M5/M15/H1) to the server for LLM market context |
+//+------------------------------------------------------------------+
+void PushMarketData()
+{
+   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   long spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+
+   string json = StringFormat(
+      "{\"pair\":\"%s\",\"current_price\":%.5f,\"spread_points\":%d,\"ohlc_multi\":{",
+      _Symbol, currentPrice, (int)spread);
+
+   string ohlcPart = "";
+   AppendOhlcJson(ohlcPart, "M5", PERIOD_M5, 60);
+   AppendOhlcJson(ohlcPart, "M15", PERIOD_M15, 40);
+   AppendOhlcJson(ohlcPart, "H1", PERIOD_H1, 48);
+
+   if(StringLen(ohlcPart) == 0)
+      return;  // No history available yet (e.g. right after terminal start)
+
+   json += ohlcPart + "}}";
+
+   string url = "http://" + InpServerHost + ":" + IntegerToString(InpServerPort) + "/api/market-data";
+   string result = "";
+   WebRequestPost(url, json, result);  // best effort — don't spam logs on failure
+}
+
+//+------------------------------------------------------------------+
+//| Snapshot bid at T0/T+60/T+300 after event, then report to server   |
+//+------------------------------------------------------------------+
+void HandleEventReaction()
+{
+   datetime now = TimeCurrent();
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   for(int s = 0; s < REACTION_SLOTS; s++)
+   {
+      if(!g_reactionPending[s])
+         continue;
+
+      if(now >= g_reactionEventTime[s] && g_reactionPrice0[s] == 0)
+         g_reactionPrice0[s] = bid;
+
+      if(now >= g_reactionEventTime[s] + 60 && g_reactionPrice1[s] == 0)
+         g_reactionPrice1[s] = bid;
+
+      if(now >= g_reactionEventTime[s] + 300)
+      {
+         if(g_reactionPrice0[s] > 0)
+            SendEventReaction(s, bid);
+         else
+            Print("Event reaction NOT reported (no tick captured at event time)");
+         g_reactionPending[s] = false;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Escape a string for embedding inside a JSON string literal         |
+//+------------------------------------------------------------------+
+string EscapeJson(string value)
+{
+   StringReplace(value, "\\", "\\\\");
+   StringReplace(value, "\"", "\\\"");
+   return value;
+}
+
+//+------------------------------------------------------------------+
+//| POST the measured reaction to /api/event-reaction                  |
+//+------------------------------------------------------------------+
+void SendEventReaction(int slot, double priceAfter5Min)
+{
+   string json = StringFormat(
+      "{\"pair\":\"%s\",\"event_name\":\"%s\",\"currency\":\"%s\",\"event_time\":\"%s\","
+      "\"price_at_event\":%.5f,\"price_after_1min\":%.5f,\"price_after_5min\":%.5f}",
+      _Symbol, EscapeJson(g_reactionEventName[slot]), EscapeJson(g_reactionCurrency[slot]),
+      EscapeJson(g_reactionEventTimeUTC[slot]),
+      g_reactionPrice0[slot], g_reactionPrice1[slot], priceAfter5Min);
+
+   string url = "http://" + InpServerHost + ":" + IntegerToString(InpServerPort) + "/api/event-reaction";
+   string result = "";
+
+   if(WebRequestPost(url, json, result))
+      Print("Event reaction reported: ", g_reactionEventName[slot], " (", g_reactionCurrency[slot], ") ",
+            g_reactionPrice0[slot], " -> ", priceAfter5Min);
+   else
+      Print("Failed to report event reaction for ", g_reactionEventName[slot]);
+}
+
+//+------------------------------------------------------------------+
 //| Check for trading signals from server                              |
 //+------------------------------------------------------------------+
 void CheckForSignals()
@@ -720,10 +866,20 @@ void CheckForSignals()
    string reasoning = ExtractJsonString(result, "reasoning");
 
    //--- Validate signal
+   //--- forced:true = server test mode (FORCE_DECISION): decisions honestly
+   //--- report low confidence, so the confidence gate must not reject them
+   bool forcedSignal = (StringFind(result, "\"forced\":true") >= 0);
    if(confidence < InpMinConfidence)
    {
-      Print("Signal confidence too low: ", confidence);
-      return;
+      if(forcedSignal)
+      {
+         Print("Forced test-mode signal — bypassing confidence gate (", confidence, " < ", InpMinConfidence, ")");
+      }
+      else
+      {
+         Print("Signal confidence too low: ", confidence);
+         return;
+      }
    }
 
    if(direction != "BUY" && direction != "SELL")
@@ -749,6 +905,37 @@ void CheckForSignals()
    g_eventSLPercent = (slPercent > 0) ? slPercent : InpDefaultSLPercent;
    g_eventSLPips = slPips;  // SL in pips from LLM (0 if not provided)
    g_eventTPPips = tpPips;  // TP in pips from LLM (0 if not provided)
+
+   //--- Arm post-event reaction tracking (snapshots at T0 / T+60s / T+300s)
+   if(InpReportReactions)
+   {
+      int slot = -1;
+      for(int s = 0; s < REACTION_SLOTS; s++)
+      {
+         // Skip if a slot already tracks this event (signal re-delivery after
+         // e.g. a spread-rejected entry; ±2s tolerance for countdown rounding)
+         if(g_reactionPending[s] && g_reactionEventName[s] == eventName &&
+            MathAbs((long)(g_reactionEventTime[s] - g_eventTime)) <= 2)
+         {
+            slot = -2;  // already armed
+            break;
+         }
+         if(slot == -1 && !g_reactionPending[s])
+            slot = s;
+      }
+      if(slot >= 0)
+      {
+         g_reactionPending[slot] = true;
+         g_reactionEventTime[slot] = g_eventTime;
+         g_reactionEventName[slot] = eventName;
+         g_reactionCurrency[slot] = ExtractJsonString(result, "event_currency");
+         g_reactionEventTimeUTC[slot] = ExtractJsonString(result, "event_time");
+         g_reactionPrice0[slot] = 0;
+         g_reactionPrice1[slot] = 0;
+      }
+      else if(slot == -1)
+         Print("WARNING: all reaction slots busy — reaction for ", eventName, " will not be tracked");
+   }
 
    //--- Check zone bias and potentially adjust direction
    string zoneBiasInfo = "";

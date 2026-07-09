@@ -12,7 +12,8 @@ import time
 from loguru import logger
 
 from config import SERVER_CONFIG, TRADING_CONFIG, ZONE_CONFIG, EXIT_CONFIG, POSITION_MANAGEMENT_CONFIG
-from config import HIGH_IMPACT_EVENTS, CURRENCY_PAIRS
+from config import HIGH_IMPACT_EVENTS, CURRENCY_PAIRS, DEFAULT_PAIRS
+from market_context import build_market_context, normalize_pair
 from calendar_fetcher import CalendarAggregator
 from cot_analyzer import COTAnalyzer
 from sentiment_analyzer import SentimentAggregator
@@ -25,6 +26,9 @@ from decision_history import DecisionHistory
 
 app = Flask(__name__)
 CORS(app)
+# Largest legitimate payload is the EA's ohlc_multi push (~15 KB) — cap well
+# above that so a malformed/hostile client can't allocate arbitrary memory
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024
 
 # Global instances
 decision_engine = None
@@ -48,6 +52,12 @@ pair_lock = threading.Lock()
 # Tracks which pair was selected for each event
 selected_pairs = {}  # { "event_key": "GBPJPY" }
 executed_trades = set()  # Tracks executed event_keys to prevent duplicates
+
+# Per-pair market data pushed by the EA (works in single-instance mode,
+# unlike registered_pairs which needs multi-instance + a known event).
+# Structure: { "EURUSD": {"ohlc_multi": {"M5": [...], ...}, "current_price": ..., "updated_at": ...} }
+market_data_reports = {}
+market_data_lock = threading.Lock()
 
 
 def init_services():
@@ -251,11 +261,11 @@ def get_trade_decision():
     ensure_services()
 
     try:
+        # NOTE: no eager analysis here — the background updater owns decision
+        # making (it analyzes events inside the preload window). Analyzing on
+        # demand used to pin a far-future event in next_decision and block
+        # the pipeline for days.
         with decision_lock:
-            if next_decision is None:
-                # Generate new decision
-                next_decision = decision_engine.get_next_trade_recommendation()
-
             if next_decision:
                 return jsonify({
                     "status": "ok",
@@ -265,7 +275,8 @@ def get_trade_decision():
                 return jsonify({
                     "status": "ok",
                     "decision": None,
-                    "message": "No trade recommendation available"
+                    "message": "No active decision (updater analyzes events "
+                               "when they enter the preload window)"
                 })
     except Exception as e:
         logger.error(f"Error getting decision: {e}")
@@ -279,6 +290,33 @@ def refresh_decision():
     ensure_services()
 
     try:
+        # Refuse to pin a decision for an event outside the decision window:
+        # the updater owns in-window analysis, and a far-future pinned decision
+        # would block the pipeline (and could race-arm the EA) until released
+        window = TRADING_CONFIG["preload_seconds"] + 60
+        upcoming = calendar.get_tradeable_events(
+            event_keywords=HIGH_IMPACT_EVENTS,
+            currencies=list(CURRENCY_PAIRS.keys())
+        )
+        next_event_seconds = None
+        for evt in upcoming:
+            evt_time = evt.datetime_utc
+            if evt_time.tzinfo is not None:
+                evt_time = evt_time.replace(tzinfo=None)
+            seconds = (evt_time - datetime.utcnow()).total_seconds()
+            if seconds > 0:
+                next_event_seconds = int(seconds)
+                break
+
+        if next_event_seconds is None or next_event_seconds > window:
+            return jsonify({
+                "status": "ok",
+                "message": (f"Next event is {next_event_seconds}s away — outside the "
+                            f"{window}s decision window. The background updater will "
+                            f"analyze it automatically." if next_event_seconds
+                            else "No upcoming tradeable events found.")
+            })
+
         with decision_lock:
             next_decision = decision_engine.get_next_trade_recommendation()
 
@@ -685,7 +723,7 @@ def register_pair():
                 "spread_points": data.get('spread_points', 0),
                 "zones": data.get('zones', {}),
                 "ohlc": data.get('ohlc', []),
-                "registered_at": datetime.now().isoformat()
+                "registered_at": datetime.utcnow().isoformat()
             }
 
             pair_count = len(registered_pairs[event_key])
@@ -702,6 +740,257 @@ def register_pair():
     except Exception as e:
         logger.error(f"Error registering pair: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/market-data', methods=['POST'])
+def report_market_data():
+    """
+    Endpoint for the EA to push current OHLC data per pair.
+    Works in single-instance mode (no event key needed) — the background
+    updater picks the right pair's data when analyzing an event.
+
+    Request body:
+    {
+        "pair": "EURUSD",
+        "current_price": 1.0842,
+        "spread_points": 12,
+        "ohlc_multi": {
+            "M5":  [{"time": ..., "open": ..., "high": ..., "low": ..., "close": ...}, ...],
+            "M15": [...],
+            "H1":  [...]
+        }
+    }
+    """
+    global market_data_reports
+
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"status": "error", "message": "No data provided"}), 400
+
+        # Normalized (bare, suffix-free) name: the same form the EA can resolve
+        # back to its broker symbol, and the form /api/signal compares against
+        pair = normalize_pair(data.get('pair', ''))
+        ohlc_multi = data.get('ohlc_multi', {})
+
+        if not pair:
+            return jsonify({"status": "error", "message": "pair is required"}), 400
+        if not isinstance(ohlc_multi, dict) or not any(ohlc_multi.values()):
+            return jsonify({"status": "error", "message": "ohlc_multi with at least one timeframe is required"}), 400
+
+        # Clamp bar counts — the EA sends at most 60 per timeframe
+        ohlc_multi = {tf: (bars[-200:] if isinstance(bars, list) else [])
+                      for tf, bars in ohlc_multi.items()}
+
+        with market_data_lock:
+            market_data_reports[pair] = {
+                "pair": pair,
+                "ohlc_multi": ohlc_multi,
+                "updated_at": datetime.utcnow().isoformat()
+            }
+
+        bars_info = {tf: len(bars) for tf, bars in ohlc_multi.items() if bars}
+        logger.info(f"Market data received for {pair}: {bars_info}")
+
+        return jsonify({"status": "ok", "message": f"Market data stored for {pair}"})
+
+    except Exception as e:
+        logger.error(f"Error processing market data: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+def _find_pair_data(store: dict, wanted_pair: str, currency: str = None):
+    """
+    Find an entry in a pair-keyed store by normalized name (suffix-tolerant).
+    Fallback (only when `currency` given): any pair whose BASE currency is the
+    event currency — never a quote-currency pair, because the rule engine maps
+    "currency bullish" straight to BUY of the suggested pair and a quote-side
+    match would invert the trade direction.
+    """
+    wanted = normalize_pair(wanted_pair)
+    for key, value in store.items():
+        if normalize_pair(key) == wanted:
+            return value
+    if currency:
+        cur = currency.upper()
+        for key, value in store.items():
+            if normalize_pair(key).startswith(cur):
+                return value
+    return None
+
+
+# Ignore EA-pushed OHLC older than this — a stale entry from a dead chart
+# must not claim decision.pair (no live EA would ever receive that signal)
+MARKET_DATA_MAX_AGE_SECONDS = 1800
+
+
+def _market_data_age_seconds(entry) -> float:
+    try:
+        ts = datetime.fromisoformat(entry.get('updated_at', ''))
+        if ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        return (datetime.utcnow() - ts).total_seconds()
+    except (ValueError, TypeError):
+        return float('inf')
+
+
+def _build_market_context_for_event(event):
+    """
+    Assemble the market context for an event from EA-pushed data:
+    fresh market_data_reports OHLC for the suggested pair (or a pair with the
+    event currency as base), zones from registered_pairs (multi-instance) and
+    zone_reports — zones matched EXACTLY to the OHLC pair, never cross-pair.
+    Returns a dict for LLMDecisionEngine.analyze_event(), or None.
+    """
+    try:
+        currency = event.currency.upper()
+        suggested = DEFAULT_PAIRS.get(currency, f"{currency}/USD")
+
+        ohlc_multi = {}
+        zones = None
+        pair_name = normalize_pair(suggested)
+        data_timestamp = None
+
+        with market_data_lock:
+            market_entry = _find_pair_data(market_data_reports, suggested, currency)
+            if market_entry and _market_data_age_seconds(market_entry) > MARKET_DATA_MAX_AGE_SECONDS:
+                logger.info(f"Ignoring stale market data for {market_entry.get('pair')} "
+                            f"({int(_market_data_age_seconds(market_entry) // 60)} min old)")
+                market_entry = None
+            if market_entry:
+                ohlc_multi = market_entry.get('ohlc_multi', {})
+                pair_name = market_entry.get('pair', pair_name)
+                data_timestamp = market_entry.get('updated_at')
+
+        # Multi-instance registration may carry zone data for this event
+        event_time = event.datetime_utc
+        if event_time.tzinfo is not None:
+            event_time = event_time.replace(tzinfo=None)
+        event_key = get_event_key(currency, event_time)
+        with pair_lock:
+            if event_key in registered_pairs:
+                reg_entry = _find_pair_data(registered_pairs[event_key], pair_name)
+                if reg_entry and reg_entry.get('zones'):
+                    zones = dict(reg_entry['zones'])
+
+        # Zone reports: exact pair match only — mixing another pair's price
+        # levels would produce absurd pip distances for SL/TP sizing
+        with zone_reports_lock:
+            zone_entry = _find_pair_data(zone_reports, pair_name)
+            if zone_entry:
+                zones = {**(zones or {}), **zone_entry}
+
+        return build_market_context(
+            ohlc_multi, pair_name, zones=zones, registered_at=data_timestamp
+        )
+    except Exception as e:
+        logger.warning(f"Could not build market context for {event.event_name}: {e}")
+        return None
+
+
+@app.route('/api/event-reaction', methods=['POST'])
+def report_event_reaction():
+    """
+    EA reports how price actually reacted to a released event.
+    Called once per event, ~5 minutes after release.
+
+    Request body:
+    {
+        "pair": "EURUSD",
+        "event_name": "CPI m/m",
+        "currency": "USD",
+        "event_time": "2026-07-10T13:30:00",
+        "price_at_event": 1.0842,
+        "price_after_1min": 1.0830,
+        "price_after_5min": 1.0801
+    }
+    forecast/previous/actual are backfilled later from the ForexFactory feed
+    (see _backfill_reaction_actuals).
+    """
+    ensure_services()
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"status": "error", "message": "No data provided"}), 400
+
+        required = ("pair", "event_name", "currency", "price_at_event")
+        missing = [k for k in required if not data.get(k)]
+        if missing:
+            return jsonify({"status": "error", "message": f"Missing fields: {missing}"}), 400
+
+        # forecast/previous/actual are backfilled later from the ForexFactory feed
+        entry = decision_engine.reaction_history.record(data)
+        return jsonify({"status": "ok", "reaction": entry})
+
+    except Exception as e:
+        logger.error(f"Error recording event reaction: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/event-reactions', methods=['GET'])
+def get_event_reactions():
+    """List recorded event reactions. Filters: ?event=CPI&currency=USD&limit=20"""
+    ensure_services()
+    event_name = request.args.get('event', '')
+    currency = request.args.get('currency', '')
+    limit = request.args.get('limit', 50, type=int)
+
+    history = decision_engine.reaction_history
+    if event_name and currency:
+        reactions = history.get_matching(event_name, currency, limit)
+    else:
+        reactions = history.get_recent(limit)
+
+    return jsonify({"status": "ok", "count": len(reactions), "reactions": reactions})
+
+
+# Backfill guards: the fetch runs in the single updater thread, so it must
+# never stall the decision pipeline or hammer ForexFactory forever
+_last_backfill_fetch = 0.0
+BACKFILL_MIN_INTERVAL_SECONDS = 900   # at most one FF fetch per 15 min
+BACKFILL_MAX_AGE_DAYS = 7             # FF weekly feed can't resolve older records
+
+
+def _backfill_reaction_actuals():
+    """Fill missing 'actual' values in the reaction log from the calendar feed."""
+    global _last_backfill_fetch
+    try:
+        if decision_engine is None:
+            return
+
+        # Never run the (up to 30s) HTTP fetch while a decision is active —
+        # an event is imminent and the updater must stay responsive
+        with decision_lock:
+            if next_decision is not None:
+                return
+
+        if time.time() - _last_backfill_fetch < BACKFILL_MIN_INTERVAL_SECONDS:
+            return
+
+        history = decision_engine.reaction_history
+        cutoff = (datetime.utcnow() - timedelta(days=BACKFILL_MAX_AGE_DAYS)).isoformat()
+        pending = [r for r in history.get_recent(200)
+                   if r.get('actual') in (None, '')
+                   and not r.get('test')
+                   and (r.get('event_time') or '') >= cutoff]
+        if not pending:
+            return
+
+        _last_backfill_fetch = time.time()
+
+        # Only ForexFactory carries released 'actual' values in its weekly feed
+        events = []
+        for source in getattr(calendar, 'sources', []):
+            if 'ForexFactory' in source.__class__.__name__:
+                try:
+                    events = source.fetch_events(days_ahead=7)
+                except Exception as e:
+                    logger.debug(f"Backfill calendar fetch failed: {e}")
+                break
+        if events:
+            history.backfill_actuals(events)
+    except Exception as e:
+        logger.debug(f"Reaction backfill error: {e}")
 
 
 @app.route('/api/registered-pairs', methods=['GET'])
@@ -931,9 +1220,8 @@ def get_mt5_signal():
         requesting_pair = request.args.get('pair', '').upper()
 
         with decision_lock:
-            if next_decision is None:
-                next_decision = decision_engine.get_next_trade_recommendation()
-
+            # No eager analysis here — the background updater preloads
+            # decisions inside the event window (see get_trade_decision note)
             if next_decision and next_decision.direction != "SKIP":
                 # Calculate time until event
                 # IMPORTANT: event_time is in UTC, so we must compare with UTC time
@@ -946,8 +1234,19 @@ def get_mt5_signal():
                 # Use utcnow() to compare UTC with UTC
                 time_until = (event_time - datetime.utcnow()).total_seconds()
 
-                # Get the decision's pair (normalize format)
-                decision_pair = next_decision.pair.replace('/', '').upper()
+                # Only serve signals inside the decision window — a decision
+                # for a far event (e.g. pinned via manual /api/decision/refresh)
+                # must never arm the EA; the EA stops polling once armed, so a
+                # server-side release cannot un-arm it later
+                if time_until > TRADING_CONFIG["preload_seconds"] + 60:
+                    return jsonify({
+                        "signal": False,
+                        "message": f"Decision exists but event is {int(time_until)}s away "
+                                   f"(signals are served inside the {TRADING_CONFIG['preload_seconds']}s window)"
+                    })
+
+                # Bare, suffix-free pair — the EA resolves its broker symbol itself
+                decision_pair = normalize_pair(next_decision.pair)
 
                 # Multi-instance mode: check if this pair is the selected one
                 if requesting_pair:
@@ -965,7 +1264,8 @@ def get_mt5_signal():
                         })
 
                     # Only return signal if this is the selected pair
-                    if requesting_pair != decision_pair:
+                    # (suffix-tolerant: EA may request as e.g. USDCAD.PRO)
+                    if normalize_pair(requesting_pair) != decision_pair:
                         return jsonify({
                             "signal": False,
                             "message": f"Not selected - best pair is {decision_pair}",
@@ -989,6 +1289,8 @@ def get_mt5_signal():
                     "time_until_event": int(time_until),
                     "event_time": event_time.isoformat(),
                     "event_name": next_decision.event,
+                    "event_currency": next_decision.currency,
+                    "forced": getattr(next_decision, 'forced', False),
                     "reasoning": next_decision.reasoning
                 })
             else:
@@ -1334,6 +1636,16 @@ def cleanup_stale_registrations():
     """Remove stale pair registrations older than 1 hour"""
     global registered_pairs, selected_pairs, executed_trades
 
+    # Drop market data from EAs that stopped pushing (dead charts) — the age
+    # gate in _build_market_context_for_event ignores them anyway, this just
+    # bounds memory
+    with market_data_lock:
+        dead = [p for p, entry in market_data_reports.items()
+                if _market_data_age_seconds(entry) > 86400]
+        for p in dead:
+            del market_data_reports[p]
+            logger.info(f"Cleaned up stale market data: {p}")
+
     with pair_lock:
         stale_keys = []
         for key in list(registered_pairs.keys()):
@@ -1401,6 +1713,38 @@ def _cleanup_analyzed_events():
         logger.debug(f"Cleaned up {len(stale)} stale analyzed event records")
 
 
+# One-shot synthetic event for end-to-end dry-runs.
+# Set SKYTOWER_FAKE_EVENT_IN_SECONDS=180 and restart: the full pipeline
+# (preload -> LLM decision -> EA signal -> entry at T-15s -> exit) runs
+# without waiting for a real calendar event. DEMO ONLY.
+_fake_event = None
+_fake_event_initialized = False
+
+
+def _get_fake_test_event():
+    global _fake_event, _fake_event_initialized
+    if not _fake_event_initialized:
+        _fake_event_initialized = True
+        try:
+            seconds = int(os.getenv("SKYTOWER_FAKE_EVENT_IN_SECONDS", "0") or 0)
+        except ValueError:
+            seconds = 0
+        if seconds > 0:
+            from calendar_fetcher import EconomicEvent
+            _fake_event = EconomicEvent(
+                datetime_utc=datetime.utcnow() + timedelta(seconds=seconds),
+                currency="USD",
+                event_name="CPI m/m (FAKE TEST EVENT)",
+                impact="HIGH",
+                forecast="0.3%",
+                previous="0.2%",
+                source="fake-test",
+            )
+            logger.warning(f"FAKE TEST EVENT injected — fires in {seconds}s "
+                           f"at {_fake_event.datetime_utc.isoformat()} UTC (dry-run mode)")
+    return _fake_event
+
+
 def _get_next_unanalyzed_events() -> list:
     """
     Get upcoming tradeable events, excluding already-analyzed ones.
@@ -1410,6 +1754,16 @@ def _get_next_unanalyzed_events() -> list:
         event_keywords=HIGH_IMPACT_EVENTS,
         currencies=list(CURRENCY_PAIRS.keys())
     )
+
+    fake = _get_fake_test_event()
+    if fake is not None:
+        # Keep the list sorted by time — the updater's scan loop breaks at the
+        # first out-of-window event, so an unsorted head would shadow nearer
+        # real events. (Fake datetimes are naive UTC, calendar ones tz-aware.)
+        def _naive_time(evt):
+            dt = evt.datetime_utc
+            return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+        events = sorted(list(events) + [fake], key=_naive_time)
 
     result = []
     for event in events:
@@ -1440,8 +1794,8 @@ def background_decision_updater():
     """
     global next_decision
 
-    PRELOAD_SECONDS = 180  # 3 minutes before event - decision must be ready
-    CHECK_INTERVAL = 15    # Check every 15 seconds
+    PRELOAD_SECONDS = TRADING_CONFIG["preload_seconds"]        # decision window start (env: SKYTOWER_PRELOAD_SECONDS)
+    CHECK_INTERVAL = TRADING_CONFIG["decision_check_interval"]  # scan loop interval (env: SKYTOWER_CHECK_INTERVAL)
     CLEANUP_INTERVAL = 300  # Cleanup every 5 minutes
 
     last_logged_event_key = None
@@ -1455,6 +1809,7 @@ def background_decision_updater():
             if time.time() - last_cleanup_time > CLEANUP_INTERVAL:
                 cleanup_stale_registrations()
                 _cleanup_analyzed_events()
+                _backfill_reaction_actuals()
                 last_cleanup_time = time.time()
 
             # === PHASE 1: Check state & find event to analyze (under lock, fast) ===
@@ -1475,6 +1830,17 @@ def background_decision_updater():
                         # Event passed - reset decision
                         if time_until < -120:  # 2 minutes after event
                             logger.info(f"Event passed ({next_decision.event}). Resetting decision.")
+                            next_decision = None
+                            last_logged_event_key = None
+                            continue
+
+                        # Self-heal: a decision pinned for an event far outside
+                        # the preload window (e.g. via manual /api/decision/refresh)
+                        # would block the pipeline for hours/days — release it
+                        if time_until > PRELOAD_SECONDS + 60:
+                            logger.warning(
+                                f"Decision for {next_decision.event} is {int(time_until)}s away "
+                                f"(window is {PRELOAD_SECONDS}s) — releasing pipeline.")
                             next_decision = None
                             last_logged_event_key = None
                             continue
@@ -1528,7 +1894,15 @@ def background_decision_updater():
 
                 start_time = time.time()
                 try:
-                    new_decision = decision_engine.analyze_event(event_to_analyze)
+                    market_ctx = _build_market_context_for_event(event_to_analyze)
+                    if market_ctx:
+                        logger.info(f"Market context available for {market_ctx.get('pair')} "
+                                    f"(trend: {market_ctx.get('trend')}, "
+                                    f"age: {market_ctx.get('data_age_minutes', '?')} min)")
+                    else:
+                        logger.info("No market context available (EA has not pushed price data)")
+
+                    new_decision = decision_engine.analyze_event(event_to_analyze, market_ctx)
                     elapsed = time.time() - start_time
 
                     # Record ALL decisions to audit log
@@ -1587,6 +1961,14 @@ if __name__ == '__main__':
     print("=" * 60)
     print("SkyTower-AI Server")
     print("=" * 60)
+
+    from config import FORCE_DECISION
+    if FORCE_DECISION:
+        logger.warning("=" * 60)
+        logger.warning("FORCE_DECISION TEST MODE IS ACTIVE — SKIP is disabled!")
+        logger.warning("Every analyzed event WILL produce a BUY/SELL signal.")
+        logger.warning("Use this ONLY on a DEMO account.")
+        logger.warning("=" * 60)
 
     # Initialize services
     init_services()

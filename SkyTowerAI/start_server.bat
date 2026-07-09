@@ -25,9 +25,9 @@ if not exist "venv" (
 REM Activate virtual environment
 call venv\Scripts\activate.bat
 
-REM Install dependencies
+REM Install dependencies (Windows variant includes MetaTrader5 package)
 echo Checking dependencies...
-pip install -r requirements.txt --quiet
+pip install -r requirements-windows.txt --quiet
 
 REM Create logs directory
 if not exist "logs" mkdir logs

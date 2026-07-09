@@ -1,0 +1,13 @@
+**/.env
+**/__pycache__/
+**/*.pyc
+python/logs/
+python/venv/
+tests/
+mt5/
+docs/
+.git/
+.pytest_cache/
+*.bat
+*.md
+*.pdf

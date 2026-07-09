@@ -60,6 +60,7 @@ class DecisionHistory:
             "pair": getattr(decision, 'pair', ''),
             "direction": getattr(decision, 'direction', ''),
             "confidence": getattr(decision, 'confidence', 0),
+            "forced": getattr(decision, 'forced', False),
             "reasoning": getattr(decision, 'reasoning', ''),
             "event_datetime": None,
             "data_sources": data_sources_status or {},

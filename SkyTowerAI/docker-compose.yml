@@ -1,0 +1,32 @@
+services:
+  skytower:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: skytower-ai
+    ports:
+      # Bound to loopback ONLY — the API has no auth; publishing on 0.0.0.0
+      # would let any device on the LAN steer trading decisions.
+      # EA keeps InpServerHost=127.0.0.1, InpServerPort=5555.
+      - "127.0.0.1:5555:5555"
+    env_file:
+      # OPENROUTER_API_KEY etc. — injected as env vars, never baked into the image.
+      # required:false so a fresh clone can still start (rule-based decisions).
+      - path: python/.env
+        required: false
+    environment:
+      - SKYTOWER_HOST=0.0.0.0        # bind on all interfaces inside the container
+      - TZ=UTC
+      # TEST MODE: force BUY/SELL, never SKIP. Demo account only!
+      # Remove this line (or set to false) before any live-account use.
+      - SKYTOWER_FORCE_DECISION=true
+      # - SKYTOWER_PRELOAD_SECONDS=150
+      # - SKYTOWER_CHECK_INTERVAL=15
+    volumes:
+      - ./python/logs:/app/logs      # decision_history.jsonl / event_reactions.jsonl survive rebuilds
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:5555/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

@@ -1,0 +1,6 @@
+# SkyTower-AI Dependencies — native Windows run (start_server.bat)
+# Docker uses plain requirements.txt (Linux container, no MetaTrader5)
+-r requirements.txt
+
+# MT5 Integration (Windows-only package)
+MetaTrader5>=5.0.45

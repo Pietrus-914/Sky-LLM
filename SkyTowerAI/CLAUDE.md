@@ -140,6 +140,40 @@ FINAL DECISION:
 - 60-70% → Trade with 70% lot
 - > 70% → Trade with 80% lot
 
+## Docker Deployment (primary run mode)
+
+The Python server runs in a Linux Docker container; MT5 + EA stay native on Windows.
+
+```bash
+cd SkyTowerAI
+docker compose up -d --build     # build + start (port 5555 published to host)
+docker compose logs -f           # watch logs
+```
+
+- `docker-compose.yml` sets `SKYTOWER_FORCE_DECISION=true` (TEST MODE — demo only!)
+- `.env` (in `python/`) is injected via `env_file`, never baked into the image
+- `python/logs/` is bind-mounted — `decision_history.jsonl` / `event_reactions.jsonl` survive rebuilds
+- EA keeps `InpServerHost=127.0.0.1`, `InpServerPort=5555` (published port) — WebRequest allowlist needs `http://127.0.0.1:5555`
+- Native fallback: `start_server.bat` (installs `requirements-windows.txt`, which adds the Windows-only `MetaTrader5` package)
+
+### Environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SKYTOWER_HOST` | `127.0.0.1` | Flask bind host (Docker sets `0.0.0.0`) |
+| `SKYTOWER_PORT` | `5555` | Flask port |
+| `SKYTOWER_FORCE_DECISION` | `false` | TEST MODE: LLM must pick BUY/SELL, SKIP disabled (all 3 origins). Decisions get `forced:true` in the audit log |
+| `SKYTOWER_PRELOAD_SECONDS` | `150` | How early the updater analyzes an event (LLM needs 20-60s; entry is at T-15s) |
+| `SKYTOWER_CHECK_INTERVAL` | `15` | Updater scan interval |
+| `SKYTOWER_FAKE_EVENT_IN_SECONDS` | unset | Dry-run: inject one synthetic HIGH-impact USD event N seconds ahead to exercise the whole pipeline |
+
+### Test-mode checklist (demo account)
+
+1. `docker compose up -d` (FORCE_DECISION on; port bound to 127.0.0.1 only — the API has no auth)
+2. MT5: EA on charts matching `DEFAULT_PAIRS` (NZDUSD, USDCAD, AUDUSD, GBPUSD) — `/api/signal` only fires for the decision's pair (broker suffixes like `.pro` are handled automatically)
+3. EA inputs `InpPushMarketData=true`, `InpReportReactions=true` (defaults). `InpMinConfidence` can stay at 0.5 — signals with `forced:true` bypass the confidence gate automatically
+4. Compiled `SkyTowerAI_EA.ex5` sits next to the source (metaeditor64 CLI: 0 errors)
+
 ## API Reference
 
 **Base URL:** `http://127.0.0.1:5555`
@@ -147,9 +181,12 @@ FINAL DECISION:
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Server status check |
-| `/api/signal` | GET | **Main endpoint for MT5** - returns trading signal |
+| `/api/signal` | GET | **Main endpoint for MT5** - returns trading signal (incl. `event_currency`, `forced`) |
 | `/api/events` | GET | List upcoming events (?hours=168&currencies=NZD,CAD) |
-| `/api/decision` | GET | Full decision with analysis data |
+| `/api/decision` | GET | Active decision (no eager analysis — the background updater owns decision making) |
+| `/api/market-data` | POST | EA pushes OHLC (M5/M15/H1) per pair → LLM market context |
+| `/api/event-reaction` | POST | EA reports post-release price snapshots (T0/T+60s/T+300s) |
+| `/api/event-reactions` | GET | Recorded reactions (?event=CPI&currency=USD) |
 | `/api/cot/{currency}` | GET | COT data for currency |
 | `/api/sentiment/{pair}` | GET | Sentiment for pair |
 
