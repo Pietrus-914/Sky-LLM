@@ -3,6 +3,16 @@
 Stan na 08.07.2026: 180 testów zielonych, EA skompilowany (0 err/0 warn),
 dry-run E2E przeszedł. Tryb testowy FORCE_DECISION aktywny — **tylko konto DEMO**.
 
+## NAJPROŚCIEJ (po jednorazowej instalacji): kliknij START.bat
+
+`SkyTowerAI\START.bat` — odpala serwer (z auto-restartem po awarii) i MT5
+jednym kliknięciem; można klikać wielokrotnie, nie zdubluje procesów.
+Docker NIE jest potrzebny — serwer działa natywnie w Pythonie.
+Wymagania jednorazowe: Python 3.10+ w PATH, plik `python\.env`
+(OPENROUTER_API_KEY + SKYTOWER_FORCE_DECISION=true), MT5 skonfigurowany
+(allowlist WebRequest, EA na wykresach — KROK 3 poniżej).
+Autostart po restarcie komputera: uruchom raz `install_autostart.ps1`.
+
 ## Pliki, które biorą udział w uruchomieniu
 
 | Rola | Ścieżka |
