@@ -41,5 +41,6 @@ if not exist ".env" (
 echo [%date% %time%] Start serwera >> logs\watchdog.log
 python server.py
 echo [%date% %time%] Serwer zakonczyl dzialanie, kod %errorlevel% - restart za 10s >> logs\watchdog.log
-timeout /t 10 /nobreak >nul
+REM ping zamiast timeout: dziala tez bez interaktywnej konsoli (Task Scheduler)
+ping -n 11 127.0.0.1 >nul
 goto loop

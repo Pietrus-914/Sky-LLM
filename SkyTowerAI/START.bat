@@ -16,7 +16,8 @@ if %errorlevel% neq 0 (
 )
 
 REM --- 2. Terminal MT5 (tylko jesli jeszcze nie dziala) ---
-tasklist /FI "IMAGENAME eq terminal64.exe" 2>nul | find /I "terminal64.exe" >nul
+REM pelna sciezka do find.exe - w PATH moze byc uniksowy find (Git Bash)
+tasklist /FI "IMAGENAME eq terminal64.exe" 2>nul | "%SystemRoot%\System32\find.exe" /I "terminal64.exe" >nul
 if %errorlevel% equ 0 goto mt5done
 
 if exist "C:\Program Files\Purple Trading MT5 Terminal\terminal64.exe" (
@@ -35,4 +36,4 @@ echo Nie znalazlem MT5 - uruchom terminal recznie.
 echo.
 echo Gotowe. Dashboard: http://127.0.0.1:5555/
 echo To okno zamknie sie za 10 sekund.
-timeout /t 10 >nul
+ping -n 11 127.0.0.1 >nul
