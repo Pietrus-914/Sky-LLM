@@ -917,7 +917,7 @@
                     <span id="statusText">Connecting...</span>
                 </div>
                 <div class="server-info" id="serverInfo">
-                    <div><span class="key">Host</span><span class="val">127.0.0.1:5555</span></div>
+                    <div><span class="key">Host</span><span class="val" id="infoHost">--</span></div>
                     <div><span class="key">Version</span><span class="val" id="infoVersion">--</span></div>
                     <div><span class="key">Last Check</span><span class="val" id="infoLastCheck">--</span></div>
                     <div><span class="key">Uptime</span><span class="val" id="infoUptime">--</span></div>
@@ -1203,9 +1203,21 @@
             return 'neutral';
         }
 
+        // Server timestamps are UTC but often come as bare ISO strings
+        // ("2026-07-10T12:30:00") — JS parses those as BROWSER-LOCAL time,
+        // which breaks every clock on a machine outside CET (e.g. US).
+        // Append 'Z' when no timezone marker is present.
+        function parseUTC(dateStr) {
+            if (typeof dateStr === 'string' && dateStr.indexOf('Z') === -1 &&
+                !/[+-]\d\d:?\d\d$/.test(dateStr)) {
+                dateStr = dateStr + 'Z';
+            }
+            return new Date(dateStr);
+        }
+
         function utcToCET(dateStr) {
             if (!dateStr) return '--';
-            var d = new Date(dateStr);
+            var d = parseUTC(dateStr);
             if (isNaN(d.getTime())) return dateStr;
             // Add CET offset
             var cet = new Date(d.getTime() + CET_OFFSET_HOURS * 3600000);
@@ -1218,7 +1230,7 @@
 
         function utcToCETFull(dateStr) {
             if (!dateStr) return '--';
-            var d = new Date(dateStr);
+            var d = parseUTC(dateStr);
             if (isNaN(d.getTime())) return dateStr;
             var cet = new Date(d.getTime() + CET_OFFSET_HOURS * 3600000);
             var hh = String(cet.getUTCHours()).padStart(2, '0');
@@ -1349,6 +1361,7 @@
                 $('infoVersion').textContent = version;
                 $('serverVersion').textContent = 'v' + version;
                 $('infoLastCheck').textContent = utcToCETFull(data.timestamp);
+                $('infoHost').textContent = window.location.host;
 
                 if (!state.serverStartTime) state.serverStartTime = new Date();
                 var uptimeSec = (Date.now() - state.serverStartTime.getTime()) / 1000;
@@ -1404,7 +1417,7 @@
             var el = $('eventCountdown');
             if (!el || !nextEventTime) return;
 
-            var eventDate = new Date(nextEventTime);
+            var eventDate = parseUTC(nextEventTime);
             if (isNaN(eventDate.getTime())) { el.textContent = '--'; return; }
 
             var now = new Date();
