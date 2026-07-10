@@ -5,6 +5,7 @@ Fetches upcoming economic events from multiple free sources
 import os
 import requests
 from datetime import datetime, timedelta
+from timeutil import utcnow
 from typing import List, Dict, Optional
 import pandas as pd
 import json
@@ -173,7 +174,7 @@ class ForexFactoryCalendar:
         try:
             os.makedirs(os.path.dirname(self.CACHE_FILE), exist_ok=True)
             payload = {
-                "fetched_at": datetime.utcnow().isoformat(),
+                "fetched_at": utcnow().isoformat(),
                 "events": [e.to_dict() for e in events],
             }
             tmp = self.CACHE_FILE + '.tmp'

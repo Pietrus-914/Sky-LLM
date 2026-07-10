@@ -11,6 +11,7 @@ import json
 import os
 import re
 from datetime import datetime
+from timeutil import utcnow
 from threading import Lock
 from typing import Dict, List, Optional
 
@@ -120,7 +121,7 @@ class EventReactionHistory:
             return None
 
         entry = {
-            "recorded_at": datetime.utcnow().isoformat() + "Z",
+            "recorded_at": utcnow().isoformat() + "Z",
             # Dry-run reactions must never surface as history for the real
             # event (the fake event's name normalizes identically to it)
             "test": "FAKE TEST" in (reaction.get('event_name') or '').upper(),

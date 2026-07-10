@@ -6,6 +6,7 @@ Stores to JSONL file for easy debugging and review.
 import json
 import os
 from datetime import datetime
+from timeutil import utcnow
 from typing import List, Dict, Optional
 from threading import Lock
 from loguru import logger
@@ -54,7 +55,7 @@ class DecisionHistory:
             data_sources_status: Optional dict showing which data sources succeeded/failed
         """
         entry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": utcnow().isoformat() + "Z",
             "event_name": getattr(decision, 'event', ''),
             "currency": getattr(decision, 'currency', ''),
             "pair": getattr(decision, 'pair', ''),
@@ -109,7 +110,7 @@ class DecisionHistory:
 
     def get_today(self) -> List[Dict]:
         """Get all decisions from today (UTC, newest first)."""
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = utcnow().strftime("%Y-%m-%d")
         with self._lock:
             return [d for d in reversed(self._recent) if d['timestamp'].startswith(today)]
 

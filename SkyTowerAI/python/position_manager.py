@@ -6,6 +6,7 @@ import copy
 import threading
 import time
 from datetime import datetime, timedelta
+from timeutil import utcnow
 from typing import Dict, Optional, List
 from dataclasses import dataclass, field, asdict
 from loguru import logger
@@ -104,7 +105,7 @@ class PositionManager:
 
     def _reset_daily_if_needed(self):
         """Reset daily counters at midnight UTC."""
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = utcnow().strftime("%Y-%m-%d")
         if today != self.daily_reset_date:
             self.daily_pnl_usd = 0.0
             self.daily_trades = 0
@@ -135,7 +136,7 @@ class PositionManager:
         with self.lock:
             self._reset_daily_if_needed()
 
-            now = datetime.utcnow()
+            now = utcnow()
             self.position = OpenPosition(
                 ticket=data.get("ticket", 0),
                 symbol=data.get("symbol", ""),
@@ -177,7 +178,7 @@ class PositionManager:
                     "direction": self.position.direction,
                     "profit_usd": profit,
                     "reason": data.get("reason", "unknown"),
-                    "closed_at": datetime.utcnow().isoformat(),
+                    "closed_at": utcnow().isoformat(),
                     "decisions_count": len(self.position.ai_decisions),
                 })
                 logger.info(f"Position closed: {self.position.symbol} | "
@@ -226,7 +227,7 @@ class PositionManager:
             self.position.zone_bias = data.get("zone_bias", 0.0)
             self.position.nearest_resistance = data.get("nearest_resistance", 0.0)
             self.position.nearest_support = data.get("nearest_support", 0.0)
-            self.position.last_update = datetime.utcnow()
+            self.position.last_update = utcnow()
 
             # Track max profit and drawdown
             if self.position.profit_usd > self.position.max_profit_usd:
@@ -275,7 +276,7 @@ class PositionManager:
             if llm_decision:
                 # Log all decisions (HOLD and non-HOLD)
                 self.position.ai_decisions.append({
-                    "time": datetime.utcnow().isoformat(),
+                    "time": utcnow().isoformat(),
                     "action": llm_decision.action,
                     "reasoning": llm_decision.reason,
                 })
@@ -307,7 +308,7 @@ class PositionManager:
 
         # Max hold time
         max_hold = self.config.get("max_hold_minutes", 30)
-        minutes_open = (datetime.utcnow() - pos.open_time).total_seconds() / 60
+        minutes_open = (utcnow() - pos.open_time).total_seconds() / 60
         if minutes_open >= max_hold:
             logger.warning(f"GUARDRAIL: Max hold time {max_hold}min reached. "
                            f"Open for {minutes_open:.1f}min")

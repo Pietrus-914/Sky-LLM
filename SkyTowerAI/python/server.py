@@ -5,6 +5,7 @@ Provides REST API for MT5 Expert Advisor communication
 from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 from datetime import datetime, timedelta
+from timeutil import utcnow
 import json
 import os
 import threading
@@ -202,7 +203,7 @@ def health_check():
         # Identifies OUR server — START.bat checks this to tell a running
         # SkyTower apart from a foreign app squatting on the port (e.g. adb)
         "service": "SkyTower-AI",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": utcnow().isoformat(),
         "version": "4.1.0"
     })
 
@@ -306,7 +307,7 @@ def refresh_decision():
             evt_time = evt.datetime_utc
             if evt_time.tzinfo is not None:
                 evt_time = evt_time.replace(tzinfo=None)
-            seconds = (evt_time - datetime.utcnow()).total_seconds()
+            seconds = (evt_time - utcnow()).total_seconds()
             if seconds > 0:
                 next_event_seconds = int(seconds)
                 break
@@ -726,7 +727,7 @@ def register_pair():
                 "spread_points": data.get('spread_points', 0),
                 "zones": data.get('zones', {}),
                 "ohlc": data.get('ohlc', []),
-                "registered_at": datetime.utcnow().isoformat()
+                "registered_at": utcnow().isoformat()
             }
 
             pair_count = len(registered_pairs[event_key])
@@ -790,7 +791,7 @@ def report_market_data():
                 "pair": pair,
                 "ohlc_multi": ohlc_multi,
                 "spread_points": data.get('spread_points', 0),
-                "updated_at": datetime.utcnow().isoformat()
+                "updated_at": utcnow().isoformat()
             }
 
         bars_info = {tf: len(bars) for tf, bars in ohlc_multi.items() if bars}
@@ -834,7 +835,7 @@ def _market_data_age_seconds(entry) -> float:
         ts = datetime.fromisoformat(entry.get('updated_at', ''))
         if ts.tzinfo is not None:
             ts = ts.replace(tzinfo=None)
-        return (datetime.utcnow() - ts).total_seconds()
+        return (utcnow() - ts).total_seconds()
     except (ValueError, TypeError):
         return float('inf')
 
@@ -976,7 +977,7 @@ def _backfill_reaction_actuals():
             return
 
         history = decision_engine.reaction_history
-        cutoff = (datetime.utcnow() - timedelta(days=BACKFILL_MAX_AGE_DAYS)).isoformat()
+        cutoff = (utcnow() - timedelta(days=BACKFILL_MAX_AGE_DAYS)).isoformat()
         pending = [r for r in history.get_recent(200)
                    if r.get('actual') in (None, '')
                    and not r.get('test')
@@ -1058,7 +1059,7 @@ def report_zone():
                 "nearest_support": data.get('nearest_support', 0),
                 "current_price": data.get('current_price', 0),
                 "spread_points": data.get('spread_points', 0),
-                "updated_at": datetime.utcnow().isoformat()
+                "updated_at": utcnow().isoformat()
             }
 
         logger.debug(f"Zone report received for {pair}: bias={data.get('zone_bias', 0):.2f}")
@@ -1154,9 +1155,9 @@ def select_best_pair():
                 try:
                     event_time_str = datetime.strptime(f"{parts[1]}_{parts[2]}", "%Y%m%d_%H%M").isoformat()
                 except:
-                    event_time_str = datetime.utcnow().isoformat()
+                    event_time_str = utcnow().isoformat()
             else:
-                event_time_str = datetime.utcnow().isoformat()
+                event_time_str = utcnow().isoformat()
 
         # Build multi-pair prompt for LLM
         event_info = {
@@ -1244,7 +1245,7 @@ def get_mt5_signal():
                 if event_time.tzinfo is not None:
                     event_time = event_time.replace(tzinfo=None)
                 # Use utcnow() to compare UTC with UTC
-                time_until = (event_time - datetime.utcnow()).total_seconds()
+                time_until = (event_time - utcnow()).total_seconds()
 
                 # Only serve signals inside the decision window — a decision
                 # for a far event (e.g. pinned via manual /api/decision/refresh)
@@ -1588,7 +1589,7 @@ def create_test_signal():
         take_profit_pips = data.get('take_profit_pips', 60)
 
         # Calculate event time (use UTC to match server's UTC-based comparisons)
-        event_time = datetime.utcnow() + timedelta(seconds=seconds_until)
+        event_time = utcnow() + timedelta(seconds=seconds_until)
 
         # Create test decision
         from llm_decision_engine import TradingDecision
@@ -1615,7 +1616,7 @@ def create_test_signal():
                 },
                 'test_mode': True
             },
-            timestamp=datetime.utcnow()
+            timestamp=utcnow()
         )
 
         with decision_lock:
@@ -1678,7 +1679,7 @@ def cleanup_stale_registrations():
                 try:
                     event_time = datetime.strptime(f"{parts[1]}_{parts[2]}", "%Y%m%d_%H%M")
                     # Remove if event was more than 1 hour ago (compare UTC with UTC)
-                    if (datetime.utcnow() - event_time).total_seconds() > 3600:
+                    if (utcnow() - event_time).total_seconds() > 3600:
                         stale_keys.append(key)
                 except:
                     pass
@@ -1698,7 +1699,7 @@ def cleanup_stale_registrations():
         if len(parts) >= 3:
             try:
                 event_time = datetime.strptime(f"{parts[1]}_{parts[2]}", "%Y%m%d_%H%M")
-                if (datetime.utcnow() - event_time).total_seconds() > 86400:  # 24 hours
+                if (utcnow() - event_time).total_seconds() > 86400:  # 24 hours
                     stale_executed.add(key)
             except:
                 pass
@@ -1716,7 +1717,7 @@ def _analyzed_event_key(event) -> str:
 def _mark_event_analyzed(event):
     """Mark an event as already analyzed (SKIP). Prevents re-analysis."""
     key = _analyzed_event_key(event)
-    analyzed_events[key] = datetime.utcnow()
+    analyzed_events[key] = utcnow()
     logger.info(f"Event marked as analyzed (SKIP): {key}")
 
 
@@ -1727,7 +1728,7 @@ def _is_event_analyzed(event) -> bool:
 
 def _cleanup_analyzed_events():
     """Remove analyzed event records older than 24 hours."""
-    now = datetime.utcnow()
+    now = utcnow()
     stale = [k for k, v in analyzed_events.items() if (now - v).total_seconds() > 86400]
     for k in stale:
         del analyzed_events[k]
@@ -1754,7 +1755,7 @@ def _get_fake_test_event():
         if seconds > 0:
             from calendar_fetcher import EconomicEvent
             _fake_event = EconomicEvent(
-                datetime_utc=datetime.utcnow() + timedelta(seconds=seconds),
+                datetime_utc=utcnow() + timedelta(seconds=seconds),
                 currency="USD",
                 event_name="CPI m/m (FAKE TEST EVENT)",
                 impact="HIGH",
@@ -1797,7 +1798,7 @@ def _get_next_unanalyzed_events() -> list:
         event_time = event.datetime_utc
         if event_time.tzinfo is not None:
             event_time = event_time.replace(tzinfo=None)
-        if (event_time - datetime.utcnow()).total_seconds() < -120:
+        if (event_time - utcnow()).total_seconds() < -120:
             continue
 
         result.append(event)
@@ -1847,7 +1848,7 @@ def background_decision_updater():
                         if event_time.tzinfo is not None:
                             event_time = event_time.replace(tzinfo=None)
 
-                        time_until = (event_time - datetime.utcnow()).total_seconds()
+                        time_until = (event_time - utcnow()).total_seconds()
 
                         # Event passed - reset decision
                         if time_until < -120:  # 2 minutes after event
@@ -1888,7 +1889,7 @@ def background_decision_updater():
                         if event_time.tzinfo is not None:
                             event_time = event_time.replace(tzinfo=None)
 
-                        time_until = (event_time - datetime.utcnow()).total_seconds()
+                        time_until = (event_time - utcnow()).total_seconds()
 
                         if time_until < -30:
                             # Event already passed, skip
@@ -1910,7 +1911,7 @@ def background_decision_updater():
                 evt_time = event_to_analyze.datetime_utc
                 if evt_time.tzinfo is not None:
                     evt_time = evt_time.replace(tzinfo=None)
-                secs_until = int((evt_time - datetime.utcnow()).total_seconds())
+                secs_until = int((evt_time - utcnow()).total_seconds())
                 logger.info(f"Time until event: {secs_until}s ({secs_until // 60}min)")
                 logger.info(f"{'='*60}")
 

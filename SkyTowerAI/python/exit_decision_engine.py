@@ -5,6 +5,7 @@ Operates on USD values for instrument-independent analysis.
 """
 import json
 from datetime import datetime
+from timeutil import utcnow
 from typing import Optional
 from loguru import logger
 import os
@@ -120,7 +121,7 @@ class ExitDecisionEngine:
 
     def _build_prompt(self, pos: OpenPosition) -> str:
         """Build the LLM prompt with position context."""
-        minutes_open = (datetime.utcnow() - pos.open_time).total_seconds() / 60
+        minutes_open = (utcnow() - pos.open_time).total_seconds() / 60
 
         # Recent AI decisions (last 5)
         recent_decisions = pos.ai_decisions[-5:] if pos.ai_decisions else []
@@ -242,7 +243,7 @@ Respond with JSON only."""
         Rule-based fallback for exit decisions.
         Used when LLM is unavailable or fails.
         """
-        minutes_open = (datetime.utcnow() - pos.open_time).total_seconds() / 60
+        minutes_open = (utcnow() - pos.open_time).total_seconds() / 60
 
         # Rule 1: Move SL to break-even after $30+ profit
         if pos.profit_usd > 30.0 and not pos.sl_moved_to_be:

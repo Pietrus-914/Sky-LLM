@@ -9,7 +9,8 @@ Pure functions, no I/O — the server wires this into the decision pipeline.
 """
 import re
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
+from timeutil import utcnow
 
 
 def pip_size(pair: str) -> float:
@@ -96,7 +97,7 @@ def _compact_candles(bars: List[Dict], count: int) -> List[str]:
     out = []
     for b in bars[-count:]:
         try:
-            ts = datetime.utcfromtimestamp(int(b.get("time", 0))).strftime("%H:%M")
+            ts = datetime.fromtimestamp(int(b.get("time", 0)), tz=timezone.utc).strftime("%H:%M")
         except (ValueError, OSError, OverflowError):
             ts = "--:--"
         out.append(f"{ts} {float(b['open']):.5f}/{float(b['high']):.5f}/"
@@ -245,6 +246,6 @@ def _age_minutes(iso_timestamp: str) -> Optional[int]:
         ts = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
         if ts.tzinfo is not None:
             ts = ts.replace(tzinfo=None)
-        return max(0, int((datetime.utcnow() - ts).total_seconds() // 60))
+        return max(0, int((utcnow() - ts).total_seconds() // 60))
     except (ValueError, AttributeError):
         return None

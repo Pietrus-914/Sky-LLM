@@ -4,6 +4,7 @@ Uses AI to analyze multiple data sources and make trading decisions
 """
 import json
 from datetime import datetime
+from timeutil import utcnow
 from typing import Dict, Optional, List
 from dataclasses import dataclass, asdict
 from loguru import logger
@@ -457,7 +458,7 @@ decision in JSON format."""
                 take_profit_pips=decision_data.get('take_profit_pips', 0),
                 reasoning=reasoning,
                 data_summary=data_context,
-                timestamp=datetime.utcnow(),
+                timestamp=utcnow(),
                 forced=FORCE_DECISION
             )
 
@@ -542,7 +543,7 @@ decision in JSON format."""
             event_time = event.datetime_utc
             if event_time.tzinfo is not None:
                 event_time = event_time.replace(tzinfo=None)
-            return (event_time - datetime.utcnow()).total_seconds()
+            return (event_time - utcnow()).total_seconds()
         except (AttributeError, TypeError):
             return float('inf')
 
@@ -679,7 +680,7 @@ decision in JSON format."""
             stop_loss_percent=40,
             reasoning="; ".join(reasons) if reasons else "No strong signals",
             data_summary=data_context,
-            timestamp=datetime.utcnow(),
+            timestamp=utcnow(),
             forced=FORCE_DECISION
         )
 
@@ -862,7 +863,7 @@ Respond with JSON:
                 take_profit_pips=decision_data.get('take_profit_pips', 0),
                 reasoning=decision_data.get('reasoning', 'Multi-pair LLM decision'),
                 data_summary=data_context,
-                timestamp=datetime.utcnow(),
+                timestamp=utcnow(),
                 forced=FORCE_DECISION
             )
 
@@ -984,7 +985,7 @@ Respond with JSON:
             stop_loss_percent=40,
             reasoning=f"Selected {best_pair}: {'; '.join(reasons)}",
             data_summary=data_context,
-            timestamp=datetime.utcnow(),
+            timestamp=utcnow(),
             forced=FORCE_DECISION
         )
 
