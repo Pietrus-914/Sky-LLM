@@ -2,6 +2,7 @@
 Economic Calendar Data Fetcher
 Fetches upcoming economic events from multiple free sources
 """
+import os
 import requests
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
@@ -132,11 +133,55 @@ class TradingEconomicsCalendar:
 class ForexFactoryCalendar:
     """
     Fetches calendar from ForexFactory
-    Uses their XML feed
+    Uses their XML feed.
+
+    Keeps the last successful result (in memory + on disk) and serves it when
+    the feed rate-limits (429) — a stale-but-REAL calendar is always better
+    than falling back to the synthetic static calendar with guessed times.
     """
 
     # ForexFactory provides weekly calendar XML
     BASE_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
+    CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              'logs', 'ff_calendar_cache.json')
+
+    def __init__(self):
+        self._last_good: List[EconomicEvent] = []
+        self._load_disk_cache()
+
+    def _load_disk_cache(self):
+        try:
+            if os.path.exists(self.CACHE_FILE):
+                with open(self.CACHE_FILE, 'r', encoding='utf-8') as f:
+                    raw = json.load(f)
+                self._last_good = [
+                    EconomicEvent(
+                        datetime_utc=datetime.fromisoformat(e['datetime_utc']),
+                        currency=e['currency'], event_name=e['event_name'],
+                        impact=e['impact'], forecast=e.get('forecast'),
+                        previous=e.get('previous'), actual=e.get('actual'),
+                        source=e.get('source', 'forexfactory'),
+                    ) for e in raw.get('events', [])
+                ]
+                if self._last_good:
+                    logger.info(f"Loaded {len(self._last_good)} ForexFactory events "
+                                f"from disk cache (fetched {raw.get('fetched_at', '?')})")
+        except Exception as e:
+            logger.debug(f"Could not load FF disk cache: {e}")
+
+    def _save_disk_cache(self, events: List[EconomicEvent]):
+        try:
+            os.makedirs(os.path.dirname(self.CACHE_FILE), exist_ok=True)
+            payload = {
+                "fetched_at": datetime.utcnow().isoformat(),
+                "events": [e.to_dict() for e in events],
+            }
+            tmp = self.CACHE_FILE + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(payload, f)
+            os.replace(tmp, self.CACHE_FILE)
+        except Exception as e:
+            logger.debug(f"Could not save FF disk cache: {e}")
 
     def fetch_events(self, days_ahead: int = 7) -> List[EconomicEvent]:
         """Fetch events from ForexFactory XML feed"""
@@ -204,6 +249,14 @@ class ForexFactoryCalendar:
 
         except Exception as e:
             logger.error(f"Error fetching ForexFactory: {e}")
+
+        if events:
+            self._last_good = events
+            self._save_disk_cache(events)
+        elif self._last_good:
+            logger.warning(f"ForexFactory unavailable — serving {len(self._last_good)} "
+                           f"cached REAL events instead of the synthetic fallback")
+            return list(self._last_good)
 
         return events
 
@@ -532,10 +585,17 @@ class CalendarAggregator:
             hours_ahead=168  # 1 week
         )
 
+        # Synthetic static-calendar events have GUESSED times — never trade
+        # them unless explicitly enabled (they exist for display/dev only).
+        # A real-but-stale FF cache handles feed outages instead.
+        trade_static = os.getenv("SKYTOWER_TRADE_STATIC_EVENTS", "false").lower() in ("1", "true", "yes")
+
         now = datetime.now(pytz.UTC)
         result = []
         for event in events:
             if event.datetime_utc < now:
+                continue
+            if event.source == "static" and not trade_static:
                 continue
             event_lower = event.event_name.lower()
             if any(kw.lower() in event_lower for kw in event_keywords):
