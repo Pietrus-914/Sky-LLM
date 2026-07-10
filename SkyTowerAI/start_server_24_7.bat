@@ -38,7 +38,30 @@ if not exist "venv\Scripts\activate.bat" (
 )
 
 call venv\Scripts\activate.bat
-pip install -r requirements-windows.txt --quiet
+
+REM Zaleznosci serwera (obowiazkowe). Celowo requirements.txt, NIE -windows:
+REM pakiet MetaTrader5 bywa niedostepny dla najnowszych Pythonow, a pip przy
+REM jednym bledzie porzuca cala liste - serwer zostawal bez flaska.
+pip install -r requirements.txt --quiet
+if errorlevel 1 (
+    echo.
+    echo ERROR: instalacja zaleznosci nie powiodla sie. Ponawiam z pelnym logiem:
+    pip install -r requirements.txt
+    pause
+    exit /b 1
+)
+
+REM MetaTrader5 jest opcjonalny (narzedzia dev, serwer go nie importuje)
+pip install MetaTrader5 --quiet >nul 2>&1
+
+REM Kontrola przed startem - lepszy jasny komunikat niz petla crashy
+python -c "import flask" >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: zaleznosci wciaz niekompletne. Uruchom recznie w folderze python:
+    echo   venv\Scripts\activate ^&^& pip install -r requirements.txt
+    pause
+    exit /b 1
+)
 
 if not exist "logs" mkdir logs
 
