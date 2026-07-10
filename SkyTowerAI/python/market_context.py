@@ -67,6 +67,43 @@ def _trend(bars: List[Dict], sma_period: int = 20) -> str:
     return "SIDEWAYS"
 
 
+def _rsi(closes: List[float], period: int = 14) -> Optional[float]:
+    """Simple (non-smoothed) RSI over the last `period` bars."""
+    if len(closes) < period + 1:
+        return None
+    gains = losses = 0.0
+    for prev, cur in zip(closes[-(period + 1):-1], closes[-period:]):
+        delta = cur - prev
+        if delta >= 0:
+            gains += delta
+        else:
+            losses -= delta
+    if losses == 0:
+        return 100.0
+    rs = gains / losses
+    return round(100 - 100 / (1 + rs), 1)
+
+
+def _drift_pips(bars: List[Dict], n_bars: int, pip: float) -> Optional[float]:
+    """Price change over the last n_bars (pre-news drift / momentum)."""
+    if len(bars) < n_bars + 1:
+        return None
+    return round((float(bars[-1]["close"]) - float(bars[-(n_bars + 1)]["close"])) / pip, 1)
+
+
+def _compact_candles(bars: List[Dict], count: int) -> List[str]:
+    """Last `count` bars as compact 'HH:MM O/H/L/C' strings (oldest first)."""
+    out = []
+    for b in bars[-count:]:
+        try:
+            ts = datetime.utcfromtimestamp(int(b.get("time", 0))).strftime("%H:%M")
+        except (ValueError, OSError, OverflowError):
+            ts = "--:--"
+        out.append(f"{ts} {float(b['open']):.5f}/{float(b['high']):.5f}/"
+                   f"{float(b['low']):.5f}/{float(b['close']):.5f}")
+    return out
+
+
 def _atr_pips(bars: List[Dict], pair: str, period: int = 14) -> Optional[float]:
     """Classic ATR(14) expressed in pips."""
     if len(bars) < period + 1:
@@ -85,6 +122,7 @@ def build_market_context(
     pair: str,
     zones: Optional[Dict] = None,
     registered_at: Optional[str] = None,
+    spread_points: Optional[float] = None,
 ) -> Optional[Dict]:
     """
     Build the market-context dict for the entry LLM prompt.
@@ -122,7 +160,29 @@ def build_market_context(
             tf: atr for tf, bars in usable.items()
             if (atr := _atr_pips(bars, pair)) is not None
         }
+        context["rsi14"] = {
+            tf: rsi for tf, bars in usable.items()
+            if (rsi := _rsi(_closes(bars))) is not None
+        }
         context["bars_analyzed"] = {tf: len(bars) for tf, bars in usable.items()}
+
+        # Pre-news drift: how far price has already run into the event
+        # (strategy principle: pre-positioning often reverses on release)
+        if "M5" in usable:
+            drift = {}
+            for label, n in (("last_30min", 6), ("last_60min", 12), ("last_3h", 36)):
+                d = _drift_pips(usable["M5"], n, pip)
+                if d is not None:
+                    drift[label] = d
+            if drift:
+                context["drift_pips"] = drift
+
+        # Raw candles for the LLM (compact, oldest->newest); kept out of the
+        # summary JSON block by the prompt builder and rendered as a table
+        context["candles"] = {}
+        for tf, count in (("M5", 36), ("M15", 24), ("H1", 24)):
+            if tf in usable:
+                context["candles"][tf] = _compact_candles(usable[tf], count)
 
         # Daily range position & distance to extremes from the widest window we have
         widest = max(usable.values(), key=len) if "H1" not in usable else usable["H1"]
@@ -137,6 +197,9 @@ def build_market_context(
             )
         context["distance_to_recent_high_pips"] = round((window_high - last_price) / pip, 1)
         context["distance_to_recent_low_pips"] = round((last_price - window_low) / pip, 1)
+
+    if spread_points is not None and spread_points > 0:
+        context["current_spread_pips"] = round(spread_points / 10.0, 1)
 
     if zones:
         context["zones"] = _summarize_zones(zones, context.get("last_price"), pip)

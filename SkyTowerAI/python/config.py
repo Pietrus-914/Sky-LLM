@@ -244,7 +244,7 @@ LLM_CONFIG = {
     # "anthropic/claude-sonnet-4" - faster, cheaper, still very good
     # "deepseek/deepseek-r1-0528" - excellent reasoning, very cheap
     # "openai/gpt-4.1" - fast, large context
-    "max_tokens": 1000,
+    "max_tokens": 1500,  # room for the ANALYSIS CHECKLIST reasoning
     "temperature": 0.3,  # Lower = more consistent decisions
 }
 

@@ -32,9 +32,12 @@ def make_engine():
     engine = LLMDecisionEngine(provider="rule-based")
     engine.cot_analyzer = Mock()
     engine.sentiment = Mock()
-    # Never touch the production logs/event_reactions.jsonl from unit tests
+    # Never touch the production logs/*.jsonl from unit tests
     engine.reaction_history = Mock()
     engine.reaction_history.summarize.return_value = None
+    engine.reaction_history.get_matching.return_value = []
+    engine.decision_log = Mock()
+    engine.decision_log.get_recent.return_value = []
     return engine
 
 
@@ -265,6 +268,52 @@ class TestForcedDirectionHelper:
         direction, note = engine._forced_direction(ctx)
         assert direction == "BUY"
         assert "tie-break" in note
+
+
+class TestTrackRecord:
+    def test_track_record_joins_decision_with_reaction(self):
+        engine = make_engine()
+        engine.decision_log.get_recent.return_value = [{
+            "timestamp": "2026-07-10T12:28:13Z", "event_name": "Employment Change",
+            "currency": "CAD", "pair": "USDCAD", "direction": "BUY",
+            "confidence": 0.65, "event_datetime": "2026-07-10T12:30:00+00:00",
+        }]
+        engine.reaction_history.get_matching.return_value = [{
+            "event_time": "2026-07-10T12:30:00", "pair": "USDCAD",
+            "move_5min_pips": -41.0,
+        }]
+        record = engine._build_track_record("CAD")
+        assert "BUY USDCAD @65%" in record
+        assert "-41.0 pips/5min" in record
+        assert "WRONG" in record  # BUY but price fell
+
+    def test_track_record_correct_call(self):
+        engine = make_engine()
+        engine.decision_log.get_recent.return_value = [{
+            "timestamp": "2026-07-10T12:28:13Z", "event_name": "CPI m/m",
+            "currency": "USD", "pair": "USDCAD", "direction": "BUY",
+            "confidence": 0.7, "event_datetime": "2026-07-10T12:30:00+00:00",
+        }]
+        engine.reaction_history.get_matching.return_value = [{
+            "event_time": "2026-07-10T12:30:00", "pair": "USDCAD",
+            "move_5min_pips": 30.0,
+        }]
+        assert "CORRECT" in engine._build_track_record("USD")
+
+    def test_track_record_none_without_decisions(self):
+        engine = make_engine()
+        assert engine._build_track_record("CAD") is None
+
+    def test_prompt_includes_candles_and_track_record(self):
+        engine = make_engine()
+        ctx = {
+            "market_context": {"pair": "USDCAD", "trend": {"M5": "UP"},
+                               "candles": {"M5": ["12:00 1.41000/1.41100/1.40900/1.41050"]}},
+        }
+        section = engine._market_context_section(ctx)
+        assert "RECENT CANDLES" in section
+        assert "1.41000/1.41100" in section
+        assert '"candles"' not in section  # raw list not duplicated in the JSON blob
 
 
 class TestDecisionHistoryForcedFlag:

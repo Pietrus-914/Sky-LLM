@@ -105,6 +105,29 @@ class TestATR:
         assert _atr_pips(wide, "EURUSD") > _atr_pips(narrow, "EURUSD")
 
 
+class TestEnrichedContext:
+    def test_rsi_drift_candles_present(self):
+        ctx = build_market_context({"M5": rising(60)}, "EURUSD", spread_points=42)
+        assert 0 <= ctx["rsi14"]["M5"] <= 100
+        assert ctx["rsi14"]["M5"] > 70  # steadily rising series is overbought
+        assert ctx["drift_pips"]["last_30min"] > 0
+        assert ctx["drift_pips"]["last_60min"] > ctx["drift_pips"]["last_30min"]
+        assert len(ctx["candles"]["M5"]) == 36
+        assert "/" in ctx["candles"]["M5"][0]  # O/H/L/C format
+        assert ctx["current_spread_pips"] == 4.2
+
+    def test_falling_market_rsi_low_drift_negative(self):
+        ctx = build_market_context({"M5": falling(60)}, "EURUSD")
+        assert ctx["rsi14"]["M5"] < 30
+        assert ctx["drift_pips"]["last_30min"] < 0
+
+    def test_short_series_omits_optional_fields(self):
+        ctx = build_market_context({"H1": rising(5)}, "EURUSD")
+        assert "drift_pips" not in ctx          # drift needs M5
+        assert "current_spread_pips" not in ctx  # no spread given
+        assert len(ctx["candles"]["H1"]) == 5
+
+
 class TestBuildMarketContext:
     def test_none_when_no_data(self):
         assert build_market_context({}, "EURUSD") is None

@@ -14,6 +14,7 @@ from calendar_fetcher import CalendarAggregator, EconomicEvent
 from cot_analyzer import COTAnalyzer
 from sentiment_analyzer import SentimentAggregator
 from event_reaction_history import EventReactionHistory
+from decision_history import DecisionHistory
 from market_context import normalize_pair
 from config import LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS, HIGH_IMPACT_EVENTS, OPENROUTER_API_KEY, FORCE_DECISION
 
@@ -81,6 +82,21 @@ KEY PRINCIPLES:
    currency means SELL the pair and a bearish one means BUY. Double-check which side
    of the pair the event currency is on before choosing the direction.
 
+ANALYSIS CHECKLIST — think through EVERY point against the provided data before
+answering (the reasoning field should reflect this analysis, output ONLY the JSON):
+a. Surprise setup: how big is the forecast-vs-previous gap? Which outcome (beat/miss)
+   has the asymmetric payoff, and is one side already priced in?
+b. Pre-news drift: what do the last 30-60 min candles show? A strong run INTO the
+   event often reverses on release (pre-positioning); a quiet coil often breaks hard.
+c. Chart evidence: read the raw candles — momentum, wicks, rejection levels,
+   where the stops likely sit relative to nearest support/resistance.
+d. Volatility fit: are your stop_loss_pips/take_profit_pips consistent with ATR and
+   the current spread (a stop inside 1x spread+ATR noise will be swept)?
+e. Historical reactions and YOUR TRACK RECORD: what actually happened on past
+   releases of this event, and were your own recent calls on this currency right or
+   wrong? Do not repeat a documented mistake.
+f. Quoting check (principle 7): confirm the direction maps correctly to the pair.
+
 DECISION OUTPUT FORMAT:
 You must respond with a JSON object containing:
 {
@@ -134,6 +150,9 @@ confidence — do NOT inflate it just because a direction is required."""
         self.cot_analyzer = COTAnalyzer()
         self.sentiment = SentimentAggregator()
         self.reaction_history = EventReactionHistory()
+        # Read-only view of past decisions — feeds the TRACK RECORD prompt
+        # section so the model can see (and correct for) its own hit rate
+        self.decision_log = DecisionHistory()
 
         # Initialize LLM client
         self._init_llm_client()
@@ -259,6 +278,10 @@ confidence — do NOT inflate it just because a direction is required."""
             logger.debug(f"Reaction history lookup failed: {e}")
         source_status["reaction_history"] = "ok" if reaction_summary else "no_data"
 
+        # The model's own recent calls on this currency, with measured outcomes
+        track_record = self._build_track_record(currency)
+        source_status["track_record"] = "ok" if track_record else "no_data"
+
         return {
             "event": {
                 "name": event.event_name,
@@ -274,19 +297,67 @@ confidence — do NOT inflate it just because a direction is required."""
             "suggested_pair": (market_context or {}).get('pair') or pair,
             "market_context": market_context,
             "reaction_history": reaction_summary,
+            "track_record": track_record,
             "_source_status": source_status,
         }
 
     def _market_context_section(self, data_context: Dict) -> str:
-        """Prompt section for live market data (trend/ATR/zones), or a degraded-source note."""
+        """Prompt section for live market data (summary + raw candles)."""
         market = data_context.get('market_context')
         if not market:
             return "NOT AVAILABLE (no price data pushed by the EA for this event)"
+
+        market = dict(market)
+        candles = market.pop('candles', None)
+
         text = json.dumps(market, indent=2)
         age = market.get('data_age_minutes')
         if age is not None and age > 15:
             text += f"\nNOTE: this market data is {age} minutes old — treat with caution."
+
+        if candles:
+            text += "\n\nRECENT CANDLES (UTC time open/high/low/close, oldest -> newest):"
+            for tf, bars in candles.items():
+                text += f"\n[{tf}]\n" + "\n".join(bars)
         return text
+
+    def _build_track_record(self, currency: str, limit: int = 5):
+        """
+        Last few BUY/SELL decisions for this currency joined with the measured
+        post-release reaction — lets the model see whether its recent calls
+        were right and adjust instead of repeating a documented mistake.
+        """
+        try:
+            recent = [d for d in self.decision_log.get_recent(50)
+                      if d.get('currency') == currency
+                      and d.get('direction') in ('BUY', 'SELL')]
+            if not recent:
+                return None
+
+            lines = []
+            for d in recent[:limit]:
+                outcome = " -> outcome not measured yet"
+                evt_minute = (d.get('event_datetime') or '')[:16]
+                for r in self.reaction_history.get_matching(d.get('event_name', ''), currency, limit=10):
+                    if (r.get('event_time') or '')[:16] != evt_minute:
+                        continue
+                    move = r.get('move_5min_pips')
+                    if move is None:
+                        break
+                    if normalize_pair(r.get('pair', '')) == normalize_pair(d.get('pair', '')):
+                        correct = (move > 0) == (d.get('direction') == 'BUY')
+                        outcome = (f" -> {r.get('pair')} moved {move:+.1f} pips/5min after release"
+                                   f" -> your call was {'CORRECT' if correct else 'WRONG'}")
+                    else:
+                        outcome = f" -> {r.get('pair')} moved {move:+.1f} pips/5min after release"
+                    break
+                lines.append(f"{(d.get('timestamp') or '')[:16]} {d.get('event_name')}: "
+                             f"{d.get('direction')} {d.get('pair')} "
+                             f"@{int((d.get('confidence') or 0) * 100)}%{outcome}")
+            return "Your recent decisions for this currency:\n" + "\n".join(lines)
+        except Exception as e:
+            logger.debug(f"Track record build failed: {e}")
+            return None
 
     def _compare_values(self, forecast: str, previous: str) -> str:
         """Compare forecast to previous value"""
@@ -328,9 +399,13 @@ CURRENT MARKET STRUCTURE ({data_context['suggested_pair']}):
 HISTORICAL REACTIONS TO THIS EVENT:
 {data_context.get('reaction_history') or "No history yet (the system is building this dataset)"}
 
+YOUR TRACK RECORD ({data_context['event']['currency']} events):
+{data_context.get('track_record') or "No prior decisions for this currency yet"}
+
 SUGGESTED PAIR: {data_context['suggested_pair']}
 
-Based on this data, provide your trading decision in JSON format."""
+Work through the ANALYSIS CHECKLIST against this data, then provide your trading
+decision in JSON format."""
 
         try:
             logger.info(f"Calling LLM ({self.provider}/{self.model}) for trading decision...")
@@ -401,7 +476,7 @@ Based on this data, provide your trading decision in JSON format."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=1000,
+                max_tokens=LLM_CONFIG.get("max_tokens", 1500),
                 temperature=0.3,
                 timeout=60.0,  # 60 second timeout
                 extra_headers={
@@ -415,7 +490,7 @@ Based on this data, provide your trading decision in JSON format."""
         elif self.provider == "anthropic":
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=1000,
+                max_tokens=LLM_CONFIG.get("max_tokens", 1500),
                 system=system_prompt,
                 messages=[{"role": "user", "content": prompt}],
                 timeout=60.0  # 60 second timeout
@@ -429,7 +504,7 @@ Based on this data, provide your trading decision in JSON format."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=1000,
+                max_tokens=LLM_CONFIG.get("max_tokens", 1500),
                 temperature=0.3,
                 timeout=60.0  # 60 second timeout
             )

@@ -789,6 +789,7 @@ def report_market_data():
             market_data_reports[pair] = {
                 "pair": pair,
                 "ohlc_multi": ohlc_multi,
+                "spread_points": data.get('spread_points', 0),
                 "updated_at": datetime.utcnow().isoformat()
             }
 
@@ -854,6 +855,7 @@ def _build_market_context_for_event(event):
         zones = None
         pair_name = normalize_pair(suggested)
         data_timestamp = None
+        spread_points = None
 
         with market_data_lock:
             market_entry = _find_pair_data(market_data_reports, suggested, currency)
@@ -865,6 +867,7 @@ def _build_market_context_for_event(event):
                 ohlc_multi = market_entry.get('ohlc_multi', {})
                 pair_name = market_entry.get('pair', pair_name)
                 data_timestamp = market_entry.get('updated_at')
+                spread_points = market_entry.get('spread_points')
 
         # Multi-instance registration may carry zone data for this event
         event_time = event.datetime_utc
@@ -885,7 +888,8 @@ def _build_market_context_for_event(event):
                 zones = {**(zones or {}), **zone_entry}
 
         return build_market_context(
-            ohlc_multi, pair_name, zones=zones, registered_at=data_timestamp
+            ohlc_multi, pair_name, zones=zones, registered_at=data_timestamp,
+            spread_points=spread_points
         )
     except Exception as e:
         logger.warning(f"Could not build market context for {event.event_name}: {e}")
