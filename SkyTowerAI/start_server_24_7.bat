@@ -7,18 +7,25 @@ title SkyTower-AI Server (24/7)
 
 cd /d "%~dp0python"
 
-REM Pierwsze uruchomienie: venv + zaleznosci
+REM Znajdz Pythona: najpierw "python" z PATH, potem launcher "py -3"
+REM (py dziala nawet gdy przy instalacji nie zaznaczono "Add to PATH")
+set "PY_CMD=python"
 python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ERROR: Python nie jest zainstalowany albo nie ma go w PATH
-    echo Zainstaluj Python 3.10+ z https://python.org i zaznacz "Add to PATH"
-    pause
-    exit /b 1
+if not errorlevel 1 goto pyfound
+py -3 --version >nul 2>&1
+if not errorlevel 1 (
+    set "PY_CMD=py -3"
+    goto pyfound
 )
+echo ERROR: Nie znalazlem Pythona. Zainstaluj Python 3.10+ z https://python.org
+echo najlepiej zaznaczajac "Add python.exe to PATH" przy instalacji.
+pause
+exit /b 1
+:pyfound
 
 if not exist "venv" (
     echo Tworzenie srodowiska venv...
-    python -m venv venv
+    %PY_CMD% -m venv venv
 )
 
 call venv\Scripts\activate.bat
