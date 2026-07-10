@@ -205,6 +205,45 @@ class TestForcedTieBreakConfidence:
         assert decision.confidence <= 0.35  # honest coin-flip, not the 0.5 baseline
 
 
+class TestQuoteSideMapping:
+    """Event currency is not always the pair's BASE: CAD -> USD/CAD.
+    Bearish CAD must mean BUY USDCAD, not SELL (real bug from the first
+    live event's fallback path, 10.07.2026)."""
+
+    def test_bias_to_direction_base(self):
+        f = LLMDecisionEngine._currency_bias_to_direction
+        assert f("BULLISH", "NZD/USD", "NZD") == "BUY"
+        assert f("BEARISH", "NZD/USD", "NZD") == "SELL"
+
+    def test_bias_to_direction_quote(self):
+        f = LLMDecisionEngine._currency_bias_to_direction
+        assert f("BULLISH", "USD/CAD", "CAD") == "SELL"
+        assert f("BEARISH", "USD/CAD", "CAD") == "BUY"
+        assert f("BEARISH", "USDCAD.pro", "CAD") == "BUY"  # broker suffix
+
+    def test_rule_based_cad_deterioration_buys_usdcad(self):
+        """Bearish-CAD evidence on a CAD event must produce BUY USDCAD."""
+        engine = make_engine()
+        engine.cot_analyzer.analyze_currency.return_value = {
+            "signal": "BEARISH", "confidence": 0.7}
+        engine.sentiment.get_currency_sentiment.return_value = {
+            "signal": "BEARISH", "confidence": 0.6, "pairs_analyzed": 3}
+        event = make_event(currency="CAD", forecast="11.2K", previous="87.8K")
+        with patch.object(llm_decision_engine, "FORCE_DECISION", False):
+            decision = engine.analyze_event(event)
+        assert decision.pair.replace("/", "") == "USDCAD"
+        assert decision.direction == "BUY"  # weak CAD = USDCAD up
+
+    def test_forced_tie_break_respects_quote_side(self):
+        engine = make_engine()
+        neutral_context(engine)
+        # CAD deterioration tie-break: bearish CAD -> BUY USDCAD
+        event = make_event(currency="CAD", forecast="10K", previous="80K")
+        with patch.object(llm_decision_engine, "FORCE_DECISION", True):
+            decision = engine.analyze_event(event)
+        assert decision.direction == "BUY"
+
+
 class TestForcedDirectionHelper:
     def test_cot_dominates(self):
         engine = make_engine()

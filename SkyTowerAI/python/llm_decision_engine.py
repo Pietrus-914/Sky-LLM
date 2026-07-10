@@ -14,6 +14,7 @@ from calendar_fetcher import CalendarAggregator, EconomicEvent
 from cot_analyzer import COTAnalyzer
 from sentiment_analyzer import SentimentAggregator
 from event_reaction_history import EventReactionHistory
+from market_context import normalize_pair
 from config import LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS, HIGH_IMPACT_EVENTS, OPENROUTER_API_KEY, FORCE_DECISION
 
 
@@ -75,6 +76,10 @@ KEY PRINCIPLES:
    volatility to judge entry quality and size stop_loss_pips / take_profit_pips
 6. HISTORICAL REACTIONS: When past reactions to this event are provided, weigh how the
    pair actually moved on similar beat/miss outcomes
+7. QUOTING (critical): "direction" refers to the SUGGESTED PAIR. When the event
+   currency is the QUOTE currency of the pair (e.g. CAD in USDCAD), a bullish event
+   currency means SELL the pair and a bearish one means BUY. Double-check which side
+   of the pair the event currency is on before choosing the direction.
 
 DECISION OUTPUT FORMAT:
 You must respond with a JSON object containing:
@@ -433,6 +438,19 @@ Based on this data, provide your trading decision in JSON format."""
         raise RuntimeError(f"No LLM client for provider '{self.provider}'")
 
     @staticmethod
+    def _currency_bias_to_direction(bias: str, pair: str, currency: str) -> str:
+        """
+        Map an event-currency bias (BULLISH/BEARISH) to a BUY/SELL of the pair,
+        respecting the quoting. The event currency is NOT always the base:
+        DEFAULT_PAIRS maps CAD -> USD/CAD, where CAD is the QUOTE — there a
+        bearish CAD means BUY USDCAD, not SELL.
+        """
+        currency_is_base = normalize_pair(pair).startswith(currency.upper())
+        if bias == "BULLISH":
+            return "BUY" if currency_is_base else "SELL"
+        return "SELL" if currency_is_base else "BUY"
+
+    @staticmethod
     def _normalize_direction(raw) -> str:
         """Whitelist LLM direction output: anything but BUY/SELL becomes SKIP."""
         direction = str(raw or "").strip().upper()
@@ -495,21 +513,30 @@ Based on this data, provide your trading decision in JSON format."""
 
         return bullish, bearish, reasons, confidence_boost
 
-    def _forced_direction(self, data_context: Dict) -> tuple:
+    def _forced_direction(self, data_context: Dict, pair: str = None) -> tuple:
         """
         Pick BUY/SELL from the shared rule scores when SKIP is not allowed
-        (FORCE_DECISION test mode). Tie-break: forecast comparison, then BUY.
+        (FORCE_DECISION test mode). Scores describe the EVENT CURRENCY; the
+        pair direction is derived via _currency_bias_to_direction so a
+        quote-side pair (CAD -> USDCAD) does not invert the trade.
+        Tie-break: forecast comparison, then bullish.
         """
         bullish, bearish, _, _ = self._score_direction(data_context)
         forecast_cmp = data_context.get('forecast_info', {}).get('forecast_vs_previous', 'UNKNOWN')
+        currency = data_context.get('event', {}).get('currency', '')
+        pair = pair or data_context.get('suggested_pair', '')
 
         if bullish > bearish:
-            return "BUY", f"direction forced from rule fallback (bullish {bullish} vs bearish {bearish})"
-        if bearish > bullish:
-            return "SELL", f"direction forced from rule fallback (bearish {bearish} vs bullish {bullish})"
-        if forecast_cmp == "DETERIORATION":
-            return "SELL", "forced tie-break via forecast deterioration"
-        return "BUY", "forced tie-break (no directional signal)"
+            bias, note = "BULLISH", f"direction forced from rule fallback (bullish {bullish} vs bearish {bearish})"
+        elif bearish > bullish:
+            bias, note = "BEARISH", f"direction forced from rule fallback (bearish {bearish} vs bullish {bullish})"
+        elif forecast_cmp == "DETERIORATION":
+            bias, note = "BEARISH", "forced tie-break via forecast deterioration"
+        else:
+            bias, note = "BULLISH", "forced tie-break (no directional signal)"
+
+        direction = self._currency_bias_to_direction(bias, pair, currency)
+        return direction, f"{note}; {currency} {bias.lower()} -> {direction} {normalize_pair(pair)}"
 
     def _parse_llm_response(self, response: str) -> Dict:
         """Parse JSON from LLM response"""
@@ -542,14 +569,17 @@ Based on this data, provide your trading decision in JSON format."""
         bullish_score, bearish_score, reasons, confidence_boost = self._score_direction(data_context)
         confidence = 0.5 + confidence_boost
 
-        # Determine direction
+        # Determine direction: scores describe the EVENT CURRENCY; map the
+        # bias onto the pair (base vs quote) instead of assuming bullish=BUY
         if bullish_score > bearish_score + 2:
-            direction = "BUY"
+            direction = self._currency_bias_to_direction("BULLISH", pair, currency)
+            reasons.append(f"{currency} bullish -> {direction} {normalize_pair(pair)}")
         elif bearish_score > bullish_score + 2:
-            direction = "SELL"
+            direction = self._currency_bias_to_direction("BEARISH", pair, currency)
+            reasons.append(f"{currency} bearish -> {direction} {normalize_pair(pair)}")
         elif FORCE_DECISION:
             # Test mode: no margin requirement — pick the stronger side
-            direction, note = self._forced_direction(data_context)
+            direction, note = self._forced_direction(data_context, pair)
             reasons.append(note)
             if bullish_score == 0 and bearish_score == 0:
                 # Evidence-free coin flip: report it honestly instead of
@@ -772,29 +802,39 @@ Respond with JSON:
     ) -> Optional[TradingDecision]:
         """Rule-based pair selection when LLM is unavailable"""
 
-        # First, determine direction from fundamentals (shared scoring table)
+        # First, determine the EVENT-CURRENCY bias from fundamentals.
+        # The BUY/SELL direction depends on each candidate pair's quoting
+        # (bullish CAD = SELL USDCAD but BUY CADJPY), so bias and direction
+        # are mapped per pair via _currency_bias_to_direction.
         bullish_score, bearish_score, reasons, _ = self._score_direction(data_context)
+        currency = data_context.get('event', {}).get('currency', '')
 
-        # Determine direction
         if bullish_score > bearish_score + 1:
-            direction = "BUY"
+            currency_bias = "BULLISH"
         elif bearish_score > bullish_score + 1:
-            direction = "SELL"
+            currency_bias = "BEARISH"
         elif FORCE_DECISION:
-            direction, note = self._forced_direction(data_context)
-            reasons.append(note)
+            if bullish_score != bearish_score:
+                currency_bias = "BULLISH" if bullish_score > bearish_score else "BEARISH"
+            else:
+                forecast_cmp = data_context.get('forecast_info', {}).get('forecast_vs_previous', 'UNKNOWN')
+                currency_bias = "BEARISH" if forecast_cmp == "DETERIORATION" else "BULLISH"
+            reasons.append(f"forced bias {currency_bias} (no score margin)")
         else:
             logger.info("Rule-based: No clear direction, recommending SKIP")
             return None
 
-        # Score each pair for the determined direction
+        # Score each pair for its own mapped direction
         pair_scores = {}
         pair_details = {}  # For logging
+        pair_directions = {}
 
         for pair, data in pairs_data.items():
+            direction = self._currency_bias_to_direction(currency_bias, pair, currency)
+            pair_directions[pair] = direction
             score = 100  # Base score
             zones = data.get('zones', {})
-            details = []
+            details = [f"dir={direction}"]
 
             # Convert spread points to pips (JPY pairs have different multiplier)
             spread_points = data.get('spread_points', 0)
@@ -843,13 +883,14 @@ Respond with JSON:
             pair_details[pair] = f"{score:.0f} [{', '.join(details)}]"
 
         # Log all pair scores for transparency
-        logger.info(f"Pair scores for {direction}:")
+        logger.info(f"Pair scores for {currency} {currency_bias}:")
         for pair, detail in sorted(pair_details.items(), key=lambda x: pair_scores[x[0]], reverse=True):
             logger.info(f"  {pair}: {detail}")
 
-        # Select best pair
+        # Select best pair; the traded direction is that pair's mapping
         best_pair = max(pair_scores, key=pair_scores.get)
         best_score = pair_scores[best_pair]
+        direction = pair_directions[best_pair]
 
         logger.info(f"Rule-based selected {best_pair} (score: {best_score})")
 
