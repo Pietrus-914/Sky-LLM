@@ -115,6 +115,14 @@ TIER2_EVENTS = [
     "Existing Home Sales",
 ]
 
+# Dodatkowe eventy z .env, bez edycji kodu — np.
+# SKYTOWER_EXTRA_EVENTS=PMI,PPI,Trade Balance,Consumer Confidence
+# Nazwy dopasowywane są jako podciągi (case-insensitive), więc "PMI" złapie
+# też "Flash Manufacturing PMI" i "ISM Services PMI".
+_extra_events = os.getenv("SKYTOWER_EXTRA_EVENTS", "")
+if _extra_events.strip():
+    TIER2_EVENTS = TIER2_EVENTS + [e.strip() for e in _extra_events.split(",") if e.strip()]
+
 # Wszystkie high impact events (dla kompatybilności)
 HIGH_IMPACT_EVENTS = TIER1_EVENTS + TIER2_EVENTS
 
