@@ -377,7 +377,7 @@ Based on this data, provide your trading decision in JSON format."""
                 take_profit_pips=decision_data.get('take_profit_pips', 0),
                 reasoning=reasoning,
                 data_summary=data_context,
-                timestamp=datetime.now(),
+                timestamp=datetime.utcnow(),
                 forced=FORCE_DECISION
             )
 
@@ -574,7 +574,7 @@ Based on this data, provide your trading decision in JSON format."""
             stop_loss_percent=40,
             reasoning="; ".join(reasons) if reasons else "No strong signals",
             data_summary=data_context,
-            timestamp=datetime.now(),
+            timestamp=datetime.utcnow(),
             forced=FORCE_DECISION
         )
 
@@ -757,7 +757,7 @@ Respond with JSON:
                 take_profit_pips=decision_data.get('take_profit_pips', 0),
                 reasoning=decision_data.get('reasoning', 'Multi-pair LLM decision'),
                 data_summary=data_context,
-                timestamp=datetime.now(),
+                timestamp=datetime.utcnow(),
                 forced=FORCE_DECISION
             )
 
@@ -868,7 +868,7 @@ Respond with JSON:
             stop_loss_percent=40,
             reasoning=f"Selected {best_pair}: {'; '.join(reasons)}",
             data_summary=data_context,
-            timestamp=datetime.now(),
+            timestamp=datetime.utcnow(),
             forced=FORCE_DECISION
         )
 

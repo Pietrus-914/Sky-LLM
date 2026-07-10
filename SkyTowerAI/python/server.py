@@ -202,7 +202,7 @@ def health_check():
         # Identifies OUR server — START.bat checks this to tell a running
         # SkyTower apart from a foreign app squatting on the port (e.g. adb)
         "service": "SkyTower-AI",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.utcnow().isoformat(),
         "version": "4.1.0"
     })
 
@@ -1596,7 +1596,7 @@ def create_test_signal():
                 },
                 'test_mode': True
             },
-            timestamp=datetime.now()
+            timestamp=datetime.utcnow()
         )
 
         with decision_lock:
