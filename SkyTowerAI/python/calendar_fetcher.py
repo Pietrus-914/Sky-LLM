@@ -166,9 +166,12 @@ class ForexFactoryCalendar:
                     else:
                         event_dt = datetime.strptime(date_str, "%m-%d-%Y")
 
-                    # Make timezone aware (ForexFactory uses ET)
-                    eastern = pytz.timezone('US/Eastern')
-                    event_dt = eastern.localize(event_dt).astimezone(pytz.UTC)
+                    # Make timezone aware. The nfs.faireconomy.media feed serves
+                    # times in GMT/UTC (verified against official release times:
+                    # CAD Employment Change 12:30pm in feed == 12:30 UTC == 8:30 ET).
+                    # The previous US/Eastern assumption shifted every event +4/5h,
+                    # so decisions would have fired HOURS after the actual release.
+                    event_dt = pytz.UTC.localize(event_dt)
 
                     # Get other fields
                     currency = event.find('country').text if event.find('country') is not None else ''
