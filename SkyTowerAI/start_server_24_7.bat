@@ -23,9 +23,18 @@ pause
 exit /b 1
 :pyfound
 
-if not exist "venv" (
+REM Sprawdzamy konkretny plik, nie sam folder - pusty/uszkodzony venv
+REM (np. po nieudanej probie bez Pythona) jest kasowany i tworzony od nowa
+if not exist "venv\Scripts\activate.bat" (
     echo Tworzenie srodowiska venv...
+    if exist "venv" rmdir /s /q venv
     %PY_CMD% -m venv venv
+)
+if not exist "venv\Scripts\activate.bat" (
+    echo ERROR: nie udalo sie utworzyc venv.
+    echo Sprobuj recznie w folderze python: %PY_CMD% -m venv venv
+    pause
+    exit /b 1
 )
 
 call venv\Scripts\activate.bat

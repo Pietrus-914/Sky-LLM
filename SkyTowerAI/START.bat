@@ -7,13 +7,28 @@ REM ============================================================
 title SkyTower-AI Start
 
 REM --- 1. Serwer (tylko jesli jeszcze nie dziala) ---
-curl -s -m 2 http://127.0.0.1:5555/health >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Uruchamiam serwer SkyTower-AI...
-    start "SkyTower-AI Server" /min "%~dp0start_server_24_7.bat"
-) else (
+REM Sprawdzamy tresc odpowiedzi, nie samo polaczenie - na porcie 5555 moze
+REM siedziec obcy program (np. adb / emulator Androida)
+curl -s -m 2 http://127.0.0.1:5555/health 2>nul | "%SystemRoot%\System32\find.exe" "SkyTower-AI" >nul
+if not errorlevel 1 (
     echo Serwer juz dziala.
+    goto srvdone
 )
+netstat -ano | "%SystemRoot%\System32\find.exe" ":5555 " | "%SystemRoot%\System32\find.exe" "LISTENING" >nul
+if not errorlevel 1 (
+    echo.
+    echo UWAGA: port 5555 jest zajety przez INNY program:
+    netstat -ano | "%SystemRoot%\System32\find.exe" ":5555 " | "%SystemRoot%\System32\find.exe" "LISTENING"
+    echo Sprawdz co to za proces komenda: tasklist /FI "PID eq NUMER_Z_OSTATNIEJ_KOLUMNY"
+    echo Zamknij go, ALBO przenies SkyTower na inny port dopisujac w python\.env
+    echo linie SKYTOWER_PORT=5556 i zmieniajac w MT5 allowlist oraz InpServerPort.
+    echo.
+    pause
+    exit /b 1
+)
+echo Uruchamiam serwer SkyTower-AI...
+start "SkyTower-AI Server" /min "%~dp0start_server_24_7.bat"
+:srvdone
 
 REM --- 2. Terminal MT5 (tylko jesli jeszcze nie dziala) ---
 REM pelna sciezka do find.exe - w PATH moze byc uniksowy find (Git Bash)

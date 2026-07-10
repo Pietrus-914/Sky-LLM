@@ -199,6 +199,9 @@ def health_check():
     """Health check endpoint"""
     return jsonify({
         "status": "ok",
+        # Identifies OUR server — START.bat checks this to tell a running
+        # SkyTower apart from a foreign app squatting on the port (e.g. adb)
+        "service": "SkyTower-AI",
         "timestamp": datetime.now().isoformat(),
         "version": "4.1.0"
     })
