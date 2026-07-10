@@ -6,19 +6,25 @@ REM  Mozna klikac wielokrotnie - nie zdubluje procesow.
 REM ============================================================
 title SkyTower-AI Start
 
+REM --- 0. Port serwera: domyslnie 5555, mozna nadpisac w python\.env ---
+set "SRV_PORT=5555"
+if exist "%~dp0python\.env" (
+    for /f "tokens=2 delims==" %%a in ('findstr /b "SKYTOWER_PORT=" "%~dp0python\.env"') do set "SRV_PORT=%%a"
+)
+
 REM --- 1. Serwer (tylko jesli jeszcze nie dziala) ---
-REM Sprawdzamy tresc odpowiedzi, nie samo polaczenie - na porcie 5555 moze
+REM Sprawdzamy tresc odpowiedzi, nie samo polaczenie - na porcie moze
 REM siedziec obcy program (np. adb / emulator Androida)
-curl -s -m 2 http://127.0.0.1:5555/health 2>nul | "%SystemRoot%\System32\find.exe" "SkyTower-AI" >nul
+curl -s -m 2 http://127.0.0.1:%SRV_PORT%/health 2>nul | "%SystemRoot%\System32\find.exe" "SkyTower-AI" >nul
 if not errorlevel 1 (
-    echo Serwer juz dziala.
+    echo Serwer juz dziala na porcie %SRV_PORT%.
     goto srvdone
 )
-netstat -ano | "%SystemRoot%\System32\find.exe" ":5555 " | "%SystemRoot%\System32\find.exe" "LISTENING" >nul
+netstat -ano | "%SystemRoot%\System32\find.exe" ":%SRV_PORT% " | "%SystemRoot%\System32\find.exe" "LISTENING" >nul
 if not errorlevel 1 (
     echo.
-    echo UWAGA: port 5555 jest zajety przez INNY program:
-    netstat -ano | "%SystemRoot%\System32\find.exe" ":5555 " | "%SystemRoot%\System32\find.exe" "LISTENING"
+    echo UWAGA: port %SRV_PORT% jest zajety przez INNY program:
+    netstat -ano | "%SystemRoot%\System32\find.exe" ":%SRV_PORT% " | "%SystemRoot%\System32\find.exe" "LISTENING"
     echo Sprawdz co to za proces komenda: tasklist /FI "PID eq NUMER_Z_OSTATNIEJ_KOLUMNY"
     echo Zamknij go, ALBO przenies SkyTower na inny port dopisujac w python\.env
     echo linie SKYTOWER_PORT=5556 i zmieniajac w MT5 allowlist oraz InpServerPort.
@@ -26,7 +32,7 @@ if not errorlevel 1 (
     pause
     exit /b 1
 )
-echo Uruchamiam serwer SkyTower-AI...
+echo Uruchamiam serwer SkyTower-AI na porcie %SRV_PORT%...
 start "SkyTower-AI Server" /min "%~dp0start_server_24_7.bat"
 :srvdone
 
@@ -49,6 +55,6 @@ echo Nie znalazlem MT5 - uruchom terminal recznie.
 :mt5done
 
 echo.
-echo Gotowe. Dashboard: http://127.0.0.1:5555/
+echo Gotowe. Dashboard: http://127.0.0.1:%SRV_PORT%/
 echo To okno zamknie sie za 10 sekund.
 ping -n 11 127.0.0.1 >nul
