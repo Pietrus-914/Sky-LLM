@@ -1078,6 +1078,31 @@
                 <div class="no-data">No position management data</div>
             </div>
         </div>
+
+        <!-- Persistent Decision History (from decision_history.jsonl) -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Decision History (persistent)</span>
+            </div>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time (CET)</th>
+                            <th>Event</th>
+                            <th>Dir</th>
+                            <th>Conf</th>
+                            <th>Pair</th>
+                            <th>Forced</th>
+                            <th>Reasoning</th>
+                        </tr>
+                    </thead>
+                    <tbody id="decisionHistoryBody">
+                        <tr><td colspan="7" class="no-data">No decisions recorded yet</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <!-- ================================================================
@@ -1751,8 +1776,44 @@
                 $('decisionContent').innerHTML = '<div class="no-data" style="color:var(--accent-red)">Failed to load decision: ' + escapeHtml(e.message) + '</div>';
             }
 
-            // Also refresh position management log
+            // Also refresh position management log + persistent history
             refreshAILog();
+            refreshDecisionHistory();
+        }
+
+        async function refreshDecisionHistory() {
+            try {
+                var data = await apiFetch('/api/decisions/history?limit=20');
+                var tbody = $('decisionHistoryBody');
+                var decisions = data.decisions || [];
+
+                if (decisions.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="no-data">No decisions recorded yet</td></tr>';
+                    return;
+                }
+
+                var html = '';
+                for (var i = 0; i < decisions.length; i++) {
+                    var d = decisions[i];
+                    var dir = (d.direction || '--').toUpperCase();
+                    var dirColor = dir === 'BUY' ? 'var(--accent-green)' :
+                                   (dir === 'SELL' ? 'var(--accent-red)' : 'var(--text-muted)');
+                    var conf = (typeof d.confidence === 'number') ? (d.confidence * 100).toFixed(0) + '%' : '--';
+                    html += '<tr>' +
+                        '<td style="white-space:nowrap">' + utcToCETFull(d.timestamp || '') + '</td>' +
+                        '<td>' + escapeHtml((d.event_name || '--')) + ' <span class="currency-tag">' + escapeHtml(d.currency || '') + '</span></td>' +
+                        '<td style="color:' + dirColor + ';font-weight:600">' + escapeHtml(dir) + '</td>' +
+                        '<td>' + conf + '</td>' +
+                        '<td>' + escapeHtml(d.pair || '--') + '</td>' +
+                        '<td>' + (d.forced ? 'yes' : '') + '</td>' +
+                        '<td style="font-size:0.78rem;color:var(--text-muted);max-width:420px">' + escapeHtml((d.reasoning || '').substring(0, 220)) + '</td>' +
+                    '</tr>';
+                }
+                tbody.innerHTML = html;
+            } catch(e) {
+                $('decisionHistoryBody').innerHTML =
+                    '<tr><td colspan="7" class="no-data">Failed to load history: ' + escapeHtml(e.message) + '</td></tr>';
+            }
         }
 
         async function refreshAILog() {

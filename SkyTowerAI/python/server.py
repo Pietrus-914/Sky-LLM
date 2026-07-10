@@ -793,7 +793,8 @@ def report_market_data():
             }
 
         bars_info = {tf: len(bars) for tf, bars in ohlc_multi.items() if bars}
-        logger.info(f"Market data received for {pair}: {bars_info}")
+        # DEBUG: 4 charts x every 60s would drown the decision/trade logs
+        logger.debug(f"Market data received for {pair}: {bars_info}")
 
         return jsonify({"status": "ok", "message": f"Market data stored for {pair}"})
 
@@ -1197,6 +1198,10 @@ def select_best_pair():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+# Tracks which decision was already logged as served (log once, not per poll)
+_signal_served_log_key = None
+
+
 @app.route('/api/signal', methods=['GET'])
 def get_mt5_signal():
     """
@@ -1278,6 +1283,16 @@ def get_mt5_signal():
 
                 sl_pips = getattr(next_decision, 'stop_loss_pips', 0)
                 tp_pips = getattr(next_decision, 'take_profit_pips', 0)
+
+                # Trade-lifecycle log: one line when the EA first picks up the signal
+                global _signal_served_log_key
+                serve_key = f"{next_decision.event}_{event_time.isoformat()}_{requesting_pair}"
+                if _signal_served_log_key != serve_key:
+                    _signal_served_log_key = serve_key
+                    logger.info(f"=== SIGNAL SERVED === {next_decision.direction} {decision_pair} "
+                                f"to EA[{requesting_pair or 'any'}] | conf {next_decision.confidence:.0%} "
+                                f"| T-{int(time_until)}s | {next_decision.event}")
+
                 return jsonify({
                     "signal": True,
                     "direction": next_decision.direction,

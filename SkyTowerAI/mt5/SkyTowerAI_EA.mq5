@@ -1091,9 +1091,13 @@ void ExecuteEventTrade()
       return;
    }
 
-   //--- Calculate lot size with spread adjustment
+   //--- Calculate lot size with spread adjustment; size against the SL
+   //--- distance the trade will actually use (LLM pips or the 25-pip fallback)
    double baseLotPercent = g_eventLotPercent * spreadMultiplier;
-   double lots = CalculateLotSize(symbol, baseLotPercent);
+   double slPipsForSizing = (g_eventSLPips > 0) ? g_eventSLPips : 25.0;
+   double lots = CalculateLotSize(symbol, baseLotPercent, slPipsForSizing);
+   Print("Lot sizing: risk-based -> ", DoubleToString(lots, 2), " lots (SL ",
+         DoubleToString(slPipsForSizing, 1), " pips, lot% ", DoubleToString(baseLotPercent, 0), ")");
 
    if(spreadMultiplier < 1.0)
    {
@@ -1670,25 +1674,41 @@ void ResetSmartExitState()
 }
 
 //+------------------------------------------------------------------+
-//| Calculate lot size based on risk                                   |
+//| Calculate lot size from risk budget and SL distance                |
 //+------------------------------------------------------------------+
-double CalculateLotSize(string symbol, double lotPercent)
+double CalculateLotSize(string symbol, double lotPercent, double slPips)
 {
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   //--- Risk budget: % of balance, but never more than the USD loss
+   //--- guardrail — the position gets force-closed at -InpMaxLossUSD anyway,
+   //--- so sizing beyond it only guarantees the guardrail fires instantly
+   //--- (on the first live event a 50-lot position died to spread in 1s)
    double riskAmount = balance * InpRiskPercent / 100.0;
+   if(riskAmount > InpMaxLossUSD)
+      riskAmount = InpMaxLossUSD;
+   riskAmount *= lotPercent / 100.0;
 
-   //--- Get symbol info
+   //--- Symbol economics
    double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-   double lotStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-   double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-   double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double tickSize  = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double point     = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double lotStep   = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   double minLot    = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double maxLot    = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
 
-   //--- Calculate base lots
-   double lots = riskAmount / (tickValue * 100);
+   if(slPips <= 0)
+      slPips = 25;  // matches the EA's fallback SL distance
+   if(tickValue <= 0 || tickSize <= 0 || point <= 0)
+      return 0;
 
-   //--- Apply lot percent
-   lots = lots * lotPercent / 100.0;
+   //--- $ per pip per 1.0 lot (1 pip = 10 points on 5/3-digit quotes)
+   double pipValuePerLot = tickValue * (point * 10.0 / tickSize);
+   if(pipValuePerLot <= 0)
+      return 0;
+
+   //--- Size the position so a full SL hit loses ~riskAmount
+   double lots = riskAmount / (slPips * pipValuePerLot);
 
    //--- Normalize to lot step
    lots = MathFloor(lots / lotStep) * lotStep;
