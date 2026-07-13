@@ -899,6 +899,7 @@
         <button class="tab-btn" data-tab="config" role="tab">Event Config</button>
         <button class="tab-btn" data-tab="ai" role="tab">AI Decisions</button>
         <button class="tab-btn" data-tab="logs" role="tab">Logs</button>
+        <button class="tab-btn" data-tab="guide" role="tab">Przewodnik</button>
     </nav>
 
     <!-- ================================================================
@@ -1140,6 +1141,154 @@
         </div>
         <div class="log-terminal" id="logTerminal">
             <div class="log-line"><span class="ts">Waiting for log data...</span></div>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         TAB 6: PRZEWODNIK (PL)
+         ================================================================ -->
+    <div class="tab-content" id="tab-guide">
+
+        <!-- Jak to dziala -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Jak działa system — w skrócie</span>
+            </div>
+            <p style="font-size:0.85rem;line-height:1.6;color:var(--text-primary);margin-bottom:8px">
+                <b>Serwer (panel)</b> analizuje event i podejmuje decyzję: kierunek (BUY/SELL), pewność,
+                % lota, oraz SL/TP w pipsach. <b>EA w MT5</b> tylko wykonuje sygnał i pilnuje bezpieczników.
+            </p>
+            <p style="font-size:0.85rem;line-height:1.6;color:var(--text-primary);margin-bottom:8px">
+                Ustawienia są w <b>DWÓCH miejscach</b> i muszą być spójne:
+            </p>
+            <ul style="font-size:0.85rem;line-height:1.7;color:var(--text-primary);padding-left:22px;margin-bottom:8px">
+                <li><b>Panel → Event Config</b> — ustawienia serwera (globalne, dla wszystkich par). Działają od razu po zapisie i przeżywają restart.</li>
+                <li><b>Inputy EA w MT5</b> — osobno na <b>KAŻDYM z 4 wykresów</b> (NZDUSD, USDCAD, AUDUSD, GBPUSD). Zmiana: klik prawym na wykres → Lista ekspertów → Właściwości (lub F7 w oknie EA).</li>
+            </ul>
+            <div style="font-size:0.8rem;line-height:1.6;color:var(--text-primary);background:var(--bg-tertiary);border-left:3px solid var(--accent-red);border-radius:4px;padding:10px 12px">
+                <b style="color:var(--accent-red)">3 rzeczy, które MUSZĄ się zgadzać:</b><br>
+                1. Panel <b>"Max loss per trade USD"</b> = EA <b>InpMaxLossUSD</b> (na każdym wykresie!) — ta wartość jednocześnie wyznacza wielkość pozycji.<br>
+                2. Panel <b>"Max trades per day"</b> (limit globalny serwera) vs EA <b>InpMaxDailyTrades</b> (limit per wykres) — jeśli podniesiesz limit w panelu, podnieś też w EA, inaczej EA zablokuje wejścia wcześniej.<br>
+                3. Port serwera (SKYTOWER_PORT w .env, np. 5556) = EA <b>InpServerPort</b> + adres w allowliście WebRequest w MT5.
+            </div>
+        </div>
+
+        <!-- Panel settings -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Ustawienia w panelu (zakładka Event Config)</span>
+            </div>
+            <div class="table-wrapper">
+                <table>
+                    <thead><tr><th>Parametr</th><th>Co robi</th><th>Set 10k USD</th></tr></thead>
+                    <tbody style="font-size:0.82rem">
+                        <tr><td><b>Min. Impact Level</b></td><td>Które eventy system w ogóle rozważa (HIGH / MEDIUM+ / LOW+). Więcej eventów = więcej zagrań, ale słabsze reakcje.</td><td>MEDIUM and above</td></tr>
+                        <tr><td><b>Max trades per day</b></td><td>Globalny limit tradów dziennie (cały serwer, wszystkie pary razem). Licznik zeruje się o północy UTC.</td><td>5</td></tr>
+                        <tr><td><b>Max daily loss USD</b></td><td>Dzienny budżet straty. Po przekroczeniu serwer blokuje nowe wejścia do północy UTC.</td><td>300 (3% konta)</td></tr>
+                        <tr><td><b>Max loss per trade USD</b></td><td>Bezpiecznik pojedynczego trade'u — serwer/EA zamyka pozycję przy tej stracie. <b>Ta sama kwota jest budżetem do wyliczenia lota!</b></td><td>100 (1% konta)</td></tr>
+                        <tr><td><b>Tier 1 / Tier 2 / Currencies</b></td><td>Które typy eventów i waluty są aktywne.</td><td>bez zmian</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- EA settings -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Inputy EA (MT5 — ustaw na każdym z 4 wykresów)</span>
+            </div>
+            <div class="table-wrapper">
+                <table>
+                    <thead><tr><th>Input</th><th>Co robi</th><th>Set 10k USD</th></tr></thead>
+                    <tbody style="font-size:0.82rem">
+                        <tr><td><b>InpServerHost / InpServerPort</b></td><td>Adres serwera. Musi zgadzać się z SKYTOWER_PORT w .env i allowlistą WebRequest (Narzędzia → Opcje → Doradcy ekspertów).</td><td>127.0.0.1 / <b>5556</b></td></tr>
+                        <tr><td><b>InpRiskPercent</b></td><td>Budżet ryzyka na trade jako % salda. Wynik i tak jest ścinany do InpMaxLossUSD, ale ustaw świadomie.</td><td><b>1.0</b> (10k × 1% = 100$)</td></tr>
+                        <tr><td><b>InpMaxLossUSD</b></td><td>Twardy bezpiecznik $: EA zamyka pozycję przy tej stracie <b>i</b> z tej kwoty liczy wielkość lota. = panel "Max loss per trade".</td><td><b>100</b></td></tr>
+                        <tr><td><b>InpMaxLotPercent</b></td><td>Domyślny % budżetu, gdy serwer nie poda lot_percent w sygnale.</td><td>80</td></tr>
+                        <tr><td><b>InpMinConfidence</b></td><td>Minimalna pewność decyzji, żeby wejść. Sygnały testowe (forced) omijają ten próg automatycznie.</td><td>0.5</td></tr>
+                        <tr><td><b>InpMaxSpreadPips</b></td><td>Max spread przy wejściu. Spread na newsach jest ZAWSZE wysoki — nie podnosić "na siłę"; przy 3–10 pipsach EA sam redukuje lot.</td><td>10</td></tr>
+                        <tr><td><b>InpMaxDailyTrades</b></td><td>Limit tradów dziennie <b>per wykres</b> (niezależny od limitu serwera).</td><td>3</td></tr>
+                        <tr><td><b>InpUseStopLoss</b></td><td>Zawsze włączone — SL to podstawa wyliczenia lota.</td><td>true</td></tr>
+                        <tr><td><b>InpEntrySecondsBefore</b></td><td>Wejście X sekund przed publikacją.</td><td>15</td></tr>
+                        <tr><td><b>InpMaxHoldMinutes</b></td><td>Maksymalny czas trzymania pozycji — po nim zamknięcie bezwarunkowe.</td><td>30</td></tr>
+                        <tr><td><b>InpPartialCloseTP1 / InpTP1ClosePercent</b></td><td>Na TP1 zamyka część pozycji (domyślnie 50%) i realizuje zysk.</td><td>true / 50</td></tr>
+                        <tr><td><b>InpMoveSLToBreakeven</b></td><td>Po TP1 przesuwa SL na cenę wejścia — reszta pozycji jedzie "za darmo".</td><td>true</td></tr>
+                        <tr><td><b>InpTrailAfterTP1 / InpTrailDistancePips</b></td><td>Trailing stop po TP1 — goni cenę w odległości X pipsów.</td><td>true / 10</td></tr>
+                        <tr><td><b>InpEmergencySpreadPips</b></td><td>Awaryjne zamknięcie otwartej pozycji, gdy spread przekroczy X pipsów.</td><td>15</td></tr>
+                        <tr><td><b>InpPushMarketData / InpReportReactions</b></td><td>Wysyłka świec do serwera (kontekst dla LLM) + raportowanie reakcji po evencie (baza wiedzy). Nie wyłączać.</td><td>true / true</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Lot / SL / TP -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Jak EA liczy lota, SL i TP</span>
+            </div>
+            <div class="config-section" style="margin-top:0">
+                <h3>Wielkość pozycji (lot)</h3>
+                <div style="font-size:0.83rem;line-height:1.7;color:var(--text-primary)">
+                    <code style="display:block;background:var(--bg-tertiary);border-radius:4px;padding:8px 10px;margin:6px 0;font-size:0.8rem">
+                    budżet = min(saldo × InpRiskPercent%, InpMaxLossUSD) × lot%<br>
+                    lot = budżet / (SL_w_pipsach × wartość_pipsa_za_1_lot)
+                    </code>
+                    <b>lot%</b> przychodzi z sygnału serwera (zależny od pewności decyzji), a przy podwyższonym
+                    spreadzie EA dodatkowo go redukuje (3–6 pips → 80%, 6–10 pips → 60%, &gt;15 pips → brak wejścia).
+                    Efekt: pełne trafienie SL kosztuje ~budżet, nigdy więcej niż InpMaxLossUSD.
+                </div>
+            </div>
+            <div class="config-section">
+                <h3>Stop Loss — kto go ustawia (priorytety)</h3>
+                <div style="font-size:0.83rem;line-height:1.7;color:var(--text-primary)">
+                    1. <b>LLM</b> — decyzja serwera zawiera stop_loss_pips (dopasowany do zmienności/ATR).<br>
+                    2. Gdy brak — <b>strefy S/R</b> z indykatora SkyTower_Zones.<br>
+                    3. Gdy brak — <b>domyślne 25 pipsów</b>.<br>
+                    Zawsze na końcu clamp do zakresu <b>20–100 pipsów</b>. SL nie jest kwotą — kwotę straty ogranicza InpMaxLossUSD.
+                </div>
+            </div>
+            <div class="config-section">
+                <h3>Take Profit — zarządzany dynamicznie (Smart Exit)</h3>
+                <div style="font-size:0.83rem;line-height:1.7;color:var(--text-primary)">
+                    TP1 z decyzji LLM lub ze stref. Po osiągnięciu TP1: częściowe zamknięcie (50%),
+                    SL na breakeven, trailing 10 pipsów na reszcie. Dodatkowo AI ocenia pozycję co 30 s
+                    i może zamknąć wcześniej. Twarde wyjścia: strata −InpMaxLossUSD, czas &gt;InpMaxHoldMinutes,
+                    spread &gt;InpEmergencySpreadPips.
+                </div>
+            </div>
+        </div>
+
+        <!-- Example 10k -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Przykład: konto 10 000 USD — co się stanie na evencie</span>
+            </div>
+            <div style="font-size:0.83rem;line-height:1.8;color:var(--text-primary)">
+                Ustawienia: panel 5 tradów / 300$ dziennie / 100$ na trade; EA: InpRiskPercent 1.0, InpMaxLossUSD 100.<br><br>
+                1. Serwer decyduje: SELL USDCAD, pewność 0.65 → <b>lot% = 70</b>, SL od LLM = <b>30 pipsów</b>.<br>
+                2. Budżet: min(10 000 × 1%, 100$) = 100$ × 70% = <b>70$</b>. Spread 5 pipsów → redukcja do 80% → <b>56$</b>.<br>
+                3. Lot: 56$ / (30 pipsów × ~7,30$/pips za 1 lot USDCAD) ≈ <b>0.25 lota</b>
+                   (dla par XXX/USD pips za 1 lot ≈ 10$ → wyszłoby ~0.18 lota).<br>
+                4. Wejście 15 s przed publikacją, SL 30 pipsów od ceny.<br>
+                5. Najgorszy scenariusz: pełny SL ≈ −56$ (+ koszt spreadu); bezwzględny sufit −100$ (InpMaxLossUSD).<br>
+                6. Dobry scenariusz: TP1 → zamknięcie 50%, SL na wejście, trailing na reszcie. Po 30 min pozycja znika niezależnie od wyniku.<br>
+                7. Po 3 stratach ~100$ (limit dzienny 300$) lub 5 tradach serwer blokuje handel do północy UTC.
+            </div>
+        </div>
+
+        <!-- FAQ -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Częste pytania</span>
+            </div>
+            <div style="font-size:0.83rem;line-height:1.7;color:var(--text-primary)">
+                <b>Chcę grać agresywniej / testować więcej.</b> Podnieś w panelu "Max trades per day" i "Max daily loss",
+                a w EA InpMaxDailyTrades na każdym wykresie. Wielkość pozycji rośnie przez "Max loss per trade" (panel) + InpMaxLossUSD (EA) — zawsze razem.<br><br>
+                <b>Chcę mniejsze pozycje bez zmiany bezpieczników.</b> Zmniejsz InpRiskPercent (np. 0.5 = ~50$ budżetu na 10k) albo InpMaxLotPercent.<br><br>
+                <b>Dlaczego lot jest różny na różnych tradach?</b> Bo zależy od SL w pipsach (dalszy SL = mniejszy lot), pewności decyzji i spreadu w momencie wejścia. To celowe — strata w $ jest stała, nie wielkość pozycji.<br><br>
+                <b>Zmieniłem input EA i nic się nie zmieniło.</b> Inputy trzeba zmienić na <b>każdym wykresie osobno</b> — EA na NZDUSD nie widzi ustawień EA na GBPUSD.<br><br>
+                <b>FORCE_DECISION (tryb bez SKIP)</b> — wyłącznie na koncie DEMO. Na realnym koncie system musi mieć prawo odpuścić event.
+            </div>
         </div>
     </div>
 
