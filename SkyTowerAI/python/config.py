@@ -305,6 +305,59 @@ SERVER_CONFIG = {
 }
 
 # =============================================================================
+# RUNTIME OVERRIDES (dashboard-editable settings that survive restarts)
+# =============================================================================
+# The dashboard saves operational settings (risk limits, min impact) here so
+# nobody has to edit .env by hand. Precedence: default < env < this file.
+_OVERRIDES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'logs', 'runtime_overrides.json')
+
+
+def save_runtime_overrides(updates: dict):
+    """Merge updates into the overrides file (atomic write)."""
+    import json
+    data = {}
+    try:
+        if os.path.exists(_OVERRIDES_FILE):
+            with open(_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    data.update(updates)
+    os.makedirs(os.path.dirname(_OVERRIDES_FILE), exist_ok=True)
+    tmp = _OVERRIDES_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, _OVERRIDES_FILE)
+
+
+def _apply_runtime_overrides():
+    import json
+    try:
+        if not os.path.exists(_OVERRIDES_FILE):
+            return
+        with open(_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    global MIN_IMPACT_LEVEL
+    if str(data.get('min_impact', '')).upper() in ("LOW", "MEDIUM", "HIGH"):
+        MIN_IMPACT_LEVEL = str(data['min_impact']).upper()
+    for key, lo, hi, cast in (("max_daily_trades", 1, 100, int),
+                              ("max_daily_loss_usd", 10, 1_000_000, float),
+                              ("max_loss_usd", 5, 100_000, float)):
+        if key in data:
+            try:
+                value = cast(data[key])
+                if lo <= value <= hi:
+                    POSITION_MANAGEMENT_CONFIG[key] = value
+            except (TypeError, ValueError):
+                pass
+
+
+_apply_runtime_overrides()
+
+# =============================================================================
 # TEST MODE: FORCE DECISION (never SKIP)
 # =============================================================================
 # When enabled, the entry decision engine must always pick BUY or SELL —

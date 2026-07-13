@@ -1046,6 +1046,28 @@
                 </div>
             </div>
 
+            <!-- Risk & Daily Limits -->
+            <div class="config-section">
+                <h3>Risk &amp; Daily Limits</h3>
+                <div class="config-row">
+                    <label for="riskMaxDailyTrades">Max trades per day (server)</label>
+                    <input type="number" id="riskMaxDailyTrades" min="1" max="100" step="1" style="width:110px">
+                </div>
+                <div class="config-row">
+                    <label for="riskMaxDailyLoss">Max daily loss USD</label>
+                    <input type="number" id="riskMaxDailyLoss" min="10" max="1000000" step="10" style="width:110px">
+                </div>
+                <div class="config-row">
+                    <label for="riskMaxLoss">Max loss per trade USD (also sizes the lot!)</label>
+                    <input type="number" id="riskMaxLoss" min="5" max="100000" step="5" style="width:110px">
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
+                    Changes apply immediately and survive restarts. Remember the EA-side
+                    inputs on each chart: InpMaxDailyTrades (per chart) and InpMaxLossUSD
+                    (should match "Max loss per trade").
+                </div>
+            </div>
+
             <!-- Save Button -->
             <div class="config-actions">
                 <button class="btn btn-primary" id="btnSaveConfig">Save Configuration</button>
@@ -1662,17 +1684,38 @@
                     body: JSON.stringify(config)
                 });
 
-                if (resp.ok) {
-                    showToast('Configuration saved successfully');
+                // Risk & daily limits go to their own endpoint
+                var riskPayload = {
+                    max_daily_trades: parseInt($('riskMaxDailyTrades').value, 10),
+                    max_daily_loss_usd: parseFloat($('riskMaxDailyLoss').value),
+                    max_loss_usd: parseFloat($('riskMaxLoss').value)
+                };
+                var riskResp = await fetch(BASE_URL + '/api/config/risk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(riskPayload)
+                });
+
+                if (resp.ok && riskResp.ok) {
+                    showToast('Configuration saved (applies immediately, survives restarts)');
+                } else if (!riskResp.ok) {
+                    var err = await riskResp.json().catch(function(){ return {}; });
+                    showToast('Risk limits rejected: ' + (err.message || riskResp.status), false);
                 } else {
-                    // API may not exist yet - show a message
-                    showToast('Config saved locally (API endpoint not yet implemented)', false);
+                    showToast('Event config save failed', false);
                 }
             } catch(e) {
-                // Endpoint not implemented yet - save to localStorage as fallback
-                localStorage.setItem('skytower_event_config', JSON.stringify(config));
-                showToast('Config saved locally (server endpoint not available yet)', false);
+                showToast('Save failed: ' + e.message, false);
             }
+        }
+
+        async function loadRiskConfig() {
+            try {
+                var data = await apiFetch('/api/config/risk');
+                if (data.max_daily_trades != null) $('riskMaxDailyTrades').value = data.max_daily_trades;
+                if (data.max_daily_loss_usd != null) $('riskMaxDailyLoss').value = data.max_daily_loss_usd;
+                if (data.max_loss_usd != null) $('riskMaxLoss').value = data.max_loss_usd;
+            } catch(e) { /* server offline - leave blank */ }
         }
 
         function resetConfig() {
@@ -1990,6 +2033,16 @@
             } catch(e) {
                 // Ignore localStorage errors
             }
+
+            // Server-persisted settings are the source of truth — override
+            // whatever localStorage said once the API answers
+            (async function() {
+                try {
+                    var sc = await apiFetch('/api/config/events');
+                    if (sc.min_impact) $('minImpact').value = sc.min_impact;
+                } catch(e) { /* offline */ }
+                loadRiskConfig();
+            })();
         }
 
         init();

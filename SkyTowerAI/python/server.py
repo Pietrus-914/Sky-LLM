@@ -134,9 +134,51 @@ def config_events():
         level = str(data['min_impact']).strip().upper()
         if level in ("LOW", "MEDIUM", "HIGH"):
             cfg.MIN_IMPACT_LEVEL = level
-            logger.info(f"Min impact level set to {level} via dashboard "
-                        f"(add SKYTOWER_MIN_IMPACT={level} to .env to survive restarts)")
+            cfg.save_runtime_overrides({"min_impact": level})
+            logger.info(f"Min impact level set to {level} via dashboard (persisted)")
     return jsonify({"status": "ok", "message": "Event config updated"})
+
+
+@app.route('/api/config/risk', methods=['GET', 'POST'])
+def config_risk():
+    """
+    Dashboard-editable risk limits (persisted across restarts via
+    logs/runtime_overrides.json). PositionManager reads the live config
+    dict on every check, so changes apply immediately.
+    NOTE: the EA has its own per-chart backups (InpMaxDailyTrades,
+    InpMaxLossUSD) that must be adjusted in MT5 inputs separately.
+    """
+    import config as cfg
+
+    if request.method == 'GET':
+        pm = cfg.POSITION_MANAGEMENT_CONFIG
+        return jsonify({
+            "status": "ok",
+            "max_daily_trades": pm.get("max_daily_trades"),
+            "max_daily_loss_usd": pm.get("max_daily_loss_usd"),
+            "max_loss_usd": pm.get("max_loss_usd"),
+        })
+
+    data = request.json or {}
+    updated = {}
+    for key, lo, hi, cast in (("max_daily_trades", 1, 100, int),
+                              ("max_daily_loss_usd", 10, 1_000_000, float),
+                              ("max_loss_usd", 5, 100_000, float)):
+        if key in data:
+            try:
+                value = cast(data[key])
+            except (TypeError, ValueError):
+                return jsonify({"status": "error", "message": f"{key}: not a number"}), 400
+            if not (lo <= value <= hi):
+                return jsonify({"status": "error",
+                                "message": f"{key}: must be between {lo} and {hi}"}), 400
+            cfg.POSITION_MANAGEMENT_CONFIG[key] = value
+            updated[key] = value
+
+    if updated:
+        cfg.save_runtime_overrides(updated)
+        logger.info(f"Risk limits updated via dashboard: {updated}")
+    return jsonify({"status": "ok", "updated": updated})
 
 
 @app.route('/api/decisions/history', methods=['GET'])
