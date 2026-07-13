@@ -126,6 +126,13 @@ if _extra_events.strip():
 # Wszystkie high impact events (dla kompatybilności)
 HIGH_IMPACT_EVENTS = TIER1_EVENTS + TIER2_EVENTS
 
+# Minimalny poziom impactu eventów branych do handlu (LOW/MEDIUM/HIGH).
+# Zmienialny w locie przez dashboard (POST /api/config/events); wartość
+# z .env jest stanem startowym po każdym restarcie serwera.
+MIN_IMPACT_LEVEL = os.getenv("SKYTOWER_MIN_IMPACT", "MEDIUM").strip().upper()
+if MIN_IMPACT_LEVEL not in ("LOW", "MEDIUM", "HIGH"):
+    MIN_IMPACT_LEVEL = "MEDIUM"
+
 # Events suitable for LITE version (hedging both directions)
 LITE_EVENTS = {
     "AUD": ["GDP", "CPI"],

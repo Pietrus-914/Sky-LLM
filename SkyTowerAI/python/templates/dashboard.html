@@ -1547,7 +1547,9 @@
         async function refreshEvents() {
             showRefreshBar();
             try {
-                var data = await apiFetch('/api/events?hours=24&impact=MEDIUM');
+                // Show everything down to LOW — the trading filter (Min. Impact
+                // Level in Event Config) decides what actually gets traded
+                var data = await apiFetch('/api/events?hours=24&impact=LOW');
                 var tbody = $('eventsTableBody');
                 var countBadge = $('eventCount');
 

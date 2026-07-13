@@ -119,6 +119,7 @@ def config_events():
             "tier2_events": cfg.TIER2_EVENTS,
             "all_events": cfg.HIGH_IMPACT_EVENTS,
             "currencies": list(cfg.CURRENCY_PAIRS.keys()),
+            "min_impact": getattr(cfg, "MIN_IMPACT_LEVEL", "MEDIUM"),
         })
 
     # POST: update event config at runtime
@@ -129,6 +130,12 @@ def config_events():
         cfg.TIER2_EVENTS = data['tier2_events']
     if 'tier1_events' in data or 'tier2_events' in data:
         cfg.HIGH_IMPACT_EVENTS = cfg.TIER1_EVENTS + cfg.TIER2_EVENTS
+    if 'min_impact' in data:
+        level = str(data['min_impact']).strip().upper()
+        if level in ("LOW", "MEDIUM", "HIGH"):
+            cfg.MIN_IMPACT_LEVEL = level
+            logger.info(f"Min impact level set to {level} via dashboard "
+                        f"(add SKYTOWER_MIN_IMPACT={level} to .env to survive restarts)")
     return jsonify({"status": "ok", "message": "Event config updated"})
 
 

@@ -529,16 +529,17 @@ class CalendarAggregator:
         Returns:
             Next matching event or None
         """
-        from config import HIGH_IMPACT_EVENTS, CURRENCY_PAIRS
+        import config as cfg
 
         if event_keywords is None:
-            event_keywords = HIGH_IMPACT_EVENTS
+            event_keywords = cfg.HIGH_IMPACT_EVENTS
         if currencies is None:
-            currencies = list(CURRENCY_PAIRS.keys())
+            currencies = list(cfg.CURRENCY_PAIRS.keys())
 
         events = self.get_upcoming_events(
             currencies=currencies,
-            impact_filter="MEDIUM",
+            # Runtime attribute read — the dashboard can change it on the fly
+            impact_filter=getattr(cfg, "MIN_IMPACT_LEVEL", "MEDIUM"),
             hours_ahead=168  # 1 week
         )
 
@@ -573,16 +574,17 @@ class CalendarAggregator:
         Returns:
             List of matching future events sorted by time
         """
-        from config import HIGH_IMPACT_EVENTS, CURRENCY_PAIRS
+        import config as cfg
 
         if event_keywords is None:
-            event_keywords = HIGH_IMPACT_EVENTS
+            event_keywords = cfg.HIGH_IMPACT_EVENTS
         if currencies is None:
-            currencies = list(CURRENCY_PAIRS.keys())
+            currencies = list(cfg.CURRENCY_PAIRS.keys())
 
         events = self.get_upcoming_events(
             currencies=currencies,
-            impact_filter="MEDIUM",
+            # Runtime attribute read — the dashboard can change it on the fly
+            impact_filter=getattr(cfg, "MIN_IMPACT_LEVEL", "MEDIUM"),
             hours_ahead=168  # 1 week
         )
 
