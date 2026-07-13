@@ -29,6 +29,8 @@ input double   InpRiskPercent = 10.0;            // Risk % per trade (of balance
 input double   InpMaxLotPercent = 80.0;          // Max Lot % (default from server)
 input int      InpSlippage = 50;                 // Max Slippage (points)
 input double   InpMinConfidence = 0.5;           // Min Confidence to trade
+input bool     InpUseConfidenceLot = true;       // Reduce lot by decision confidence (server lot%)
+input bool     InpUseSpreadLotReduction = true;  // Reduce lot by spread level
 
 input group "=== Safety Settings ==="
 input double   InpMaxSpreadPips = 10.0;          // Max Spread (pips)
@@ -1091,17 +1093,31 @@ void ExecuteEventTrade()
       return;
    }
 
-   //--- Calculate lot size with spread adjustment; size against the SL
-   //--- distance the trade will actually use (LLM pips or the 25-pip fallback)
-   double baseLotPercent = g_eventLotPercent * spreadMultiplier;
+   //--- Calculate lot size; size against the SL distance the trade will
+   //--- actually use (LLM pips or the 25-pip fallback). Both reductions
+   //--- (confidence lot% from server, spread multiplier) are optional —
+   //--- when disabled the full risk budget is used. The extreme-spread
+   //--- and InpMaxSpreadPips entry blocks above stay active regardless.
+   double confLotPercent = InpUseConfidenceLot ? g_eventLotPercent : 100.0;
+   double appliedSpreadMult = InpUseSpreadLotReduction ? spreadMultiplier : 1.0;
+   double baseLotPercent = confLotPercent * appliedSpreadMult;
    double slPipsForSizing = (g_eventSLPips > 0) ? g_eventSLPips : 25.0;
    double lots = CalculateLotSize(symbol, baseLotPercent, slPipsForSizing);
    Print("Lot sizing: risk-based -> ", DoubleToString(lots, 2), " lots (SL ",
-         DoubleToString(slPipsForSizing, 1), " pips, lot% ", DoubleToString(baseLotPercent, 0), ")");
+         DoubleToString(slPipsForSizing, 1), " pips, lot% ", DoubleToString(baseLotPercent, 0),
+         " = conf ", DoubleToString(confLotPercent, 0), "% x spread ", DoubleToString(appliedSpreadMult * 100, 0), "%)");
 
-   if(spreadMultiplier < 1.0)
+   if(!InpUseConfidenceLot && g_eventLotPercent < 100.0)
    {
-      Print("Spread warning: ", DoubleToString(spread, 1), " pips. Lot reduced to ", DoubleToString(spreadMultiplier * 100, 0), "%");
+      Print("Confidence lot reduction DISABLED (server suggested ", DoubleToString(g_eventLotPercent, 0), "%)");
+   }
+   if(appliedSpreadMult < 1.0)
+   {
+      Print("Spread warning: ", DoubleToString(spread, 1), " pips. Lot reduced to ", DoubleToString(appliedSpreadMult * 100, 0), "%");
+   }
+   else if(!InpUseSpreadLotReduction && spreadMultiplier < 1.0)
+   {
+      Print("Spread lot reduction DISABLED (would have been ", DoubleToString(spreadMultiplier * 100, 0), "%)");
    }
    if(lots <= 0)
    {
@@ -1205,7 +1221,7 @@ void ExecuteEventTrade()
       Print("Lots: ", DoubleToString(lots, 2));
       Print("Price: ", (g_eventDirection == "BUY") ? ask : bid);
       Print("Spread: ", DoubleToString(spread, 1), " pips (", GetSpreadStatus(spread), ")");
-      Print("Lot Multiplier: ", DoubleToString(spreadMultiplier * 100, 0), "%");
+      Print("Lot Multiplier: ", DoubleToString(appliedSpreadMult * 100, 0), "%");
       if(sl > 0) Print("Stop Loss: ", sl);
       Print("Ticket: ", g_currentTicket);
       Print("==============================================");

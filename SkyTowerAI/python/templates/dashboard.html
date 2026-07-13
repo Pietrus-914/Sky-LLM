@@ -1204,9 +1204,11 @@
                         <tr><td><b>InpServerHost / InpServerPort</b></td><td>Adres serwera. Musi zgadzać się z SKYTOWER_PORT w .env i allowlistą WebRequest (Narzędzia → Opcje → Doradcy ekspertów).</td><td>127.0.0.1 / <b>5556</b></td></tr>
                         <tr><td><b>InpRiskPercent</b></td><td>Budżet ryzyka na trade jako % salda. Wynik i tak jest ścinany do InpMaxLossUSD, ale ustaw świadomie.</td><td><b>1.0</b> (10k × 1% = 100$)</td></tr>
                         <tr><td><b>InpMaxLossUSD</b></td><td>Twardy bezpiecznik $: EA zamyka pozycję przy tej stracie <b>i</b> z tej kwoty liczy wielkość lota. = panel "Max loss per trade".</td><td><b>100</b></td></tr>
-                        <tr><td><b>InpMaxLotPercent</b></td><td>Domyślny % budżetu, gdy serwer nie poda lot_percent w sygnale.</td><td>80</td></tr>
+                        <tr><td><b>InpMaxLotPercent</b></td><td>Domyślny % budżetu, gdy serwer nie poda lot_percent w sygnale. Używany tylko przy InpUseConfidenceLot = true.</td><td>80</td></tr>
                         <tr><td><b>InpMinConfidence</b></td><td>Minimalna pewność decyzji, żeby wejść. Sygnały testowe (forced) omijają ten próg automatycznie.</td><td>0.5</td></tr>
-                        <tr><td><b>InpMaxSpreadPips</b></td><td>Max spread przy wejściu. Spread na newsach jest ZAWSZE wysoki — nie podnosić "na siłę"; przy 3–10 pipsach EA sam redukuje lot.</td><td>10</td></tr>
+                        <tr><td><b>InpUseConfidenceLot</b></td><td>true = lot skalowany przez lot% z sygnału serwera (zależny od pewności decyzji). false = zawsze pełny budżet, prostszy i przewidywalny sizing.</td><td><b>false</b></td></tr>
+                        <tr><td><b>InpUseSpreadLotReduction</b></td><td>true = lot redukowany przy podwyższonym spreadzie (3–6 pips → 80%, 6–10 → 60%, 10–15 → 40%). false = bez redukcji. Blokady wejścia (spread &gt; InpMaxSpreadPips oraz &gt; 15 pips) działają ZAWSZE, niezależnie od tego przełącznika.</td><td><b>false</b></td></tr>
+                        <tr><td><b>InpMaxSpreadPips</b></td><td>Max spread przy wejściu. Spread na newsach jest ZAWSZE wysoki — nie podnosić "na siłę".</td><td>10</td></tr>
                         <tr><td><b>InpMaxDailyTrades</b></td><td>Limit tradów dziennie <b>per wykres</b> (niezależny od limitu serwera).</td><td>3</td></tr>
                         <tr><td><b>InpUseStopLoss</b></td><td>Zawsze włączone — SL to podstawa wyliczenia lota.</td><td>true</td></tr>
                         <tr><td><b>InpEntrySecondsBefore</b></td><td>Wejście X sekund przed publikacją.</td><td>15</td></tr>
@@ -1230,11 +1232,14 @@
                 <h3>Wielkość pozycji (lot)</h3>
                 <div style="font-size:0.83rem;line-height:1.7;color:var(--text-primary)">
                     <code style="display:block;background:var(--bg-tertiary);border-radius:4px;padding:8px 10px;margin:6px 0;font-size:0.8rem">
-                    budżet = min(saldo × InpRiskPercent%, InpMaxLossUSD) × lot%<br>
+                    budżet = min(saldo × InpRiskPercent%, InpMaxLossUSD)<br>
                     lot = budżet / (SL_w_pipsach × wartość_pipsa_za_1_lot)
                     </code>
-                    <b>lot%</b> przychodzi z sygnału serwera (zależny od pewności decyzji), a przy podwyższonym
-                    spreadzie EA dodatkowo go redukuje (3–6 pips → 80%, 6–10 pips → 60%, &gt;15 pips → brak wejścia).
+                    Opcjonalnie budżet może być dodatkowo zmniejszany przez dwa przełączniki (oba do wyboru w inputach EA):<br>
+                    • <b>InpUseConfidenceLot</b> = true → budżet × lot% z sygnału (niższa pewność decyzji = mniejsza pozycja);<br>
+                    • <b>InpUseSpreadLotReduction</b> = true → budżet × mnożnik spreadu (3–6 pips → 80%, 6–10 → 60%, 10–15 → 40%).<br>
+                    Przy obu wyłączonych lot liczy się z pełnego budżetu — najprościej. Niezależnie od przełączników
+                    EA <b>nie wejdzie</b>, gdy spread &gt; InpMaxSpreadPips lub &gt; 15 pipsów.
                     Efekt: pełne trafienie SL kosztuje ~budżet, nigdy więcej niż InpMaxLossUSD.
                 </div>
             </div>
@@ -1264,15 +1269,18 @@
                 <span class="card-title">Przykład: konto 10 000 USD — co się stanie na evencie</span>
             </div>
             <div style="font-size:0.83rem;line-height:1.8;color:var(--text-primary)">
-                Ustawienia: panel 5 tradów / 300$ dziennie / 100$ na trade; EA: InpRiskPercent 1.0, InpMaxLossUSD 100.<br><br>
-                1. Serwer decyduje: SELL USDCAD, pewność 0.65 → <b>lot% = 70</b>, SL od LLM = <b>30 pipsów</b>.<br>
-                2. Budżet: min(10 000 × 1%, 100$) = 100$ × 70% = <b>70$</b>. Spread 5 pipsów → redukcja do 80% → <b>56$</b>.<br>
-                3. Lot: 56$ / (30 pipsów × ~7,30$/pips za 1 lot USDCAD) ≈ <b>0.25 lota</b>
-                   (dla par XXX/USD pips za 1 lot ≈ 10$ → wyszłoby ~0.18 lota).<br>
+                Ustawienia: panel 5 tradów / 300$ dziennie / 100$ na trade; EA: InpRiskPercent 1.0, InpMaxLossUSD 100,
+                <b>InpUseConfidenceLot = false, InpUseSpreadLotReduction = false</b> (bez redukcji — pełny budżet).<br><br>
+                1. Serwer decyduje: SELL USDCAD, SL od LLM = <b>30 pipsów</b>.<br>
+                2. Budżet: min(10 000 × 1%, 100$) = <b>100$</b>.<br>
+                3. Lot: 100$ / (30 pipsów × ~7,30$/pips za 1 lot USDCAD) ≈ <b>0.45 lota</b>
+                   (dla par XXX/USD pips za 1 lot ≈ 10$ → ~0.33 lota).<br>
                 4. Wejście 15 s przed publikacją, SL 30 pipsów od ceny.<br>
-                5. Najgorszy scenariusz: pełny SL ≈ −56$ (+ koszt spreadu); bezwzględny sufit −100$ (InpMaxLossUSD).<br>
+                5. Najgorszy scenariusz: pełny SL ≈ −100$ (+ koszt spreadu); twardy sufit to i tak −100$ (InpMaxLossUSD).<br>
                 6. Dobry scenariusz: TP1 → zamknięcie 50%, SL na wejście, trailing na reszcie. Po 30 min pozycja znika niezależnie od wyniku.<br>
-                7. Po 3 stratach ~100$ (limit dzienny 300$) lub 5 tradach serwer blokuje handel do północy UTC.
+                7. Po 3 stratach ~100$ (limit dzienny 300$) lub 5 tradach serwer blokuje handel do północy UTC.<br><br>
+                <span style="color:var(--text-secondary)">Z włączonymi redukcjami (oba przełączniki = true) budżet z kroku 2 byłby dodatkowo mnożony:
+                np. pewność 0.65 → lot% 70, spread 5 pipsów → ×80% ⇒ 100$ × 0.70 × 0.80 = 56$ → ~0.25 lota. Mniejsze pozycje, ale mniej przewidywalne.</span>
             </div>
         </div>
 
@@ -1284,8 +1292,8 @@
             <div style="font-size:0.83rem;line-height:1.7;color:var(--text-primary)">
                 <b>Chcę grać agresywniej / testować więcej.</b> Podnieś w panelu "Max trades per day" i "Max daily loss",
                 a w EA InpMaxDailyTrades na każdym wykresie. Wielkość pozycji rośnie przez "Max loss per trade" (panel) + InpMaxLossUSD (EA) — zawsze razem.<br><br>
-                <b>Chcę mniejsze pozycje bez zmiany bezpieczników.</b> Zmniejsz InpRiskPercent (np. 0.5 = ~50$ budżetu na 10k) albo InpMaxLotPercent.<br><br>
-                <b>Dlaczego lot jest różny na różnych tradach?</b> Bo zależy od SL w pipsach (dalszy SL = mniejszy lot), pewności decyzji i spreadu w momencie wejścia. To celowe — strata w $ jest stała, nie wielkość pozycji.<br><br>
+                <b>Chcę mniejsze pozycje bez zmiany bezpieczników.</b> Zmniejsz InpRiskPercent (np. 0.5 = ~50$ budżetu na 10k) — albo włącz redukcje (InpUseConfidenceLot / InpUseSpreadLotReduction = true).<br><br>
+                <b>Dlaczego lot jest różny na różnych tradach?</b> Bo zależy od SL w pipsach (dalszy SL = mniejszy lot), a przy włączonych przełącznikach InpUseConfidenceLot / InpUseSpreadLotReduction — także od pewności decyzji i spreadu. To celowe — stała jest strata w $, nie wielkość pozycji.<br><br>
                 <b>Zmieniłem input EA i nic się nie zmieniło.</b> Inputy trzeba zmienić na <b>każdym wykresie osobno</b> — EA na NZDUSD nie widzi ustawień EA na GBPUSD.<br><br>
                 <b>FORCE_DECISION (tryb bez SKIP)</b> — wyłącznie na koncie DEMO. Na realnym koncie system musi mieć prawo odpuścić event.
             </div>
