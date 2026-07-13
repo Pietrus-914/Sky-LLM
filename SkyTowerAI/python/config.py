@@ -7,6 +7,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_float(name: str, default: float) -> float:
+    """Float env var with the same empty/garbage fallback as _env_int."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw.strip().replace(",", "."))
+    except ValueError:
+        print(f"WARNING: {name}='{raw}' is not a valid number — using default {default}")
+        return default
+
+
 def _env_int(name: str, default: int) -> int:
     """Read an int env var, falling back on empty/garbage values instead of
     crashing the whole server at import time (a blank line in .env or
@@ -259,8 +271,10 @@ LLM_CONFIG = {
 # AI POSITION MANAGEMENT (USD-based guardrails)
 # =============================================================================
 POSITION_MANAGEMENT_CONFIG = {
-    # Safety guardrails in USD (server-side + EA-side backup)
-    "max_loss_usd": 100.0,             # Max loss $ per trade → forced close
+    # Safety guardrails in USD (server-side + EA-side backup).
+    # Env-overridable for the test phase; keep the EA inputs in sync
+    # (InpMaxLossUSD also caps the lot-sizing risk budget!).
+    "max_loss_usd": _env_float("SKYTOWER_MAX_LOSS_USD", 100.0),        # per trade → forced close
     "max_hold_minutes": 30,            # Max position duration
     "emergency_spread_pips": 15,       # Close if spread spikes above this
     "profit_protection_percent": 50,   # Close if profit drops >50% from peak
@@ -272,8 +286,8 @@ POSITION_MANAGEMENT_CONFIG = {
     "normal_poll_interval": 15,        # EA poll interval after hot period (seconds)
 
     # Daily limits (USD and count)
-    "max_daily_loss_usd": 300.0,       # Stop trading if daily losses exceed this
-    "max_daily_trades": 5,             # Max trades per day
+    "max_daily_loss_usd": _env_float("SKYTOWER_MAX_DAILY_LOSS_USD", 300.0),  # stop for the day past this
+    "max_daily_trades": _env_int("SKYTOWER_MAX_DAILY_TRADES", 5),            # max trades per day
 
     # LLM model for exit decisions (can be cheaper/faster than entry model)
     "exit_llm_model": "anthropic/claude-sonnet-4",
