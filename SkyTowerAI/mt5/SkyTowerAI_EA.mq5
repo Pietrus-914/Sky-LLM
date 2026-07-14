@@ -99,6 +99,12 @@ double         g_eventTPPips = 0;       // TP in pips from LLM
 // initializer below is never traded on.
 double         g_maxLossUSD = 100.0;
 ulong          g_currentTicket = 0;
+// Realized-P/L tracking: POSITION_IDENTIFIER keys the deal history
+// (HistorySelectByPosition); the last floating profit is the fallback when
+// an externally-closed position's deals are not yet queryable
+ulong          g_currentPositionId = 0;
+double         g_lastKnownProfit = 0.0;
+int            g_closeRetryCount = 0;
 
 // Smart exit state
 bool           g_tp1Hit = false;
@@ -729,7 +735,7 @@ bool AppendOhlcJson(string &json, string tfName, ENUM_TIMEFRAMES period, int cou
 }
 
 //+------------------------------------------------------------------+
-//| Push current OHLC (M5/M15/H1) to the server for LLM market context |
+//| Push current OHLC (M1/M5/M15/H1) to server for LLM market context  |
 //+------------------------------------------------------------------+
 void PushMarketData()
 {
@@ -741,6 +747,7 @@ void PushMarketData()
       _Symbol, currentPrice, (int)spread);
 
    string ohlcPart = "";
+   AppendOhlcJson(ohlcPart, "M1", PERIOD_M1, 60);   // fine pre-news picture
    AppendOhlcJson(ohlcPart, "M5", PERIOD_M5, 60);
    AppendOhlcJson(ohlcPart, "M15", PERIOD_M15, 40);
    AppendOhlcJson(ohlcPart, "H1", PERIOD_H1, 48);
@@ -1221,6 +1228,16 @@ void ExecuteEventTrade()
       g_currentTicket = trade.ResultOrder();
       g_lastTradeTime = TimeCurrent();
       g_originalLots = lots;  // Store for partial close calculation
+      g_lastKnownProfit = 0.0;
+      g_closeRetryCount = 0;
+      // POSITION_IDENTIFIER keys the deal history for realized P/L.
+      // ResultOrder() is the ORDER ticket — usually equal on hedging
+      // accounts, but read the real identifier from the live position
+      // (re-read again in NotifyPositionOpened in case of async fill).
+      if(PositionSelectByTicket(g_currentTicket))
+         g_currentPositionId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+      else
+         g_currentPositionId = g_currentTicket;
 
       Print("==============================================");
       Print("TRADE EXECUTED");
@@ -1292,10 +1309,41 @@ void ManageOpenPositions()
 
    if(!PositionSelectByTicket(g_currentTicket))
    {
-      // Position was closed externally (SL hit, manual close, etc.)
-      Print("Position ", g_currentTicket, " no longer exists - notifying server");
-      NotifyPositionClosed(0, 0.0, "Position closed externally (SL/TP/manual)");
+      // Position was closed externally (SL hit, manual close, etc.).
+      // Report the REALIZED P/L from the deal history — the old hardcoded
+      // 0.0 silently corrupted the daily P/L statistic and the daily
+      // loss-limit check on every SL hit.
+      double realized, histClosePrice;
+      string closeDetail;
+      ulong posId = (g_currentPositionId > 0) ? g_currentPositionId : g_currentTicket;
+
+      if(GetRealizedPnL(posId, realized, histClosePrice, closeDetail))
+      {
+         Print("Position ", g_currentTicket, " closed externally (", closeDetail,
+               ") - realized P/L: $", DoubleToString(realized, 2));
+         NotifyPositionClosed(histClosePrice, realized,
+                              "Position closed externally (" + closeDetail + ")",
+                              "history");
+      }
+      else if(g_closeRetryCount < 3)
+      {
+         // Deal history can lag a tick or two — retry before falling back
+         g_closeRetryCount++;
+         return;
+      }
+      else
+      {
+         Print("WARNING: deal history unavailable for position ", posId,
+               " - reporting last floating P/L: $", DoubleToString(g_lastKnownProfit, 2));
+         NotifyPositionClosed(0, g_lastKnownProfit,
+                              "Position closed externally (history unavailable; last floating P/L)",
+                              "floating");
+      }
+
       g_currentTicket = 0;
+      g_currentPositionId = 0;
+      g_lastKnownProfit = 0.0;
+      g_closeRetryCount = 0;
       g_smartExit.OnPositionClosed();
       g_aiManagementActive = false;
       ResetSmartExitState();
@@ -1306,6 +1354,7 @@ void ManageOpenPositions()
    double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
    double profit = PositionGetDouble(POSITION_PROFIT);
+   g_lastKnownProfit = profit;  // fallback if the close is only seen after the fact
    long spreadPoints = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
    double spreadPips = (double)spreadPoints / 10.0;
 
@@ -1510,6 +1559,10 @@ void NotifyPositionOpened()
    if(g_currentTicket == 0) return;
    if(!PositionSelectByTicket(g_currentTicket)) return;
 
+   // Position is selected — refresh the identifier (the read right after
+   // the open can miss it on an async fill)
+   g_currentPositionId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
+
    string symbol = PositionGetString(POSITION_SYMBOL);
    double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double lots = PositionGetDouble(POSITION_VOLUME);
@@ -1547,13 +1600,60 @@ void NotifyPositionOpened()
 }
 
 //+------------------------------------------------------------------+
+//| Realized P/L of a closed position from the deal history            |
+//+------------------------------------------------------------------+
+//| Sums DEAL_PROFIT + DEAL_SWAP + DEAL_COMMISSION over ALL deals of   |
+//| the position (includes earlier partial closes, final swap and      |
+//| commission — unlike the floating POSITION_PROFIT read pre-close).  |
+//| Returns false when the history is not queryable yet (no OUT deal), |
+//| so the caller can retry or fall back to the last floating profit.  |
+//+------------------------------------------------------------------+
+bool GetRealizedPnL(ulong positionId, double &realized, double &closePrice, string &closeDetail)
+{
+   realized = 0.0;
+   closePrice = 0.0;
+   closeDetail = "closed externally";
+
+   if(positionId == 0 || !HistorySelectByPosition((long)positionId))
+      return false;
+
+   bool hasOutDeal = false;
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0)
+         continue;
+
+      realized += HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                + HistoryDealGetDouble(dealTicket, DEAL_SWAP)
+                + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+
+      ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_OUT_BY)
+      {
+         hasOutDeal = true;
+         closePrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+         ENUM_DEAL_REASON dreason = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
+         if(dreason == DEAL_REASON_SL)      closeDetail = "SL hit";
+         else if(dreason == DEAL_REASON_TP) closeDetail = "TP hit";
+         else if(dreason == DEAL_REASON_SO) closeDetail = "stop-out";
+         else                               closeDetail = "closed externally";
+      }
+   }
+
+   return hasOutDeal;
+}
+
+//+------------------------------------------------------------------+
 //| Notify server that position was closed                             |
 //+------------------------------------------------------------------+
-void NotifyPositionClosed(double closePrice, double profit, string reason)
+void NotifyPositionClosed(double closePrice, double profit, string reason,
+                          string profitSource = "floating")
 {
    string json = StringFormat(
-      "{\"ticket\":%d,\"close_price\":%.5f,\"profit\":%.2f,\"reason\":\"%s\"}",
-      (int)g_currentTicket, closePrice, profit, reason
+      "{\"ticket\":%d,\"close_price\":%.5f,\"profit\":%.2f,\"reason\":\"%s\",\"profit_source\":\"%s\"}",
+      (int)g_currentTicket, closePrice, profit, reason, profitSource
    );
 
    string url = "http://" + InpServerHost + ":" + IntegerToString(InpServerPort) + "/api/position/closed";
@@ -1656,10 +1756,32 @@ void ClosePosition(string reason)
    {
       Print("Position closed successfully");
 
+      // Prefer the REALIZED P/L from the deal history over the floating
+      // profit read pre-close (includes closing slippage, swap, commission
+      // and any earlier partial-close portion). Bounded wait for history.
+      ulong posId = (g_currentPositionId > 0) ? g_currentPositionId : g_currentTicket;
+      string profitSource = "floating";
+      for(int i = 0; i < 5; i++)
+      {
+         double realized, histPrice;
+         string detail;
+         if(GetRealizedPnL(posId, realized, histPrice, detail))
+         {
+            profit = realized;
+            closePrice = histPrice;
+            profitSource = "history";
+            break;
+         }
+         Sleep(100);
+      }
+
       // Notify server about close
-      NotifyPositionClosed(closePrice, profit, reason);
+      NotifyPositionClosed(closePrice, profit, reason, profitSource);
 
       g_currentTicket = 0;
+      g_currentPositionId = 0;
+      g_lastKnownProfit = 0.0;
+      g_closeRetryCount = 0;
       g_smartExit.OnPositionClosed();
       g_aiManagementActive = false;
       ResetEventWait();

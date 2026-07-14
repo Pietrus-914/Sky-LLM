@@ -1328,7 +1328,10 @@
                 <b>Dlaczego lot jest różny na różnych tradach?</b> Bo zależy od SL w pipsach (dalszy SL = mniejszy lot), a przy włączonych przełącznikach InpUseConfidenceLot / InpUseSpreadLotReduction — także od pewności decyzji i spreadu. To celowe — stała jest strata w $, nie wielkość pozycji.<br><br>
                 <b>Zmieniłem input EA i nic się nie zmieniło.</b> Inputy trzeba zmienić na <b>każdym wykresie osobno</b> — EA na NZDUSD nie widzi ustawień EA na GBPUSD.<br><br>
                 <b>Rano "Trades Today" pokazuje 0, a w nocy było zagranie.</b> Liczniki dzienne zerują się o <b>północy UTC</b> (02:00 czasu PL latem) — nocne zagranie sprzed tej godziny należy do "wczoraj". Samo zagranie nie znika: jest w tabeli <b>Recent Trades</b> na Dashboardzie (trwałej — przeżywa restart serwera).<br><br>
-                <b>FORCE_DECISION (tryb bez SKIP)</b> — wyłącznie na koncie DEMO. Na realnym koncie system musi mieć prawo odpuścić event.
+                <b>FORCE_DECISION (tryb bez SKIP)</b> — wyłącznie na koncie DEMO. Na realnym koncie system musi mieć prawo odpuścić event.<br><br>
+                <b>Faza testów (zbieranie danych):</b> gramy szeroko — filtr impactu nisko i FORCE_DECISION włączony, żeby budować bazę reakcji
+                (reaction history, track record, trade outcomes). <b>Przed przejściem na real:</b> podnieś "Min. Impact Level" do MEDIUM/HIGH
+                i rozważ wyłączenie FORCE_DECISION w .env — słabe setupy (LOW impact, brak prognozy) statystycznie przegrywają.
             </div>
         </div>
     </div>

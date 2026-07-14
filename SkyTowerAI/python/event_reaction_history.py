@@ -186,6 +186,48 @@ class EventReactionHistory:
             lines.append(f"{date} {surprise}{detail} -> {r.get('pair', '?')} {move_txt}")
         return f"Last {len(lines)} '{event_name}' ({currency}) releases:\n" + "\n".join(lines)
 
+    def summarize_currency_fallback(self, currency: str, limit: int = 10) -> Optional[str]:
+        """
+        Currency-level behavior prior for events with no direct history yet
+        (a first-time event name matches nothing in get_matching). Aggregates
+        the most recent reactions of the SAME currency across ALL events:
+        average absolute 1-min / 5-min move and how often the 5-min move kept
+        the 1-min direction. Explicitly labeled as a volatility prior, not an
+        event-specific signal. Returns None with fewer than 3 usable records.
+        """
+        currency = (currency or '').upper()
+        with self._lock:
+            usable = [r for r in reversed(self._records)
+                      if not r.get('test')
+                      and r.get('currency') == currency
+                      and r.get('move_5min_pips') is not None][:limit]
+
+        if len(usable) < 3:
+            return None
+
+        avg_1min = None
+        moves_1 = [abs(r['move_1min_pips']) for r in usable
+                   if r.get('move_1min_pips') is not None]
+        if moves_1:
+            avg_1min = sum(moves_1) / len(moves_1)
+        avg_5min = sum(abs(r['move_5min_pips']) for r in usable) / len(usable)
+
+        both = [r for r in usable
+                if r.get('move_1min_pips') not in (None, 0)
+                and r.get('move_5min_pips') not in (None, 0)]
+        continuation_txt = "n/a"
+        if both:
+            cont = sum(1 for r in both
+                       if (r['move_1min_pips'] > 0) == (r['move_5min_pips'] > 0))
+            continuation_txt = f"{round(100 * cont / len(both))}%"
+
+        avg_1min_txt = f"{avg_1min:.1f}" if avg_1min is not None else "n/a"
+        return (f"No direct history for this event. Currency-level stats for "
+                f"{currency} (last {len(usable)} releases, any event, mixed pairs):\n"
+                f"avg |1-min move| {avg_1min_txt} pips, avg |5-min move| {avg_5min:.1f} pips, "
+                f"1->5min direction continuation {continuation_txt}.\n"
+                f"Use only as a volatility/behavior prior, not an event-specific signal.")
+
     def get_recent(self, limit: int = 50) -> List[Dict]:
         with self._lock:
             return list(reversed(self._records[-limit:]))

@@ -224,3 +224,39 @@ class TestBackfill:
         history = EventReactionHistory(log_dir=str(tmp_path))
         history.record(make_reaction(actual="210K", forecast="180K"))
         assert history.backfill_actuals([]) == 0
+
+
+class TestCurrencyFallback:
+    """summarize_currency_fallback - volatility prior for first-time events."""
+
+    def test_none_below_three_records(self, tmp_path):
+        h = EventReactionHistory(log_dir=str(tmp_path))
+        h.record(make_reaction())
+        h.record(make_reaction(event_name="CPI m/m"))
+        assert h.summarize_currency_fallback("USD") is None
+
+    def test_aggregates_and_continuation(self, tmp_path):
+        h = EventReactionHistory(log_dir=str(tmp_path))
+        # 1.0842 -> 1min 1.0830 (-12.0 pips) -> 5min 1.0801 (-41.0 pips): continuation
+        h.record(make_reaction(event_name="NFP"))
+        # up 1min, up 5min: continuation
+        h.record(make_reaction(event_name="CPI m/m",
+                               price_after_1min=1.0852, price_after_5min=1.0862))
+        # up 1min, down 5min: reversal
+        h.record(make_reaction(event_name="Retail Sales",
+                               price_after_1min=1.0852, price_after_5min=1.0822))
+        text = h.summarize_currency_fallback("USD")
+        assert text is not None
+        assert "USD" in text
+        assert "last 3 releases" in text
+        assert "continuation 67%" in text
+        assert "volatility/behavior prior" in text
+
+    def test_excludes_tests_and_other_currency(self, tmp_path):
+        h = EventReactionHistory(log_dir=str(tmp_path))
+        h.record(make_reaction(event_name="FAKE TEST Event"))
+        h.record(make_reaction(currency="GBP"))
+        h.record(make_reaction(currency="GBP", event_name="CPI m/m"))
+        h.record(make_reaction(currency="GBP", event_name="GDP"))
+        assert h.summarize_currency_fallback("USD") is None
+        assert h.summarize_currency_fallback("GBP") is not None

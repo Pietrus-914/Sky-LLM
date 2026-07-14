@@ -14,7 +14,7 @@ from loguru import logger
 
 from config import SERVER_CONFIG, TRADING_CONFIG, ZONE_CONFIG, EXIT_CONFIG, POSITION_MANAGEMENT_CONFIG
 from config import HIGH_IMPACT_EVENTS, CURRENCY_PAIRS, DEFAULT_PAIRS
-from market_context import build_market_context, normalize_pair
+from market_context import build_market_context, normalize_pair, summarize_pair_brief
 from calendar_fetcher import CalendarAggregator
 from cot_analyzer import COTAnalyzer
 from sentiment_analyzer import SentimentAggregator
@@ -66,15 +66,19 @@ def init_services():
     global decision_engine, calendar, zone_analyzer, target_calculator, position_manager, exit_engine, decision_history
     logger.info("Initializing SkyTower-AI services...")
 
-    decision_engine = LLMDecisionEngine()
+    from config import TRADE_HISTORY_FILE
+    # DecisionHistory must be created first and SHARED with the engine —
+    # the engine's TRACK RECORD section reads the same instance the server
+    # records into (a private copy never sees in-session decisions)
+    decision_history = DecisionHistory()
+    decision_engine = LLMDecisionEngine(decision_log=decision_history,
+                                        trade_history_file=TRADE_HISTORY_FILE)
     calendar = CalendarAggregator()
     zone_analyzer = ZoneAnalyzer(ZONE_CONFIG)
     target_calculator = TargetCalculator(ZONE_CONFIG)
     exit_engine = ExitDecisionEngine()
-    from config import TRADE_HISTORY_FILE
     position_manager = PositionManager(exit_engine=exit_engine,
                                        history_file=TRADE_HISTORY_FILE)
-    decision_history = DecisionHistory()
 
     logger.info("Services initialized successfully (with AI Position Manager + Decision History)")
 
@@ -939,13 +943,58 @@ def _build_market_context_for_event(event):
             if zone_entry:
                 zones = {**(zones or {}), **zone_entry}
 
-        return build_market_context(
+        context = build_market_context(
             ohlc_multi, pair_name, zones=zones, registered_at=data_timestamp,
             spread_points=spread_points
         )
+
+        # CROSS-PAIR PICTURE: brief summaries of OTHER fresh pairs that
+        # contain the event currency (broader view of the currency's state)
+        cross = _build_cross_pair_summaries(currency, pair_name)
+        if cross:
+            if context is None:
+                context = {"pair": pair_name}
+            context["cross_pairs"] = cross
+
+        return context
     except Exception as e:
         logger.warning(f"Could not build market context for {event.event_name}: {e}")
         return None
+
+
+def _build_cross_pair_summaries(currency: str, exclude_pair: str, cap: int = 3):
+    """
+    One-line technical briefs of other FRESH pairs containing the event
+    currency (base or quote), from EA-pushed market_data_reports. The
+    decision pair itself is excluded — its full context is already in the
+    prompt. Each line states the currency-strength direction explicitly
+    (base vs quote semantics). Returns a list of strings (possibly empty).
+    """
+    currency = (currency or '').upper()
+    excluded = normalize_pair(exclude_pair)
+    summaries = []
+    try:
+        with market_data_lock:
+            entries = [(key, dict(value)) for key, value in market_data_reports.items()]
+        for key, entry in entries:
+            norm = normalize_pair(key)
+            if norm == excluded or len(norm) < 6:
+                continue
+            if currency not in (norm[:3], norm[3:6]):
+                continue
+            if _market_data_age_seconds(entry) > MARKET_DATA_MAX_AGE_SECONDS:
+                continue
+            brief = summarize_pair_brief(
+                entry.get('ohlc_multi', {}), norm, currency,
+                spread_points=entry.get('spread_points')
+            )
+            if brief:
+                summaries.append(brief)
+            if len(summaries) >= cap:
+                break
+    except Exception as e:
+        logger.debug(f"Cross-pair summaries failed: {e}")
+    return summaries
 
 
 @app.route('/api/event-reaction', methods=['POST'])

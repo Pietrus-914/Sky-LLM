@@ -317,6 +317,12 @@ _OVERRIDES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                   'logs', 'trade_history.jsonl')
 
+# Curated event playbooks (hand/Claude-distilled patterns from historical
+# charts) injected into the entry prompt. Optional — missing file = no
+# EVENT PLAYBOOK section. See SkyTowerAI/research/screens/README.md.
+EVENT_PLAYBOOKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    'logs', 'event_playbooks.json')
+
 
 def save_runtime_overrides(updates: dict):
     """Merge updates into the overrides file (atomic write)."""

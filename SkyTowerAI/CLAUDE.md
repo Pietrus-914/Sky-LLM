@@ -184,7 +184,7 @@ docker compose logs -f           # watch logs
 | `/api/signal` | GET | **Main endpoint for MT5** - returns trading signal (incl. `event_currency`, `forced`) |
 | `/api/events` | GET | List upcoming events (?hours=168&currencies=NZD,CAD) |
 | `/api/decision` | GET | Active decision (no eager analysis — the background updater owns decision making) |
-| `/api/market-data` | POST | EA pushes OHLC (M5/M15/H1) per pair → LLM market context |
+| `/api/market-data` | POST | EA pushes OHLC (M1/M5/M15/H1) per pair → LLM market context + cross-pair picture |
 | `/api/event-reaction` | POST | EA reports post-release price snapshots (T0/T+60s/T+300s) |
 | `/api/event-reactions` | GET | Recorded reactions (?event=CPI&currency=USD) |
 | `/api/cot/{currency}` | GET | COT data for currency |

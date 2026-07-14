@@ -190,3 +190,50 @@ class TestBuildMarketContext:
         ctx = build_market_context({"M5": bars}, "USDJPY")
         # 30 bars * 0.05 range ≈ 145 pips of range, distances must be in pips not price
         assert ctx["distance_to_recent_low_pips"] > 100
+
+
+class TestM1Support:
+    """M1 flows through build_market_context (finest TF, drift, short candle tail)."""
+
+    def test_m1_used_as_finest(self):
+        ctx = build_market_context({"M1": rising(40), "M5": falling(40)}, "EURUSD")
+        # last_price from M1 (rising series ends higher than falling M5)
+        assert ctx["last_price"] == pytest.approx(1.0800 + 39 * 0.0005)
+        assert "M1" in ctx["trend"]
+        assert ctx["bars_analyzed"]["M1"] == 40
+
+    def test_m1_candle_tail_capped_at_20(self):
+        ctx = build_market_context({"M1": rising(60)}, "EURUSD")
+        assert len(ctx["candles"]["M1"]) == 20
+
+    def test_m1_drift_last_15min(self):
+        ctx = build_market_context({"M1": rising(40)}, "EURUSD")
+        assert "last_15min" in ctx["drift_pips"]
+        # 15 one-minute bars x 5 pips/bar = 75 pips
+        assert ctx["drift_pips"]["last_15min"] == pytest.approx(75.0, abs=0.2)
+
+    def test_no_m1_regression(self):
+        ctx = build_market_context({"M5": rising(40)}, "EURUSD")
+        assert "M1" not in ctx["candles"]
+        assert "last_15min" not in ctx.get("drift_pips", {})
+        assert "last_60min" in ctx["drift_pips"]
+
+
+class TestSummarizePairBrief:
+    def test_base_currency_semantics(self):
+        from market_context import summarize_pair_brief
+        brief = summarize_pair_brief({"M5": rising(40)}, "USDCAD.pro", "USD",
+                                     spread_points=14)
+        assert brief.startswith("USDCAD [USD is BASE -> USD strength = price UP]")
+        assert "trend M5" in brief
+        assert "spread 1.4 pips" in brief
+
+    def test_quote_currency_semantics(self):
+        from market_context import summarize_pair_brief
+        brief = summarize_pair_brief({"M5": falling(40)}, "GBPUSD", "USD")
+        assert "[USD is QUOTE -> USD strength = price DOWN]" in brief
+
+    def test_none_without_data(self):
+        from market_context import summarize_pair_brief
+        assert summarize_pair_brief({}, "GBPUSD", "USD") is None
+        assert summarize_pair_brief({"M5": []}, "GBPUSD", "USD") is None

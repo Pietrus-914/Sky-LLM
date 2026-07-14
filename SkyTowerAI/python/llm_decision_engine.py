@@ -14,7 +14,7 @@ import os
 from calendar_fetcher import CalendarAggregator, EconomicEvent
 from cot_analyzer import COTAnalyzer
 from sentiment_analyzer import SentimentAggregator
-from event_reaction_history import EventReactionHistory
+from event_reaction_history import EventReactionHistory, normalize_event_name
 from decision_history import DecisionHistory
 from market_context import normalize_pair
 from config import LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS, HIGH_IMPACT_EVENTS, OPENROUTER_API_KEY, FORCE_DECISION
@@ -134,13 +134,20 @@ confidence — do NOT inflate it just because a direction is required."""
                 .replace("%DIRECTION_VALUES%", '"BUY" or "SELL" or "SKIP"')
                 .replace("%SKIP_POLICY%", self.SKIP_POLICY_NORMAL))
 
-    def __init__(self, api_key: str = None, provider: str = None):
+    def __init__(self, api_key: str = None, provider: str = None,
+                 decision_log=None, trade_history_file: str = None):
         """
         Initialize the decision engine
 
         Args:
             api_key: API key for the LLM provider
             provider: "openrouter", "anthropic", "openai", or "rule-based"
+            decision_log: shared DecisionHistory instance. MUST be the same
+                object the server records decisions into — a private copy
+                only sees what was on disk at startup, so the TRACK RECORD
+                prompt section would never include in-session decisions.
+            trade_history_file: path to the closed-trades JSONL written by
+                PositionManager; feeds the RECENT TRADE OUTCOMES section.
         """
         # Auto-detect provider from config or environment
         self.provider = provider or LLM_CONFIG.get("provider", "openrouter")
@@ -151,9 +158,16 @@ confidence — do NOT inflate it just because a direction is required."""
         self.cot_analyzer = COTAnalyzer()
         self.sentiment = SentimentAggregator()
         self.reaction_history = EventReactionHistory()
-        # Read-only view of past decisions — feeds the TRACK RECORD prompt
-        # section so the model can see (and correct for) its own hit rate
-        self.decision_log = DecisionHistory()
+        # Past decisions — feeds the TRACK RECORD prompt section so the
+        # model can see (and correct for) its own hit rate
+        self.decision_log = decision_log or DecisionHistory()
+        # Closed trades (realized P/L) — feeds RECENT TRADE OUTCOMES
+        from config import TRADE_HISTORY_FILE, EVENT_PLAYBOOKS_FILE
+        self.trade_history_file = trade_history_file or TRADE_HISTORY_FILE
+        # Curated event playbooks (optional knowledge file)
+        self.playbooks_file = EVENT_PLAYBOOKS_FILE
+        self._playbooks_cache = None
+        self._playbooks_mtime = None
 
         # Initialize LLM client
         self._init_llm_client()
@@ -271,17 +285,44 @@ confidence — do NOT inflate it just because a direction is required."""
         else:
             source_status["forecast"] = "ok"
 
-        # Historical reactions to this event (builds up over time)
+        # Historical reactions to this event (builds up over time).
+        # First-time event names have no direct history — fall back to a
+        # currency-level volatility/behavior prior so the model is not blind.
         reaction_summary = None
         try:
             reaction_summary = self.reaction_history.summarize(event.event_name, currency)
         except Exception as e:
             logger.debug(f"Reaction history lookup failed: {e}")
-        source_status["reaction_history"] = "ok" if reaction_summary else "no_data"
+        if reaction_summary:
+            source_status["reaction_history"] = "ok"
+        else:
+            try:
+                reaction_summary = self.reaction_history.summarize_currency_fallback(currency)
+            except Exception as e:
+                logger.debug(f"Reaction currency fallback failed: {e}")
+            source_status["reaction_history"] = ("currency_fallback" if reaction_summary
+                                                 else "no_data")
 
         # The model's own recent calls on this currency, with measured outcomes
         track_record = self._build_track_record(currency)
         source_status["track_record"] = "ok" if track_record else "no_data"
+
+        # Realized P/L of recent closed trades for this currency
+        trade_outcomes = None
+        try:
+            trade_outcomes = self._trade_outcomes_section(currency)
+        except Exception as e:
+            logger.debug(f"Trade outcomes build failed: {e}")
+        source_status["trade_outcomes"] = "ok" if trade_outcomes else "no_data"
+
+        # Curated playbook for this event (optional knowledge file)
+        playbook = None
+        try:
+            playbook = self._playbook_section(event.event_name, currency)
+        except Exception as e:
+            logger.debug(f"Playbook lookup failed: {e}")
+        if playbook:
+            source_status["playbook"] = "ok"
 
         return {
             "event": {
@@ -299,6 +340,8 @@ confidence — do NOT inflate it just because a direction is required."""
             "market_context": market_context,
             "reaction_history": reaction_summary,
             "track_record": track_record,
+            "trade_outcomes": trade_outcomes,
+            "playbook": playbook,
             "_source_status": source_status,
         }
 
@@ -309,6 +352,7 @@ confidence — do NOT inflate it just because a direction is required."""
             return "NOT AVAILABLE (no price data pushed by the EA for this event)"
 
         market = dict(market)
+        market.pop('cross_pairs', None)  # rendered by _cross_pair_section
         candles = market.pop('candles', None)
 
         text = json.dumps(market, indent=2)
@@ -322,11 +366,22 @@ confidence — do NOT inflate it just because a direction is required."""
                 text += f"\n[{tf}]\n" + "\n".join(bars)
         return text
 
+    @staticmethod
+    def _cross_pair_section(data_context: Dict) -> str:
+        """CROSS-PAIR PICTURE prompt section: brief technical view of other
+        fresh pairs containing the event currency."""
+        market = data_context.get('market_context') or {}
+        cross = market.get('cross_pairs') or []
+        if not cross:
+            return "No other fresh pairs available"
+        return "\n".join(cross)
+
     def _build_track_record(self, currency: str, limit: int = 5):
         """
         Last few BUY/SELL decisions for this currency joined with the measured
         post-release reaction — lets the model see whether its recent calls
         were right and adjust instead of repeating a documented mistake.
+        Realized trade P/L is appended when a closed trade matches a decision.
         """
         try:
             recent = [d for d in self.decision_log.get_recent(50)
@@ -334,6 +389,8 @@ confidence — do NOT inflate it just because a direction is required."""
                       and d.get('direction') in ('BUY', 'SELL')]
             if not recent:
                 return None
+
+            trades = self._trades_for_currency(currency, limit=20)
 
             lines = []
             for d in recent[:limit]:
@@ -352,6 +409,9 @@ confidence — do NOT inflate it just because a direction is required."""
                     else:
                         outcome = f" -> {r.get('pair')} moved {move:+.1f} pips/5min after release"
                     break
+                realized = self._find_trade_for_decision(d, trades)
+                if realized is not None:
+                    outcome += f", realized ${realized:+.2f}"
                 lines.append(f"{(d.get('timestamp') or '')[:16]} {d.get('event_name')}: "
                              f"{d.get('direction')} {d.get('pair')} "
                              f"@{int((d.get('confidence') or 0) * 100)}%{outcome}")
@@ -359,6 +419,160 @@ confidence — do NOT inflate it just because a direction is required."""
         except Exception as e:
             logger.debug(f"Track record build failed: {e}")
             return None
+
+    # ------------------------------------------------------------------
+    # Realized trade outcomes (closed trades from PositionManager's JSONL)
+    # ------------------------------------------------------------------
+
+    def _load_recent_trades(self, limit: int = 50) -> List[Dict]:
+        """Tail of the closed-trades JSONL. Tolerant of corrupt lines —
+        same degradation contract as PositionManager._load_history."""
+        path = self.trade_history_file
+        if not path or not os.path.exists(path):
+            return []
+        records: List[Dict] = []
+        try:
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(rec, dict):
+                        records.append(rec)
+        except Exception as e:
+            logger.debug(f"Trade history read failed: {e}")
+            return []
+        return records[-limit:]
+
+    def _trades_for_currency(self, currency: str, limit: int = 5) -> List[Dict]:
+        """Most recent closed trades whose symbol contains the currency
+        (base or quote), newest first."""
+        currency = (currency or '').upper()
+        out = []
+        for rec in reversed(self._load_recent_trades()):
+            pair = normalize_pair(str(rec.get('symbol') or ''))
+            if len(pair) >= 6 and currency in (pair[:3], pair[3:6]):
+                out.append(rec)
+                if len(out) >= limit:
+                    break
+        return out
+
+    @staticmethod
+    def _find_trade_for_decision(decision: Dict, trades: List[Dict]) -> Optional[float]:
+        """Realized P/L of the closed trade matching a past decision.
+        Primary match: same normalized event name + same UTC date.
+        Fallback: same pair, opened within 30 min of the decision."""
+        d_event = normalize_event_name(decision.get('event_name') or '')
+        d_date = (decision.get('timestamp') or '')[:10]
+        d_pair = normalize_pair(decision.get('pair') or '')
+
+        for t in trades:
+            if (d_event
+                    and normalize_event_name(t.get('event_name') or '') == d_event
+                    and str(t.get('closed_at') or '')[:10] == d_date):
+                try:
+                    return float(t.get('profit_usd'))
+                except (TypeError, ValueError):
+                    return None
+
+        try:
+            d_time = datetime.fromisoformat(
+                (decision.get('timestamp') or '').replace('Z', ''))
+        except ValueError:
+            return None
+        for t in trades:
+            if normalize_pair(str(t.get('symbol') or '')) != d_pair:
+                continue
+            try:
+                opened = datetime.fromisoformat(
+                    str(t.get('opened_at') or '').replace('Z', ''))
+                if abs((opened - d_time).total_seconds()) <= 1800:
+                    return float(t.get('profit_usd'))
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    # ------------------------------------------------------------------
+    # Event playbooks (curated knowledge distilled from historical charts)
+    # ------------------------------------------------------------------
+
+    def _load_playbooks(self) -> Dict:
+        """logs/event_playbooks.json, cached by mtime so panel-side edits
+        are picked up without a server restart. Missing/broken file = {}."""
+        path = self.playbooks_file
+        try:
+            if not path or not os.path.exists(path):
+                return {}
+            mtime = os.path.getmtime(path)
+            if self._playbooks_cache is not None and mtime == self._playbooks_mtime:
+                return self._playbooks_cache
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+            self._playbooks_cache = data
+            self._playbooks_mtime = mtime
+            return data
+        except Exception as e:
+            logger.warning(f"Could not load event playbooks: {e}")
+            return {}
+
+    def _playbook_section(self, event_name: str, currency: str) -> Optional[str]:
+        """Playbook entry for this event: exact normalized-name match first,
+        then the currency-wide fallback key 'CURRENCY:<XXX>'."""
+        playbooks = self._load_playbooks()
+        if not playbooks:
+            return None
+        entry = None
+        wanted = normalize_event_name(event_name)
+        for key, value in playbooks.items():
+            if key.upper().startswith("CURRENCY:"):
+                continue
+            if normalize_event_name(key) == wanted:
+                entry = value
+                break
+        if entry is None:
+            entry = playbooks.get(f"CURRENCY:{(currency or '').upper()}")
+        if not isinstance(entry, dict):
+            return None
+        lines = []
+        for field in ("pattern", "typical_behavior", "notes"):
+            if entry.get(field):
+                lines.append(f"{field.replace('_', ' ')}: {entry[field]}")
+        return "\n".join(lines) if lines else None
+
+    def _trade_outcomes_section(self, currency: str) -> Optional[str]:
+        """RECENT TRADE OUTCOMES prompt block: last few closed trades of this
+        currency with realized P/L and close reason, plus an aggregate line."""
+        trades = self._trades_for_currency(currency, limit=5)
+        if not trades:
+            return None
+
+        lines = []
+        wins = losses = 0
+        net = 0.0
+        for t in trades:
+            try:
+                profit = float(t.get('profit_usd') or 0.0)
+            except (TypeError, ValueError):
+                profit = 0.0
+            net += profit
+            if profit > 0:
+                wins += 1
+            elif profit < 0:
+                losses += 1
+            closed = str(t.get('closed_at') or '')[:16].replace('T', ' ')
+            lines.append(f"{closed} {t.get('event_name') or '?'}: "
+                         f"{t.get('direction') or '?'} {t.get('symbol') or '?'} "
+                         f"{t.get('lots') if t.get('lots') is not None else '?'} lots "
+                         f"-> ${profit:+.2f} ({t.get('reason') or 'unknown'})")
+        lines.append(f"Aggregate: {wins} wins / {losses} losses, "
+                     f"net ${net:+.2f} on {currency} trades")
+        return "\n".join(lines)
 
     def _compare_values(self, forecast: str, previous: str) -> str:
         """Compare forecast to previous value"""
@@ -380,6 +594,13 @@ confidence — do NOT inflate it just because a direction is required."""
 
     def _llm_decision(self, event: EconomicEvent, data_context: Dict) -> TradingDecision:
         """Use LLM to make trading decision"""
+        # Optional curated-knowledge section — only included when a playbook
+        # entry exists for this event/currency (token budget)
+        playbook_block = ""
+        if data_context.get('playbook'):
+            playbook_block = (f"\nEVENT PLAYBOOK (curated from historical charts of this "
+                              f"event type):\n{data_context['playbook']}\n")
+
         prompt = f"""Analyze this upcoming economic event and make a trading decision:
 
 EVENT DETAILS:
@@ -397,11 +618,18 @@ FORECAST COMPARISON:
 CURRENT MARKET STRUCTURE ({data_context['suggested_pair']}):
 {self._market_context_section(data_context)}
 
+CROSS-PAIR PICTURE ({data_context['event']['currency']}) — other fresh pairs containing the event currency.
+IMPORTANT: read each pair's stated '{data_context['event']['currency']}-strength direction'; do NOT assume price up = currency strong:
+{self._cross_pair_section(data_context)}
+
 HISTORICAL REACTIONS TO THIS EVENT:
 {data_context.get('reaction_history') or "No history yet (the system is building this dataset)"}
-
+{playbook_block}
 YOUR TRACK RECORD ({data_context['event']['currency']} events):
 {data_context.get('track_record') or "No prior decisions for this currency yet"}
+
+RECENT TRADE OUTCOMES ({data_context['event']['currency']}, realized P/L):
+{data_context.get('trade_outcomes') or "No completed trades for this currency yet"}
 
 SUGGESTED PAIR: {data_context['suggested_pair']}
 

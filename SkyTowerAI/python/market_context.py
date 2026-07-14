@@ -150,7 +150,7 @@ def build_market_context(
 
     if usable:
         # Last price from the finest available timeframe
-        finest = next((tf for tf in ("M5", "M15", "H1") if tf in usable), None)
+        finest = next((tf for tf in ("M1", "M5", "M15", "H1") if tf in usable), None)
         if finest is None:
             finest = list(usable.keys())[0]
         last_price = float(usable[finest][-1]["close"])
@@ -169,19 +169,25 @@ def build_market_context(
 
         # Pre-news drift: how far price has already run into the event
         # (strategy principle: pre-positioning often reverses on release)
+        drift = {}
+        if "M1" in usable:
+            d = _drift_pips(usable["M1"], 15, pip)
+            if d is not None:
+                drift["last_15min"] = d
         if "M5" in usable:
-            drift = {}
             for label, n in (("last_30min", 6), ("last_60min", 12), ("last_3h", 36)):
                 d = _drift_pips(usable["M5"], n, pip)
                 if d is not None:
                     drift[label] = d
-            if drift:
-                context["drift_pips"] = drift
+        if drift:
+            context["drift_pips"] = drift
 
         # Raw candles for the LLM (compact, oldest->newest); kept out of the
-        # summary JSON block by the prompt builder and rendered as a table
+        # summary JSON block by the prompt builder and rendered as a table.
+        # M1 tail is deliberately short (token budget) — fine pre-news detail
+        # comes mostly from trend/RSI/drift computed on the full M1 set.
         context["candles"] = {}
-        for tf, count in (("M5", 36), ("M15", 24), ("H1", 24)):
+        for tf, count in (("M1", 20), ("M5", 36), ("M15", 24), ("H1", 24)):
             if tf in usable:
                 context["candles"][tf] = _compact_candles(usable[tf], count)
 
@@ -209,6 +215,70 @@ def build_market_context(
         context["data_age_minutes"] = _age_minutes(registered_at)
 
     return context
+
+
+def summarize_pair_brief(
+    ohlc_by_timeframe: Dict[str, List[Dict]],
+    pair: str,
+    event_currency: str,
+    spread_points: Optional[float] = None,
+) -> Optional[str]:
+    """
+    One-line technical brief of a sibling pair for the CROSS-PAIR PICTURE
+    prompt section. CRITICAL: states the base/quote semantics explicitly —
+    'USD strength = price UP' is only true when USD is the BASE currency
+    (USDCAD yes, GBPUSD no), and the model must never assume up = strong.
+    """
+    ohlc_by_timeframe = ohlc_by_timeframe or {}
+    usable = {tf: bars for tf, bars in ohlc_by_timeframe.items()
+              if bars and len(bars) >= 2}
+    if not usable:
+        return None
+
+    norm = normalize_pair(pair)
+    currency = (event_currency or '').upper()
+    if len(norm) >= 6 and norm[:3] == currency:
+        semantics = f"{currency} is BASE -> {currency} strength = price UP"
+    elif len(norm) >= 6 and norm[3:6] == currency:
+        semantics = f"{currency} is QUOTE -> {currency} strength = price DOWN"
+    else:
+        semantics = "event currency not in pair"
+
+    pip = pip_size(norm)
+    parts = []
+
+    trends = {tf: _trend(bars) for tf, bars in usable.items()}
+    trend_txt = " / ".join(f"{tf} {trends[tf]}"
+                           for tf in ("M1", "M5", "M15", "H1") if tf in trends)
+    if trend_txt:
+        parts.append(f"trend {trend_txt}")
+
+    for tf in ("M5", "M15", "H1"):
+        if tf in usable:
+            rsi = _rsi(_closes(usable[tf]))
+            if rsi is not None:
+                parts.append(f"RSI14({tf}) {rsi}")
+            break
+
+    if "M5" in usable:
+        d = _drift_pips(usable["M5"], 12, pip)
+        if d is not None:
+            parts.append(f"drift 60min {d:+.1f} pips")
+
+    widest = max(usable.values(), key=len)
+    last_price = float(usable[next(iter(usable))][-1]["close"])
+    window_high = max(max(float(b["high"]) for b in widest), last_price)
+    window_low = min(min(float(b["low"]) for b in widest), last_price)
+    if window_high > window_low:
+        pos = round((last_price - window_low) / (window_high - window_low) * 100)
+        parts.append(f"range pos {pos}%")
+
+    if spread_points is not None and spread_points > 0:
+        parts.append(f"spread {spread_points / 10.0:.1f} pips")
+
+    if not parts:
+        return None
+    return f"{norm} [{semantics}]: " + ", ".join(parts)
 
 
 def _summarize_zones(zones: Dict, last_price: Optional[float], pip: float) -> Dict:
