@@ -36,7 +36,9 @@ input group "=== Safety Settings ==="
 input double   InpMaxSpreadPips = 10.0;          // Max Spread (pips)
 input bool     InpUseStopLoss = true;            // Use Stop Loss
 input double   InpDefaultSLPercent = 40.0;       // Default SL % of risk
-input int      InpMaxDailyTrades = 3;            // Max Trades per Day
+// NOTE: the daily trade limit lives ONLY on the server (dashboard →
+// Event Config → "Max trades per day") — the server stops serving
+// signals once the limit is hit, so there is no per-chart input.
 
 input group "=== Timing Settings ==="
 input int      InpEntrySecondsBefore = 15;       // Entry seconds before event
@@ -58,7 +60,10 @@ input bool     InpUseZoneIndicator = true;       // Use SkyTower_Zones Indicator
 input bool     InpUseZoneBiasForDirection = true;// Use Zone Bias for Direction
 
 input group "=== AI Position Management ==="
-input double   InpMaxLossUSD = 100.0;            // Max loss $ before forced close (EA safety)
+// NOTE: the per-trade max loss (risk budget) lives ONLY on the server
+// (dashboard → Event Config → "Max loss per trade USD"). It arrives in
+// every /api/signal response as max_loss_usd and is stored in
+// g_maxLossUSD — no per-chart input to keep in sync.
 input double   InpEmergencySpreadPips = 15.0;    // Close if spread exceeds this
 
 input group "=== Multi-Instance Mode ==="
@@ -89,6 +94,11 @@ int            g_eventExitMinutes = 0;
 double         g_eventSLPercent = 0;
 double         g_eventSLPips = 0;       // SL in pips from LLM
 double         g_eventTPPips = 0;       // TP in pips from LLM
+// Per-trade risk budget in USD — set from the server signal (max_loss_usd,
+// panel "Max loss per trade USD"). Sizes the lot AND arms the offline
+// max-loss guardrail. The conservative default only applies if an old
+// server ever omits the field.
+double         g_maxLossUSD = 100.0;
 ulong          g_currentTicket = 0;
 
 // Smart exit state
@@ -223,7 +233,8 @@ int OnInit()
    Print("==============================================");
    Print("SkyTower-AI EA v5.0 Initialized");
    Print("Server: ", InpServerHost, ":", InpServerPort);
-   Print("Risk: ", InpRiskPercent, "%");
+   Print("Risk: ", InpRiskPercent, "% (capped by server max_loss_usd per signal)");
+   Print("Risk budget + daily trade limit are server-controlled (dashboard)");
    Print("Min Confidence: ", InpMinConfidence);
    Print("Trade Mode: ", EnumToString(InpDefaultMode));
    Print("Exit Strategy: ", EnumToString(InpExitStrategy));
@@ -459,12 +470,9 @@ void OnTick()
 
    g_lastCheckTime = currentTime;
 
-   //--- Check if we can trade today
-   if(g_todayTrades >= InpMaxDailyTrades)
-   {
-      // Silent - don't spam logs
-      return;
-   }
+   //--- Daily trade limit is enforced by the SERVER (it stops serving
+   //--- signals once the panel's "Max trades per day" is reached), so
+   //--- there is no per-chart gate here — no duplicated setting.
 
    //--- Multi-instance mode: register pair with server for upcoming events
    if(InpMultiInstance && !g_pairRegistered)
@@ -866,6 +874,15 @@ void CheckForSignals()
    int timeUntilEvent = (int)ExtractJsonDouble(result, "time_until_event");
    string eventName = ExtractJsonString(result, "event_name");
    string reasoning = ExtractJsonString(result, "reasoning");
+
+   //--- Per-trade risk budget from the server (panel "Max loss per trade
+   //--- USD") — single source of truth for lot sizing + max-loss guardrail
+   double serverMaxLoss = ExtractJsonDouble(result, "max_loss_usd");
+   if(serverMaxLoss > 0)
+   {
+      g_maxLossUSD = serverMaxLoss;
+      Print("Risk budget from server: $", DoubleToString(g_maxLossUSD, 0), " per trade");
+   }
 
    //--- Validate signal
    //--- forced:true = server test mode (FORCE_DECISION): decisions honestly
@@ -1303,12 +1320,12 @@ void ManageOpenPositions()
 
    //--- EA-side safety guardrails (immediate, no server needed) ---
 
-   // Guardrail 1: Max loss in USD
-   if(profit < -InpMaxLossUSD)
+   // Guardrail 1: Max loss in USD (risk budget delivered with the signal)
+   if(profit < -g_maxLossUSD)
    {
-      Print("=== EA GUARDRAIL: MAX LOSS $", InpMaxLossUSD, " ===");
+      Print("=== EA GUARDRAIL: MAX LOSS $", g_maxLossUSD, " ===");
       Print("Current P/L: $", DoubleToString(profit, 2));
-      ClosePosition("EA guardrail: max loss $" + DoubleToString(InpMaxLossUSD, 0) + " exceeded");
+      ClosePosition("EA guardrail: max loss $" + DoubleToString(g_maxLossUSD, 0) + " exceeded");
       return;
    }
 
@@ -1697,12 +1714,13 @@ double CalculateLotSize(string symbol, double lotPercent, double slPips)
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
 
    //--- Risk budget: % of balance, but never more than the USD loss
-   //--- guardrail — the position gets force-closed at -InpMaxLossUSD anyway,
-   //--- so sizing beyond it only guarantees the guardrail fires instantly
+   //--- guardrail (g_maxLossUSD, from the server signal) — the position
+   //--- gets force-closed at -g_maxLossUSD anyway, so sizing beyond it only
+   //--- guarantees the guardrail fires instantly
    //--- (on the first live event a 50-lot position died to spread in 1s)
    double riskAmount = balance * InpRiskPercent / 100.0;
-   if(riskAmount > InpMaxLossUSD)
-      riskAmount = InpMaxLossUSD;
+   if(riskAmount > g_maxLossUSD)
+      riskAmount = g_maxLossUSD;
    riskAmount *= lotPercent / 100.0;
 
    //--- Symbol economics

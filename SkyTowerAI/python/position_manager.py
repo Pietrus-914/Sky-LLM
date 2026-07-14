@@ -3,6 +3,8 @@ SkyTower-AI Position Manager
 Manages open positions with AI-driven exit decisions and USD-based safety guardrails.
 """
 import copy
+import json
+import os
 import threading
 import time
 from datetime import datetime, timedelta
@@ -83,7 +85,7 @@ class PositionManager:
     - Daily P/L tracking
     """
 
-    def __init__(self, exit_engine=None):
+    def __init__(self, exit_engine=None, history_file: Optional[str] = None):
         self.position: Optional[OpenPosition] = None
         self.pending_command: Optional[PositionCommand] = None
         self.lock = threading.Lock()
@@ -102,6 +104,62 @@ class PositionManager:
 
         # Trade history (for daily tracking)
         self.closed_trades: List[Dict] = []
+
+        # Persistent trade log (survives restarts and UTC-midnight resets).
+        # None (default, e.g. in tests) = in-memory only.
+        self.history_file = history_file
+        self.recent_trades: List[Dict] = []  # newest last, capped
+        self._load_history()
+
+    def _load_history(self) -> None:
+        """Rebuild daily counters and the recent-trades list from the
+        persistent JSONL trade log (so a watchdog restart doesn't wipe
+        the dashboard statistics)."""
+        if not self.history_file or not os.path.exists(self.history_file):
+            return
+        records: List[Dict] = []
+        try:
+            with open(self.history_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        records.append(json.loads(line))
+                    except ValueError:
+                        continue
+        except OSError as e:
+            logger.warning(f"Could not read trade history {self.history_file}: {e}")
+            return
+
+        self.recent_trades = records[-50:]
+
+        today = utcnow().strftime("%Y-%m-%d")
+        todays = [r for r in records
+                  if str(r.get("closed_at", "")).startswith(today)]
+        self.closed_trades = todays
+        # daily_trades counts opened positions; after a restart the best
+        # reconstruction is the number of trades closed today (an open
+        # position does not survive a restart anyway)
+        self.daily_trades = len(todays)
+        self.daily_pnl_usd = sum(float(r.get("profit_usd", 0.0)) for r in todays)
+        self.daily_reset_date = today
+        if todays:
+            logger.info(f"Restored daily stats from trade history: "
+                        f"{self.daily_trades} trades, ${self.daily_pnl_usd:.2f} P/L")
+
+    def _append_history(self, record: Dict) -> None:
+        """Append one closed trade to the persistent JSONL log."""
+        self.recent_trades.append(record)
+        self.recent_trades = self.recent_trades[-50:]
+        if not self.history_file:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
+            with open(self.history_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(record) + "\n")
+        except OSError as e:
+            logger.error(f"Could not write trade history {self.history_file}: {e}")
 
     def _reset_daily_if_needed(self):
         """Reset daily counters at midnight UTC."""
@@ -172,15 +230,20 @@ class PositionManager:
             self.daily_pnl_usd += profit
 
             if self.position:
-                self.closed_trades.append({
+                record = {
                     "ticket": self.position.ticket,
                     "symbol": self.position.symbol,
                     "direction": self.position.direction,
+                    "lots": self.position.lots,
+                    "event_name": self.position.event_name,
                     "profit_usd": profit,
                     "reason": data.get("reason", "unknown"),
+                    "opened_at": self.position.open_time.isoformat(),
                     "closed_at": utcnow().isoformat(),
                     "decisions_count": len(self.position.ai_decisions),
-                })
+                }
+                self.closed_trades.append(record)
+                self._append_history(record)
                 logger.info(f"Position closed: {self.position.symbol} | "
                             f"P/L: ${profit:.2f} | Reason: {data.get('reason', 'unknown')} | "
                             f"Daily P/L: ${self.daily_pnl_usd:.2f}")
@@ -391,11 +454,18 @@ class PositionManager:
     def get_status(self) -> Dict:
         """Get current position manager status (for debugging/monitoring)."""
         with self.lock:
+            self._reset_daily_if_needed()
             return {
                 "has_position": self.position is not None,
                 "position": self.position.to_dict() if self.position else None,
                 "daily_pnl_usd": round(self.daily_pnl_usd, 2),
                 "daily_trades": self.daily_trades,
                 "closed_trades_today": len(self.closed_trades),
+                # Live limits so the dashboard shows what is actually enforced
+                "max_daily_trades": self.config.get("max_daily_trades", 5),
+                "max_daily_loss_usd": self.config.get("max_daily_loss_usd", 300.0),
+                "max_loss_usd": self.config.get("max_loss_usd", 100.0),
+                # Last closed trades (persistent, across UTC-day resets/restarts)
+                "recent_trades": list(reversed(self.recent_trades[-10:])),
                 "pending_command": self.pending_command.to_dict() if self.pending_command else None,
             }

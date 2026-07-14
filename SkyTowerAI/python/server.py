@@ -71,7 +71,10 @@ def init_services():
     zone_analyzer = ZoneAnalyzer(ZONE_CONFIG)
     target_calculator = TargetCalculator(ZONE_CONFIG)
     exit_engine = ExitDecisionEngine()
-    position_manager = PositionManager(exit_engine=exit_engine)
+    trade_history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      'logs', 'trade_history.jsonl')
+    position_manager = PositionManager(exit_engine=exit_engine,
+                                       history_file=trade_history_file)
     decision_history = DecisionHistory()
 
     logger.info("Services initialized successfully (with AI Position Manager + Decision History)")
@@ -145,8 +148,8 @@ def config_risk():
     Dashboard-editable risk limits (persisted across restarts via
     logs/runtime_overrides.json). PositionManager reads the live config
     dict on every check, so changes apply immediately.
-    NOTE: the EA has its own per-chart backups (InpMaxDailyTrades,
-    InpMaxLossUSD) that must be adjusted in MT5 inputs separately.
+    Single source of truth: max_loss_usd is also delivered to the EA in
+    every /api/signal response (the EA no longer has a duplicate input).
     """
     import config as cfg
 
@@ -1352,6 +1355,10 @@ def get_mt5_signal():
                     "direction": next_decision.direction,
                     "pair": decision_pair,  # MT5 format (no slash)
                     "lot_percent": next_decision.lot_percent,
+                    # Panel-owned per-trade risk budget (USD). Single source of
+                    # truth: the EA sizes the lot from this and uses it as its
+                    # offline max-loss guardrail (no EA-side duplicate input).
+                    "max_loss_usd": POSITION_MANAGEMENT_CONFIG.get("max_loss_usd", 100.0),
                     "confidence": next_decision.confidence,
                     "entry_seconds_before": next_decision.entry_seconds_before,
                     "exit_minutes": next_decision.exit_minutes_after,

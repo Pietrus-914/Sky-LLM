@@ -966,8 +966,33 @@
                 </div>
                 <div class="stat-cell">
                     <div class="label">Max Daily Loss</div>
-                    <div class="value neutral" id="statMaxLoss">$300</div>
+                    <div class="value neutral" id="statMaxLoss">--</div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Recent Trades (persistent — survives restarts and the UTC-midnight reset) -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Recent Trades</span>
+            </div>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Closed (CET)</th>
+                            <th>Symbol</th>
+                            <th>Dir</th>
+                            <th>Lots</th>
+                            <th>P/L</th>
+                            <th>Event</th>
+                            <th>Close Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recentTradesBody">
+                        <tr><td colspan="7" class="no-data">No trades recorded yet</td></tr>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -1051,7 +1076,7 @@
             <div class="config-section">
                 <h3>Risk &amp; Daily Limits</h3>
                 <div class="config-row">
-                    <label for="riskMaxDailyTrades">Max trades per day (server)</label>
+                    <label for="riskMaxDailyTrades">Max trades per day</label>
                     <input type="number" id="riskMaxDailyTrades" min="1" max="100" step="1" style="width:110px">
                 </div>
                 <div class="config-row">
@@ -1059,13 +1084,13 @@
                     <input type="number" id="riskMaxDailyLoss" min="10" max="1000000" step="10" style="width:110px">
                 </div>
                 <div class="config-row">
-                    <label for="riskMaxLoss">Max loss per trade USD (also sizes the lot!)</label>
+                    <label for="riskMaxLoss">Max loss per trade USD (sizes the lot)</label>
                     <input type="number" id="riskMaxLoss" min="5" max="100000" step="5" style="width:110px">
                 </div>
                 <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
-                    Changes apply immediately and survive restarts. Remember the EA-side
-                    inputs on each chart: InpMaxDailyTrades (per chart) and InpMaxLossUSD
-                    (should match "Max loss per trade").
+                    Single source of truth: changes apply immediately, survive restarts,
+                    and are delivered to the EA automatically ("Max loss per trade" rides
+                    along with every trading signal). No EA inputs to keep in sync.
                 </div>
             </div>
 
@@ -1159,17 +1184,15 @@
                 % lota, oraz SL/TP w pipsach. <b>EA w MT5</b> tylko wykonuje sygnał i pilnuje bezpieczników.
             </p>
             <p style="font-size:0.85rem;line-height:1.6;color:var(--text-primary);margin-bottom:8px">
-                Ustawienia są w <b>DWÓCH miejscach</b> i muszą być spójne:
+                Podział odpowiedzialności — <b>bez dublowania ustawień</b>:
             </p>
             <ul style="font-size:0.85rem;line-height:1.7;color:var(--text-primary);padding-left:22px;margin-bottom:8px">
-                <li><b>Panel → Event Config</b> — ustawienia serwera (globalne, dla wszystkich par). Działają od razu po zapisie i przeżywają restart.</li>
-                <li><b>Inputy EA w MT5</b> — osobno na <b>KAŻDYM z 4 wykresów</b> (NZDUSD, USDCAD, AUDUSD, GBPUSD). Zmiana: klik prawym na wykres → Lista ekspertów → Właściwości (lub F7 w oknie EA).</li>
+                <li><b>Panel → Event Config</b> — CAŁE ryzyko: limit tradów dziennie, dzienny budżet straty, strata na trade (= wielkość pozycji). Działa od razu po zapisie, przeżywa restart, a "Max loss per trade" jedzie do EA automatycznie z każdym sygnałem. <b>Niczego nie trzeba ustawiać drugi raz w EA.</b></li>
+                <li><b>Inputy EA w MT5</b> — tylko techniczne parametry wykonania (spread, pewność, timing, smart exit, połączenie). Osobno na <b>KAŻDYM z 4 wykresów</b> (NZDUSD, USDCAD, AUDUSD, GBPUSD). Zmiana: klik prawym na wykres → Lista ekspertów → Właściwości (lub F7 w oknie EA).</li>
             </ul>
             <div style="font-size:0.8rem;line-height:1.6;color:var(--text-primary);background:var(--bg-tertiary);border-left:3px solid var(--accent-red);border-radius:4px;padding:10px 12px">
-                <b style="color:var(--accent-red)">3 rzeczy, które MUSZĄ się zgadzać:</b><br>
-                1. Panel <b>"Max loss per trade USD"</b> = EA <b>InpMaxLossUSD</b> (na każdym wykresie!) — ta wartość jednocześnie wyznacza wielkość pozycji.<br>
-                2. Panel <b>"Max trades per day"</b> (limit globalny serwera) vs EA <b>InpMaxDailyTrades</b> (limit per wykres) — jeśli podniesiesz limit w panelu, podnieś też w EA, inaczej EA zablokuje wejścia wcześniej.<br>
-                3. Port serwera (SKYTOWER_PORT w .env, np. 5556) = EA <b>InpServerPort</b> + adres w allowliście WebRequest w MT5.
+                <b style="color:var(--accent-red)">Jedyna rzecz, która MUSI się zgadzać:</b><br>
+                port serwera (SKYTOWER_PORT w .env, np. 5556) = EA <b>InpServerPort</b> + adres w allowliście WebRequest w MT5 (Narzędzia → Opcje → Doradcy ekspertów).
             </div>
         </div>
 
@@ -1183,9 +1206,9 @@
                     <thead><tr><th>Parametr</th><th>Co robi</th><th>Set 10k USD</th></tr></thead>
                     <tbody style="font-size:0.82rem">
                         <tr><td><b>Min. Impact Level</b></td><td>Które eventy system w ogóle rozważa (HIGH / MEDIUM+ / LOW+). Więcej eventów = więcej zagrań, ale słabsze reakcje.</td><td>MEDIUM and above</td></tr>
-                        <tr><td><b>Max trades per day</b></td><td>Globalny limit tradów dziennie (cały serwer, wszystkie pary razem). Licznik zeruje się o północy UTC.</td><td>5</td></tr>
+                        <tr><td><b>Max trades per day</b></td><td>Globalny limit tradów dziennie (cały serwer, wszystkie pary razem). Po osiągnięciu serwer przestaje wydawać sygnały. Licznik zeruje się o północy UTC (02:00 czasu PL latem). <b>Jedyne miejsce ustawienia — EA nie ma już swojego limitu.</b></td><td>5</td></tr>
                         <tr><td><b>Max daily loss USD</b></td><td>Dzienny budżet straty. Po przekroczeniu serwer blokuje nowe wejścia do północy UTC.</td><td>300 (3% konta)</td></tr>
-                        <tr><td><b>Max loss per trade USD</b></td><td>Bezpiecznik pojedynczego trade'u — serwer/EA zamyka pozycję przy tej stracie. <b>Ta sama kwota jest budżetem do wyliczenia lota!</b></td><td>100 (1% konta)</td></tr>
+                        <tr><td><b>Max loss per trade USD</b></td><td>Budżet ryzyka pojedynczego trade'u: <b>z tej kwoty EA liczy wielkość lota</b>, przy tej stracie pozycja jest zamykana (guardrail serwera + offline guardrail EA). Wysyłany do EA automatycznie z każdym sygnałem — <b>jedyne miejsce ustawienia</b>.</td><td>100 (1% konta)</td></tr>
                         <tr><td><b>Tier 1 / Tier 2 / Currencies</b></td><td>Które typy eventów i waluty są aktywne.</td><td>bez zmian</td></tr>
                     </tbody>
                 </table>
@@ -1197,19 +1220,22 @@
             <div class="card-header">
                 <span class="card-title">Inputy EA (MT5 — ustaw na każdym z 4 wykresów)</span>
             </div>
+            <p style="font-size:0.8rem;line-height:1.6;color:var(--text-secondary);margin-bottom:8px">
+                Tu są WYŁĄCZNIE parametry techniczne wykonania. Limity ryzyka (trady/dzień,
+                strata dzienna, strata na trade) ustawiasz TYLKO w panelu — EA nie ma już
+                inputów InpMaxLossUSD ani InpMaxDailyTrades.
+            </p>
             <div class="table-wrapper">
                 <table>
                     <thead><tr><th>Input</th><th>Co robi</th><th>Set 10k USD</th></tr></thead>
                     <tbody style="font-size:0.82rem">
                         <tr><td><b>InpServerHost / InpServerPort</b></td><td>Adres serwera. Musi zgadzać się z SKYTOWER_PORT w .env i allowlistą WebRequest (Narzędzia → Opcje → Doradcy ekspertów).</td><td>127.0.0.1 / <b>5556</b></td></tr>
-                        <tr><td><b>InpRiskPercent</b></td><td>Budżet ryzyka na trade jako % salda. Wynik i tak jest ścinany do InpMaxLossUSD, ale ustaw świadomie.</td><td><b>1.0</b> (10k × 1% = 100$)</td></tr>
-                        <tr><td><b>InpMaxLossUSD</b></td><td>Twardy bezpiecznik $: EA zamyka pozycję przy tej stracie <b>i</b> z tej kwoty liczy wielkość lota. = panel "Max loss per trade".</td><td><b>100</b></td></tr>
+                        <tr><td><b>InpRiskPercent</b></td><td>Górny limit ryzyka jako % salda — wynik i tak jest ścinany do panelowego "Max loss per trade" z sygnału. Zostaw wysoki (10), żeby o wielkości pozycji decydował wyłącznie panel; zmniejsz tylko, jeśli chcesz dodatkowego %-owego sufitu niezależnego od panelu.</td><td>10.0</td></tr>
                         <tr><td><b>InpMaxLotPercent</b></td><td>Domyślny % budżetu, gdy serwer nie poda lot_percent w sygnale. Używany tylko przy InpUseConfidenceLot = true.</td><td>80</td></tr>
                         <tr><td><b>InpMinConfidence</b></td><td>Minimalna pewność decyzji, żeby wejść. Sygnały testowe (forced) omijają ten próg automatycznie.</td><td>0.5</td></tr>
                         <tr><td><b>InpUseConfidenceLot</b></td><td>true = lot skalowany przez lot% z sygnału serwera (zależny od pewności decyzji). false = zawsze pełny budżet, prostszy i przewidywalny sizing.</td><td><b>false</b></td></tr>
                         <tr><td><b>InpUseSpreadLotReduction</b></td><td>true = lot redukowany przy podwyższonym spreadzie (3–6 pips → 80%, 6–10 → 60%, 10–15 → 40%). false = bez redukcji. Blokady wejścia (spread &gt; InpMaxSpreadPips oraz &gt; 15 pips) działają ZAWSZE, niezależnie od tego przełącznika.</td><td><b>false</b></td></tr>
                         <tr><td><b>InpMaxSpreadPips</b></td><td>Max spread przy wejściu. Spread na newsach jest ZAWSZE wysoki — nie podnosić "na siłę".</td><td>10</td></tr>
-                        <tr><td><b>InpMaxDailyTrades</b></td><td>Limit tradów dziennie <b>per wykres</b> (niezależny od limitu serwera).</td><td>3</td></tr>
                         <tr><td><b>InpUseStopLoss</b></td><td>Zawsze włączone — SL to podstawa wyliczenia lota.</td><td>true</td></tr>
                         <tr><td><b>InpEntrySecondsBefore</b></td><td>Wejście X sekund przed publikacją.</td><td>15</td></tr>
                         <tr><td><b>InpMaxHoldMinutes</b></td><td>Maksymalny czas trzymania pozycji — po nim zamknięcie bezwarunkowe.</td><td>30</td></tr>
@@ -1232,15 +1258,17 @@
                 <h3>Wielkość pozycji (lot)</h3>
                 <div style="font-size:0.83rem;line-height:1.7;color:var(--text-primary)">
                     <code style="display:block;background:var(--bg-tertiary);border-radius:4px;padding:8px 10px;margin:6px 0;font-size:0.8rem">
-                    budżet = min(saldo × InpRiskPercent%, InpMaxLossUSD)<br>
+                    budżet = min(saldo × InpRiskPercent%, panel "Max loss per trade" z sygnału)<br>
                     lot = budżet / (SL_w_pipsach × wartość_pipsa_za_1_lot)
                     </code>
+                    "Max loss per trade" ustawiasz w panelu (Event Config) — serwer dokleja tę kwotę do każdego
+                    sygnału, więc EA zawsze liczy z aktualnej wartości.<br>
                     Opcjonalnie budżet może być dodatkowo zmniejszany przez dwa przełączniki (oba do wyboru w inputach EA):<br>
                     • <b>InpUseConfidenceLot</b> = true → budżet × lot% z sygnału (niższa pewność decyzji = mniejsza pozycja);<br>
                     • <b>InpUseSpreadLotReduction</b> = true → budżet × mnożnik spreadu (3–6 pips → 80%, 6–10 → 60%, 10–15 → 40%).<br>
                     Przy obu wyłączonych lot liczy się z pełnego budżetu — najprościej. Niezależnie od przełączników
                     EA <b>nie wejdzie</b>, gdy spread &gt; InpMaxSpreadPips lub &gt; 15 pipsów.
-                    Efekt: pełne trafienie SL kosztuje ~budżet, nigdy więcej niż InpMaxLossUSD.
+                    Efekt: pełne trafienie SL kosztuje ~budżet, nigdy więcej niż panelowy "Max loss per trade".
                 </div>
             </div>
             <div class="config-section">
@@ -1249,7 +1277,7 @@
                     1. <b>LLM</b> — decyzja serwera zawiera stop_loss_pips (dopasowany do zmienności/ATR).<br>
                     2. Gdy brak — <b>strefy S/R</b> z indykatora SkyTower_Zones.<br>
                     3. Gdy brak — <b>domyślne 25 pipsów</b>.<br>
-                    Zawsze na końcu clamp do zakresu <b>20–100 pipsów</b>. SL nie jest kwotą — kwotę straty ogranicza InpMaxLossUSD.
+                    Zawsze na końcu clamp do zakresu <b>20–100 pipsów</b>. SL nie jest kwotą — kwotę straty ogranicza panelowy "Max loss per trade".
                 </div>
             </div>
             <div class="config-section">
@@ -1257,7 +1285,7 @@
                 <div style="font-size:0.83rem;line-height:1.7;color:var(--text-primary)">
                     TP1 z decyzji LLM lub ze stref. Po osiągnięciu TP1: częściowe zamknięcie (50%),
                     SL na breakeven, trailing 10 pipsów na reszcie. Dodatkowo AI ocenia pozycję co 30 s
-                    i może zamknąć wcześniej. Twarde wyjścia: strata −InpMaxLossUSD, czas &gt;InpMaxHoldMinutes,
+                    i może zamknąć wcześniej. Twarde wyjścia: strata −"Max loss per trade" (panel), czas &gt;InpMaxHoldMinutes,
                     spread &gt;InpEmergencySpreadPips.
                 </div>
             </div>
@@ -1269,14 +1297,14 @@
                 <span class="card-title">Przykład: konto 10 000 USD — co się stanie na evencie</span>
             </div>
             <div style="font-size:0.83rem;line-height:1.8;color:var(--text-primary)">
-                Ustawienia: panel 5 tradów / 300$ dziennie / 100$ na trade; EA: InpRiskPercent 1.0, InpMaxLossUSD 100,
-                <b>InpUseConfidenceLot = false, InpUseSpreadLotReduction = false</b> (bez redukcji — pełny budżet).<br><br>
-                1. Serwer decyduje: SELL USDCAD, SL od LLM = <b>30 pipsów</b>.<br>
-                2. Budżet: min(10 000 × 1%, 100$) = <b>100$</b>.<br>
+                Ustawienia: panel 5 tradów / 300$ dziennie / 100$ na trade (całe ryzyko TYLKO w panelu);
+                EA: <b>InpUseConfidenceLot = false, InpUseSpreadLotReduction = false</b> (bez redukcji — pełny budżet).<br><br>
+                1. Serwer decyduje: SELL USDCAD, SL od LLM = <b>30 pipsów</b>; w sygnale jedzie też budżet <b>max_loss_usd = 100$</b> (panel).<br>
+                2. Budżet: min(10 000 × InpRiskPercent%, 100$ z sygnału) = <b>100$</b>.<br>
                 3. Lot: 100$ / (30 pipsów × ~7,30$/pips za 1 lot USDCAD) ≈ <b>0.45 lota</b>
                    (dla par XXX/USD pips za 1 lot ≈ 10$ → ~0.33 lota).<br>
                 4. Wejście 15 s przed publikacją, SL 30 pipsów od ceny.<br>
-                5. Najgorszy scenariusz: pełny SL ≈ −100$ (+ koszt spreadu); twardy sufit to i tak −100$ (InpMaxLossUSD).<br>
+                5. Najgorszy scenariusz: pełny SL ≈ −100$ (+ koszt spreadu); twardy sufit to i tak −100$ (guardrail serwera i EA).<br>
                 6. Dobry scenariusz: TP1 → zamknięcie 50%, SL na wejście, trailing na reszcie. Po 30 min pozycja znika niezależnie od wyniku.<br>
                 7. Po 3 stratach ~100$ (limit dzienny 300$) lub 5 tradach serwer blokuje handel do północy UTC.<br><br>
                 <span style="color:var(--text-secondary)">Z włączonymi redukcjami (oba przełączniki = true) budżet z kroku 2 byłby dodatkowo mnożony:
@@ -1290,11 +1318,12 @@
                 <span class="card-title">Częste pytania</span>
             </div>
             <div style="font-size:0.83rem;line-height:1.7;color:var(--text-primary)">
-                <b>Chcę grać agresywniej / testować więcej.</b> Podnieś w panelu "Max trades per day" i "Max daily loss",
-                a w EA InpMaxDailyTrades na każdym wykresie. Wielkość pozycji rośnie przez "Max loss per trade" (panel) + InpMaxLossUSD (EA) — zawsze razem.<br><br>
-                <b>Chcę mniejsze pozycje bez zmiany bezpieczników.</b> Zmniejsz InpRiskPercent (np. 0.5 = ~50$ budżetu na 10k) — albo włącz redukcje (InpUseConfidenceLot / InpUseSpreadLotReduction = true).<br><br>
+                <b>Chcę grać agresywniej / testować więcej.</b> Wszystko w panelu: podnieś "Max trades per day",
+                "Max daily loss" i ewentualnie "Max loss per trade" (większa pozycja). Zapis działa od razu — w EA nic nie zmieniasz.<br><br>
+                <b>Chcę mniejsze pozycje bez zmiany bezpieczników.</b> Zmniejsz w panelu "Max loss per trade" — albo włącz redukcje w EA (InpUseConfidenceLot / InpUseSpreadLotReduction = true).<br><br>
                 <b>Dlaczego lot jest różny na różnych tradach?</b> Bo zależy od SL w pipsach (dalszy SL = mniejszy lot), a przy włączonych przełącznikach InpUseConfidenceLot / InpUseSpreadLotReduction — także od pewności decyzji i spreadu. To celowe — stała jest strata w $, nie wielkość pozycji.<br><br>
                 <b>Zmieniłem input EA i nic się nie zmieniło.</b> Inputy trzeba zmienić na <b>każdym wykresie osobno</b> — EA na NZDUSD nie widzi ustawień EA na GBPUSD.<br><br>
+                <b>Rano "Trades Today" pokazuje 0, a w nocy było zagranie.</b> Liczniki dzienne zerują się o <b>północy UTC</b> (02:00 czasu PL latem) — nocne zagranie sprzed tej godziny należy do "wczoraj". Samo zagranie nie znika: jest w tabeli <b>Recent Trades</b> na Dashboardzie (trwałej — przeżywa restart serwera).<br><br>
                 <b>FORCE_DECISION (tryb bez SKIP)</b> — wyłącznie na koncie DEMO. Na realnym koncie system musi mieć prawo odpuścić event.
             </div>
         </div>
@@ -1647,10 +1676,12 @@
                 var data = await apiFetch('/api/position/status');
                 var container = $('positionContent');
 
-                // Daily stats
+                // Daily stats — limits come from the server (panel-configured,
+                // never hardcoded here)
                 var dailyTrades = data.daily_trades || 0;
                 var dailyPnl = data.daily_pnl_usd || 0;
-                var maxDailyTrades = 5;
+                var maxDailyTrades = data.max_daily_trades || 5;
+                var maxDailyLoss = data.max_daily_loss_usd;
 
                 $('statTrades').textContent = dailyTrades;
                 $('statTrades').className = 'value ' + (dailyTrades > 0 ? '' : 'neutral');
@@ -1658,9 +1689,13 @@
                 $('statPnl').textContent = formatUSD(dailyPnl);
                 $('statPnl').className = 'value ' + pnlClass(dailyPnl);
 
-                var remaining = maxDailyTrades - dailyTrades;
+                var remaining = Math.max(0, maxDailyTrades - dailyTrades);
                 $('statLimit').textContent = remaining + ' / ' + maxDailyTrades;
                 $('statLimit').className = 'value ' + (remaining > 0 ? 'neutral' : 'negative');
+
+                $('statMaxLoss').textContent = (maxDailyLoss != null) ? '$' + maxDailyLoss : '--';
+
+                renderRecentTrades(data.recent_trades || []);
 
                 // Position info
                 if (data.has_position && data.position) {
@@ -1717,7 +1752,34 @@
                 $('statTrades').textContent = '--';
                 $('statPnl').textContent = '--';
                 $('statLimit').textContent = '--';
+                $('statMaxLoss').textContent = '--';
             }
+        }
+
+        function renderRecentTrades(trades) {
+            var tbody = $('recentTradesBody');
+            if (!tbody) return;
+
+            if (!trades.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="no-data">No trades recorded yet</td></tr>';
+                return;
+            }
+
+            var html = '';
+            trades.forEach(function(t) {
+                var profit = t.profit_usd || 0;
+                var dirClass = (t.direction || '').toLowerCase();
+                html += '<tr>' +
+                    '<td class="data-mono">' + escapeHtml(utcToCET(t.closed_at || '')) + '</td>' +
+                    '<td>' + escapeHtml(t.symbol || '--') + '</td>' +
+                    '<td><span class="direction-badge ' + dirClass + '">' + escapeHtml(t.direction || '--') + '</span></td>' +
+                    '<td class="data-mono">' + (t.lots != null ? t.lots : '--') + '</td>' +
+                    '<td class="data-mono ' + pnlClass(profit) + '">' + formatUSD(profit) + '</td>' +
+                    '<td>' + escapeHtml(t.event_name || '--') + '</td>' +
+                    '<td>' + escapeHtml(t.reason || '--') + '</td>' +
+                '</tr>';
+            });
+            tbody.innerHTML = html;
         }
 
         // ============================================================

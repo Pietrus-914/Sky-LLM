@@ -271,9 +271,9 @@ LLM_CONFIG = {
 # AI POSITION MANAGEMENT (USD-based guardrails)
 # =============================================================================
 POSITION_MANAGEMENT_CONFIG = {
-    # Safety guardrails in USD (server-side + EA-side backup).
-    # Env-overridable for the test phase; keep the EA inputs in sync
-    # (InpMaxLossUSD also caps the lot-sizing risk budget!).
+    # Safety guardrails in USD. max_loss_usd is the single source of truth:
+    # it is sent to the EA in every /api/signal response, where it both caps
+    # the lot-sizing risk budget and arms the EA's offline max-loss guardrail.
     "max_loss_usd": _env_float("SKYTOWER_MAX_LOSS_USD", 100.0),        # per trade → forced close
     "max_hold_minutes": 30,            # Max position duration
     "emergency_spread_pips": 15,       # Close if spread spikes above this

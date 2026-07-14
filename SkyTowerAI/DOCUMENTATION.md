@@ -197,7 +197,11 @@ TRADING_CONFIG = {
 | InpMaxLotPercent | 80.0 | Max lot % |
 | InpMinConfidence | 0.5 | Min pewność do wejścia |
 | InpMaxSpreadPips | 10.0 | Max spread (pips) |
-| InpMaxDailyTrades | 3 | Max pozycji dziennie |
+
+Limity ryzyka (max tradów/dzień, max strata dzienna, max strata na trade)
+ustawia się WYŁĄCZNIE w panelu (Event Config → Risk & Daily Limits) —
+serwer egzekwuje limity dzienne sam, a "max loss per trade" wysyła do EA
+w każdym sygnale (`max_loss_usd`).
 
 ---
 
