@@ -109,56 +109,85 @@ class PositionManager:
         # None (default, e.g. in tests) = in-memory only.
         self.history_file = history_file
         self.recent_trades: List[Dict] = []  # newest last, capped
+        if self.history_file:
+            try:
+                os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
+            except OSError as e:
+                logger.error(f"Could not create trade history dir: {e}")
         self._load_history()
 
     def _load_history(self) -> None:
         """Rebuild daily counters and the recent-trades list from the
         persistent JSONL trade log (so a watchdog restart doesn't wipe
-        the dashboard statistics)."""
+        the dashboard statistics). Any corruption degrades gracefully —
+        a broken history file must never keep the server from starting.
+
+        Note: reconstruction attributes a trade to the UTC day it CLOSED
+        (live counting attributes it to the day it opened) — a trade held
+        across UTC midnight can shift by one day after a restart. With the
+        low daily trade counts involved this boundary skew is accepted."""
         if not self.history_file or not os.path.exists(self.history_file):
             return
         records: List[Dict] = []
         try:
-            with open(self.history_file, 'r', encoding='utf-8') as f:
+            with open(self.history_file, 'r', encoding='utf-8', errors='replace') as f:
                 for line in f:
                     line = line.strip()
                     if not line:
                         continue
                     try:
-                        records.append(json.loads(line))
+                        rec = json.loads(line)
                     except ValueError:
                         continue
-        except OSError as e:
+                    if isinstance(rec, dict):
+                        records.append(rec)
+        except Exception as e:
             logger.warning(f"Could not read trade history {self.history_file}: {e}")
             return
 
-        self.recent_trades = records[-50:]
+        try:
+            self.recent_trades = records[-50:]
 
-        today = utcnow().strftime("%Y-%m-%d")
-        todays = [r for r in records
-                  if str(r.get("closed_at", "")).startswith(today)]
-        self.closed_trades = todays
-        # daily_trades counts opened positions; after a restart the best
-        # reconstruction is the number of trades closed today (an open
-        # position does not survive a restart anyway)
-        self.daily_trades = len(todays)
-        self.daily_pnl_usd = sum(float(r.get("profit_usd", 0.0)) for r in todays)
-        self.daily_reset_date = today
-        if todays:
-            logger.info(f"Restored daily stats from trade history: "
-                        f"{self.daily_trades} trades, ${self.daily_pnl_usd:.2f} P/L")
+            today = utcnow().strftime("%Y-%m-%d")
+            todays = [r for r in records
+                      if str(r.get("closed_at", "")).startswith(today)]
+            self.closed_trades = todays
+            # daily_trades counts opened positions; after a restart the best
+            # reconstruction is the number of trades closed today (an open
+            # position does not survive a restart anyway)
+            self.daily_trades = len(todays)
+            self.daily_pnl_usd = sum(self._safe_float(r.get("profit_usd"))
+                                     for r in todays)
+            self.daily_reset_date = today
+            if todays:
+                logger.info(f"Restored daily stats from trade history: "
+                            f"{self.daily_trades} trades, ${self.daily_pnl_usd:.2f} P/L")
+        except Exception as e:
+            logger.warning(f"Trade history {self.history_file} unusable ({e}); "
+                           f"starting with empty daily stats")
+            self.recent_trades = []
+            self.closed_trades = []
+            self.daily_trades = 0
+            self.daily_pnl_usd = 0.0
 
-    def _append_history(self, record: Dict) -> None:
-        """Append one closed trade to the persistent JSONL log."""
-        self.recent_trades.append(record)
-        self.recent_trades = self.recent_trades[-50:]
+    @staticmethod
+    def _safe_float(value) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _write_history_line(self, record: Dict) -> None:
+        """Append one closed trade to the persistent JSONL log.
+        Called OUTSIDE self.lock — a stalled disk write must not block
+        can_open_trade()/update_position() (they gate the EA's signal
+        polling during the entry window)."""
         if not self.history_file:
             return
         try:
-            os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
             with open(self.history_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(record) + "\n")
-        except OSError as e:
+        except Exception as e:
             logger.error(f"Could not write trade history {self.history_file}: {e}")
 
     def _reset_daily_if_needed(self):
@@ -188,6 +217,19 @@ class PositionManager:
                 return False, f"Daily trade limit reached: {self.daily_trades}/{max_trades}"
 
             return True, "OK"
+
+    def register_untracked_trade(self) -> None:
+        """Count a trade against the daily limit when the EA could not
+        deliver the full /api/position/opened report and fell back to the
+        bare /api/trade-executed ping. Without this, a failed report would
+        leave the panel's max_daily_trades unenforced for the rest of the
+        day (the EA no longer has its own per-chart gate)."""
+        with self.lock:
+            self._reset_daily_if_needed()
+            self.daily_trades += 1
+            logger.warning(f"Untracked trade counted against daily limit "
+                           f"({self.daily_trades} today) — EA used the "
+                           f"fallback notification, no position management")
 
     def on_position_opened(self, data: Dict, entry_reasoning: str = "") -> None:
         """Called when EA reports a new position opened."""
@@ -224,7 +266,13 @@ class PositionManager:
                         f"ticket={self.position.ticket}")
 
     def on_position_closed(self, data: Dict) -> None:
-        """Called when EA reports position closed."""
+        """Called when EA reports position closed.
+
+        Also handles an ORPHANED close (self.position is None, e.g. the
+        server restarted while the EA held the trade): the trade is still
+        persisted and counted, otherwise its P/L would vanish from the
+        daily-loss budget on the next restart and the daily trade count
+        would under-count by one."""
         with self.lock:
             profit = data.get("profit", 0.0)
             self.daily_pnl_usd += profit
@@ -242,14 +290,38 @@ class PositionManager:
                     "closed_at": utcnow().isoformat(),
                     "decisions_count": len(self.position.ai_decisions),
                 }
-                self.closed_trades.append(record)
-                self._append_history(record)
                 logger.info(f"Position closed: {self.position.symbol} | "
                             f"P/L: ${profit:.2f} | Reason: {data.get('reason', 'unknown')} | "
                             f"Daily P/L: ${self.daily_pnl_usd:.2f}")
+            else:
+                # Orphaned close — position state was lost (server restart).
+                # Its open was never counted post-restart, so count it here.
+                self.daily_trades += 1
+                record = {
+                    "ticket": data.get("ticket", 0),
+                    "symbol": data.get("symbol", "?"),
+                    "direction": data.get("direction", "?"),
+                    "lots": data.get("lots", 0.0),
+                    "event_name": "(position lost in restart)",
+                    "profit_usd": profit,
+                    "reason": data.get("reason", "unknown"),
+                    "opened_at": "",
+                    "closed_at": utcnow().isoformat(),
+                    "decisions_count": 0,
+                }
+                logger.warning(f"Orphaned position close (no tracked position) | "
+                               f"ticket={record['ticket']} | P/L: ${profit:.2f} | "
+                               f"Daily P/L: ${self.daily_pnl_usd:.2f}")
+
+            self.closed_trades.append(record)
+            self.recent_trades.append(record)
+            self.recent_trades = self.recent_trades[-50:]
 
             self.position = None
             self.pending_command = None
+
+        # Disk write outside the lock — see _write_history_line
+        self._write_history_line(record)
 
     def update_position(self, data: Dict) -> Dict:
         """
@@ -464,7 +536,6 @@ class PositionManager:
                 # Live limits so the dashboard shows what is actually enforced
                 "max_daily_trades": self.config.get("max_daily_trades", 5),
                 "max_daily_loss_usd": self.config.get("max_daily_loss_usd", 300.0),
-                "max_loss_usd": self.config.get("max_loss_usd", 100.0),
                 # Last closed trades (persistent, across UTC-day resets/restarts)
                 "recent_trades": list(reversed(self.recent_trades[-10:])),
                 "pending_command": self.pending_command.to_dict() if self.pending_command else None,

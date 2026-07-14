@@ -1088,9 +1088,11 @@
                     <input type="number" id="riskMaxLoss" min="5" max="100000" step="5" style="width:110px">
                 </div>
                 <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
-                    Single source of truth: changes apply immediately, survive restarts,
-                    and are delivered to the EA automatically ("Max loss per trade" rides
-                    along with every trading signal). No EA inputs to keep in sync.
+                    Single source of truth: changes survive restarts and need no EA inputs
+                    to keep in sync. Daily limits apply immediately; "Max loss per trade"
+                    is delivered to the EA with each trading signal — if a signal is
+                    already armed (final ~3 min before an event), that one trade still
+                    uses the value it was armed with.
                 </div>
             </div>
 
@@ -1319,7 +1321,9 @@
             </div>
             <div style="font-size:0.83rem;line-height:1.7;color:var(--text-primary)">
                 <b>Chcę grać agresywniej / testować więcej.</b> Wszystko w panelu: podnieś "Max trades per day",
-                "Max daily loss" i ewentualnie "Max loss per trade" (większa pozycja). Zapis działa od razu — w EA nic nie zmieniasz.<br><br>
+                "Max daily loss" i ewentualnie "Max loss per trade" (większa pozycja). W EA nic nie zmieniasz.
+                Uwaga: "Max loss per trade" jedzie do EA z sygnałem — jeśli sygnał jest już uzbrojony
+                (ostatnie ~3 min przed eventem), to jedno zagranie pójdzie jeszcze na starej wartości.<br><br>
                 <b>Chcę mniejsze pozycje bez zmiany bezpieczników.</b> Zmniejsz w panelu "Max loss per trade" — albo włącz redukcje w EA (InpUseConfidenceLot / InpUseSpreadLotReduction = true).<br><br>
                 <b>Dlaczego lot jest różny na różnych tradach?</b> Bo zależy od SL w pipsach (dalszy SL = mniejszy lot), a przy włączonych przełącznikach InpUseConfidenceLot / InpUseSpreadLotReduction — także od pewności decyzji i spreadu. To celowe — stała jest strata w $, nie wielkość pozycji.<br><br>
                 <b>Zmieniłem input EA i nic się nie zmieniło.</b> Inputy trzeba zmienić na <b>każdym wykresie osobno</b> — EA na NZDUSD nie widzi ustawień EA na GBPUSD.<br><br>
@@ -1677,10 +1681,10 @@
                 var container = $('positionContent');
 
                 // Daily stats — limits come from the server (panel-configured,
-                // never hardcoded here)
+                // never hardcoded or defaulted here)
                 var dailyTrades = data.daily_trades || 0;
                 var dailyPnl = data.daily_pnl_usd || 0;
-                var maxDailyTrades = data.max_daily_trades || 5;
+                var maxDailyTrades = data.max_daily_trades;
                 var maxDailyLoss = data.max_daily_loss_usd;
 
                 $('statTrades').textContent = dailyTrades;
@@ -1689,9 +1693,14 @@
                 $('statPnl').textContent = formatUSD(dailyPnl);
                 $('statPnl').className = 'value ' + pnlClass(dailyPnl);
 
-                var remaining = Math.max(0, maxDailyTrades - dailyTrades);
-                $('statLimit').textContent = remaining + ' / ' + maxDailyTrades;
-                $('statLimit').className = 'value ' + (remaining > 0 ? 'neutral' : 'negative');
+                if (maxDailyTrades != null) {
+                    var remaining = Math.max(0, maxDailyTrades - dailyTrades);
+                    $('statLimit').textContent = remaining + ' / ' + maxDailyTrades;
+                    $('statLimit').className = 'value ' + (remaining > 0 ? 'neutral' : 'negative');
+                } else {
+                    $('statLimit').textContent = '--';
+                    $('statLimit').className = 'value neutral';
+                }
 
                 $('statMaxLoss').textContent = (maxDailyLoss != null) ? '$' + maxDailyLoss : '--';
 
@@ -1700,7 +1709,8 @@
                 // Position info
                 if (data.has_position && data.position) {
                     var pos = data.position;
-                    var dirClass = (pos.direction || '').toLowerCase();
+                    var posDir = String(pos.direction || '').toUpperCase();
+                    var dirClass = (posDir === 'BUY' || posDir === 'SELL') ? posDir.toLowerCase() : '';
                     var profitVal = pos.profit_usd || 0;
                     var durationSec = 0;
                     if (pos.open_time) {
@@ -1768,12 +1778,16 @@
             var html = '';
             trades.forEach(function(t) {
                 var profit = t.profit_usd || 0;
-                var dirClass = (t.direction || '').toLowerCase();
+                // Whitelist the CSS class — records come from a file that
+                // could be hand-edited; never interpolate raw data into HTML
+                var dir = String(t.direction || '').toUpperCase();
+                var dirClass = (dir === 'BUY' || dir === 'SELL') ? dir.toLowerCase() : '';
+                var lots = (typeof t.lots === 'number' && isFinite(t.lots)) ? t.lots : '--';
                 html += '<tr>' +
                     '<td class="data-mono">' + escapeHtml(utcToCET(t.closed_at || '')) + '</td>' +
                     '<td>' + escapeHtml(t.symbol || '--') + '</td>' +
                     '<td><span class="direction-badge ' + dirClass + '">' + escapeHtml(t.direction || '--') + '</span></td>' +
-                    '<td class="data-mono">' + (t.lots != null ? t.lots : '--') + '</td>' +
+                    '<td class="data-mono">' + lots + '</td>' +
                     '<td class="data-mono ' + pnlClass(profit) + '">' + formatUSD(profit) + '</td>' +
                     '<td>' + escapeHtml(t.event_name || '--') + '</td>' +
                     '<td>' + escapeHtml(t.reason || '--') + '</td>' +

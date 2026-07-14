@@ -83,8 +83,6 @@ CSmartExitManager g_smartExit;    // Smart exit manager
 
 datetime       g_lastCheckTime = 0;
 datetime       g_lastTradeTime = 0;
-int            g_todayTrades = 0;
-datetime       g_currentDay = 0;
 bool           g_waitingForEvent = false;
 datetime       g_eventTime = 0;
 string         g_eventPair = "";
@@ -96,8 +94,9 @@ double         g_eventSLPips = 0;       // SL in pips from LLM
 double         g_eventTPPips = 0;       // TP in pips from LLM
 // Per-trade risk budget in USD — set from the server signal (max_loss_usd,
 // panel "Max loss per trade USD"). Sizes the lot AND arms the offline
-// max-loss guardrail. The conservative default only applies if an old
-// server ever omits the field.
+// max-loss guardrail. Signals without the field are REJECTED (no silent
+// fallback), so the value is always fresh for the armed trade; the
+// initializer below is never traded on.
 double         g_maxLossUSD = 100.0;
 ulong          g_currentTicket = 0;
 
@@ -181,10 +180,6 @@ int OnInit()
          StringFormat("%02d", offsetMinutes), " (", brokerOffset, " seconds)");
    Print("Events from server are in UTC - will be automatically converted");
    Print("=====================");
-
-   //--- Initialize daily counter
-   g_currentDay = TimeCurrent() - TimeCurrent() % 86400;
-   g_todayTrades = 0;
 
    //--- Initialize Smart Exit Manager
    g_smartExit.Init(
@@ -414,15 +409,6 @@ void GetZoneBasedTargets(string direction, double entryPrice, double &tp1, doubl
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   //--- Check if new day
-   datetime today = TimeCurrent() - TimeCurrent() % 86400;
-   if(today != g_currentDay)
-   {
-      g_currentDay = today;
-      g_todayTrades = 0;
-      Print("New trading day. Trades reset.");
-   }
-
    //--- Check for open positions that need to be closed
    ManageOpenPositions();
 
@@ -876,13 +862,19 @@ void CheckForSignals()
    string reasoning = ExtractJsonString(result, "reasoning");
 
    //--- Per-trade risk budget from the server (panel "Max loss per trade
-   //--- USD") — single source of truth for lot sizing + max-loss guardrail
+   //--- USD") — single source of truth for lot sizing + max-loss guardrail.
+   //--- A signal WITHOUT a budget is rejected: silently falling back to a
+   //--- default here could size the lot 5x off what the panel says (old
+   //--- server build, renamed field). Incompatible server = no trade.
    double serverMaxLoss = ExtractJsonDouble(result, "max_loss_usd");
-   if(serverMaxLoss > 0)
+   if(serverMaxLoss <= 0)
    {
-      g_maxLossUSD = serverMaxLoss;
-      Print("Risk budget from server: $", DoubleToString(g_maxLossUSD, 0), " per trade");
+      Print("SIGNAL REJECTED: no max_loss_usd risk budget in signal. ",
+            "Server build is incompatible (pre-panel-owned-risk) - update the server. NOT trading.");
+      return;
    }
+   g_maxLossUSD = serverMaxLoss;
+   Print("Risk budget from server: $", DoubleToString(g_maxLossUSD, 0), " per trade");
 
    //--- Validate signal
    //--- forced:true = server test mode (FORCE_DECISION): decisions honestly
@@ -1228,7 +1220,6 @@ void ExecuteEventTrade()
    {
       g_currentTicket = trade.ResultOrder();
       g_lastTradeTime = TimeCurrent();
-      g_todayTrades++;
       g_originalLots = lots;  // Store for partial close calculation
 
       Print("==============================================");

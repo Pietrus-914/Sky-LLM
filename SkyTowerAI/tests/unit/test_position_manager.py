@@ -413,3 +413,81 @@ class TestLLMOutsideLock:
 
         result = pm.update_position(make_report_data(profit_usd=20.0))
         assert result["command"]["action"] == "HOLD"
+
+
+# ============================================================================
+# TestTradeHistoryPersistence (panel-owned risk / persistent stats commit)
+# ============================================================================
+
+class TestTradeHistoryPersistence:
+    """Persistent trade log: restart rebuild, corruption tolerance,
+    orphaned closes, fallback trade counting."""
+
+    def test_stats_survive_restart(self, tmp_path):
+        hf = str(tmp_path / "trade_history.jsonl")
+        pm1 = PositionManager(exit_engine=None, history_file=hf)
+        pm1.on_position_opened(make_position_data())
+        pm1.on_position_closed({"profit": -42.5, "reason": "SL hit"})
+
+        pm2 = PositionManager(exit_engine=None, history_file=hf)
+        status = pm2.get_status()
+        assert status["daily_trades"] == 1
+        assert status["daily_pnl_usd"] == -42.5
+        assert len(status["recent_trades"]) == 1
+        assert status["recent_trades"][0]["symbol"] == "NZDUSD"
+
+    def test_corrupt_history_does_not_crash_startup(self, tmp_path):
+        hf = tmp_path / "trade_history.jsonl"
+        hf.write_text(
+            'not json at all\n'
+            '42\n'                                  # valid JSON, not a dict
+            '{"closed_at": "2026-01-01T00:00:00", "profit_usd": null}\n'
+            '\xff\xfebroken bytes\n',
+            encoding="utf-8", errors="ignore",
+        )
+        pm = PositionManager(exit_engine=None, history_file=str(hf))
+        status = pm.get_status()  # must not raise
+        assert status["daily_trades"] == 0
+
+    def test_null_profit_today_counts_as_zero(self, tmp_path):
+        from timeutil import utcnow
+        hf = tmp_path / "trade_history.jsonl"
+        today = utcnow().strftime("%Y-%m-%d")
+        hf.write_text(
+            '{"closed_at": "%sT01:00:00", "profit_usd": null}\n'
+            '{"closed_at": "%sT02:00:00", "profit_usd": -30.0}\n' % (today, today),
+            encoding="utf-8",
+        )
+        pm = PositionManager(exit_engine=None, history_file=str(hf))
+        assert pm.daily_trades == 2
+        assert pm.daily_pnl_usd == -30.0
+
+    def test_orphaned_close_is_persisted_and_counted(self, tmp_path):
+        hf = str(tmp_path / "trade_history.jsonl")
+        pm = PositionManager(exit_engine=None, history_file=hf)
+        # No position tracked (server restarted mid-trade) -> close arrives
+        pm.on_position_closed({"ticket": 777, "profit": -100.0, "reason": "SL"})
+        assert pm.daily_trades == 1
+        assert pm.daily_pnl_usd == -100.0
+
+        # The loss must survive the NEXT restart too
+        pm2 = PositionManager(exit_engine=None, history_file=hf)
+        assert pm2.daily_pnl_usd == -100.0
+        assert pm2.daily_trades == 1
+
+    def test_untracked_fallback_trade_counts_against_limit(self, pm):
+        """/api/trade-executed fallback must consume the daily limit."""
+        pm.register_untracked_trade()
+        assert pm.daily_trades == 1
+        # pm.config is the shared module-level dict — patch, don't mutate
+        with patch.dict(pm.config, {"max_daily_trades": 1}):
+            can, reason = pm.can_open_trade()
+        assert can is False
+        assert "limit" in reason.lower()
+
+    def test_status_reports_live_limits(self, pm):
+        with patch.dict(pm.config, {"max_daily_trades": 9,
+                                    "max_daily_loss_usd": 555.0}):
+            status = pm.get_status()
+        assert status["max_daily_trades"] == 9
+        assert status["max_daily_loss_usd"] == 555.0

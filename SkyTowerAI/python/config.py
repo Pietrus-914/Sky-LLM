@@ -312,6 +312,11 @@ SERVER_CONFIG = {
 _OVERRIDES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                'logs', 'runtime_overrides.json')
 
+# Persistent closed-trades log (PositionManager) — daily statistics survive
+# watchdog restarts. Lives next to the other JSONL stores in logs/.
+TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  'logs', 'trade_history.jsonl')
+
 
 def save_runtime_overrides(updates: dict):
     """Merge updates into the overrides file (atomic write)."""

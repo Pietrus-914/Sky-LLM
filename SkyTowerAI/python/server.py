@@ -71,10 +71,9 @@ def init_services():
     zone_analyzer = ZoneAnalyzer(ZONE_CONFIG)
     target_calculator = TargetCalculator(ZONE_CONFIG)
     exit_engine = ExitDecisionEngine()
-    trade_history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                      'logs', 'trade_history.jsonl')
+    from config import TRADE_HISTORY_FILE
     position_manager = PositionManager(exit_engine=exit_engine,
-                                       history_file=trade_history_file)
+                                       history_file=TRADE_HISTORY_FILE)
     decision_history = DecisionHistory()
 
     logger.info("Services initialized successfully (with AI Position Manager + Decision History)")
@@ -1387,8 +1386,14 @@ def trade_executed():
     """
     Called by MT5 after trade execution
     Marks event as traded to prevent duplicates across EA instances
+
+    NOTE: the EA only calls this as a FALLBACK when its full report to
+    /api/position/opened failed — so the trade must still be counted
+    against the panel's daily trade limit here (the EA has no per-chart
+    gate of its own anymore).
     """
     global next_decision, executed_trades, registered_pairs
+    ensure_services()
 
     try:
         # Get pair from query params or JSON body
@@ -1397,6 +1402,9 @@ def trade_executed():
             pair = request.json.get('pair', '')
 
         logger.info(f"Trade executed notification received for {pair or 'unknown pair'}")
+
+        # Count against the daily limit even without position tracking
+        position_manager.register_untracked_trade()
 
         event_key_to_cleanup = None
 
