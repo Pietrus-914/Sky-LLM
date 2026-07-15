@@ -32,6 +32,14 @@ def _env_int(name: str, default: int) -> int:
         print(f"WARNING: {name}='{raw}' is not a valid integer — using default {default}")
         return default
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Bool env var — accepts 1/true/yes/on (case-insensitive)."""
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
 # =============================================================================
 # API KEYS (set in .env file or environment)
 # =============================================================================
@@ -144,6 +152,26 @@ HIGH_IMPACT_EVENTS = TIER1_EVENTS + TIER2_EVENTS
 MIN_IMPACT_LEVEL = os.getenv("SKYTOWER_MIN_IMPACT", "MEDIUM").strip().upper()
 if MIN_IMPACT_LEVEL not in ("LOW", "MEDIUM", "HIGH"):
     MIN_IMPACT_LEVEL = "MEDIUM"
+
+# Tryb "wszystkie eventy": gdy True, do handlu bierzemy KAŻDY event od
+# MIN_IMPACT_LEVEL w górę (whitelist nazw TIER1/TIER2 jest ignorowana) —
+# z wyjątkiem "wypowiedzi" (patrz NON_DATA_EVENT_MARKERS), które nie dają
+# twardej liczby do zaskoczenia. Do fazy zbierania danych na demo.
+# Gdy False: klasyczny filtr po nazwach (produkcja). Zmienialny w panelu.
+TRADE_ALL_EVENTS = _env_bool("SKYTOWER_TRADE_ALL_EVENTS", False)
+
+# "Prognozy / wypowiedzi" — eventy bez publikowanej twardej liczby, których
+# nie da się grać na zaskoczeniu actual-vs-forecast. Dopasowanie podciągiem,
+# case-insensitive. NIGDY nie handlowane, niezależnie od TRADE_ALL_EVENTS.
+NON_DATA_EVENT_MARKERS = [
+    "speaks",
+    "speech",
+    "testifies",
+    "testimony",
+    "press conference",
+    "q&a",
+    "projections",
+]
 
 # Events suitable for LITE version (hedging both directions)
 LITE_EVENTS = {
@@ -351,9 +379,11 @@ def _apply_runtime_overrides():
             data = json.load(f)
     except (OSError, ValueError):
         return
-    global MIN_IMPACT_LEVEL
+    global MIN_IMPACT_LEVEL, TRADE_ALL_EVENTS
     if str(data.get('min_impact', '')).upper() in ("LOW", "MEDIUM", "HIGH"):
         MIN_IMPACT_LEVEL = str(data['min_impact']).upper()
+    if isinstance(data.get('trade_all_events'), bool):
+        TRADE_ALL_EVENTS = data['trade_all_events']
     for key, lo, hi, cast in (("max_daily_trades", 1, 100, int),
                               ("max_daily_loss_usd", 10, 1_000_000, float),
                               ("max_loss_usd", 5, 100_000, float)):
@@ -375,7 +405,7 @@ _apply_runtime_overrides()
 # SKIP is disabled at every level (LLM prompt, parse fallback, rule fallback).
 # Intended ONLY for the demo-account data-collection phase. Set explicitly in
 # docker-compose.yml, not in .env, so it stays visible and deliberate.
-FORCE_DECISION = os.getenv("SKYTOWER_FORCE_DECISION", "false").lower() in ("1", "true", "yes")
+FORCE_DECISION = _env_bool("SKYTOWER_FORCE_DECISION", False)
 
 # =============================================================================
 # LOGGING

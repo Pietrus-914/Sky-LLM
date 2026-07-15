@@ -9,13 +9,17 @@ from unittest.mock import patch
 
 import pytz
 
-from calendar_fetcher import ForexFactoryCalendar, CalendarAggregator, EconomicEvent
+import config as cfg
+from calendar_fetcher import (
+    ForexFactoryCalendar, CalendarAggregator, EconomicEvent, is_non_data_event
+)
 
 
-def make_event(source="forexfactory", hours_ahead=2, name="CPI m/m", currency="USD"):
+def make_event(source="forexfactory", hours_ahead=2, name="CPI m/m",
+               currency="USD", impact="HIGH"):
     return EconomicEvent(
         datetime_utc=datetime.now(pytz.UTC) + timedelta(hours=hours_ahead),
-        currency=currency, event_name=name, impact="HIGH",
+        currency=currency, event_name=name, impact=impact,
         forecast="0.3%", previous="0.2%", source=source,
     )
 
@@ -71,3 +75,101 @@ class TestStaticEventsNotTradeable:
         monkeypatch.delenv("SKYTOWER_TRADE_STATIC_EVENTS", raising=False)
         result = self._aggregator_with([make_event(source="fake-test")])
         assert len(result) == 1
+
+
+class TestPerKeyCacheTTL:
+    """Each cache key ages independently — refreshing one key must NOT keep
+    another key's stale result alive (the events-table freeze bug)."""
+
+    def _agg(self):
+        agg = CalendarAggregator.__new__(CalendarAggregator)
+        agg._cache = {}
+        agg._cache_duration = timedelta(minutes=15)
+        return agg
+
+    def test_fresh_key_valid_old_key_invalid(self):
+        agg = self._agg()
+        now = datetime.now()
+        agg._cache["A"] = (["fresh"], now)
+        agg._cache["B"] = (["stale"], now - timedelta(minutes=20))
+        assert agg._is_cache_valid("A") is True
+        assert agg._is_cache_valid("B") is False
+
+    def test_refreshing_one_key_does_not_revalidate_another(self):
+        """The core regression: key B stale, key A just refreshed. B must
+        stay invalid (old code shared a single _cache_time and B went valid)."""
+        agg = self._agg()
+        agg._cache["B"] = (["stale"], datetime.now() - timedelta(minutes=20))
+        # Simulate A being (re)computed now
+        agg._cache["A"] = (["fresh"], datetime.now())
+        assert agg._is_cache_valid("B") is False
+
+    def test_unknown_key_invalid(self):
+        assert self._agg()._is_cache_valid("missing") is False
+
+
+class TestNonDataEvent:
+    def test_speeches_and_projections_flagged(self):
+        for name in ["FOMC Member Bowman Speaks", "Fed Chairman Warsh Testifies",
+                     "ECB Press Conference", "FOMC Economic Projections",
+                     "BOE Gov Bailey Speech"]:
+            assert is_non_data_event(name) is True, name
+
+    def test_hard_data_not_flagged(self):
+        for name in ["CPI m/m", "Non-Farm Payrolls", "Core Retail Sales m/m",
+                     "ADP Weekly Employment Change", "NFIB Small Business Index"]:
+            assert is_non_data_event(name) is False, name
+
+
+class TestTradeAllEventsSwitch:
+    def _tradeable(self, events, keywords=None):
+        agg = CalendarAggregator.__new__(CalendarAggregator)
+        with patch.object(CalendarAggregator, "get_upcoming_events", return_value=events):
+            return agg.get_tradeable_events(
+                event_keywords=keywords or ["CPI"], currencies=["USD"])
+
+    def test_strict_mode_requires_name_match(self, monkeypatch):
+        monkeypatch.setattr(cfg, "TRADE_ALL_EVENTS", False)
+        monkeypatch.delenv("SKYTOWER_TRADE_STATIC_EVENTS", raising=False)
+        events = [make_event(name="CPI m/m"), make_event(name="NFIB Small Business Index")]
+        result = self._tradeable(events)
+        names = [e.event_name for e in result]
+        assert names == ["CPI m/m"]  # NFIB not in whitelist
+
+    def test_trade_all_takes_non_whitelisted_data_events(self, monkeypatch):
+        monkeypatch.setattr(cfg, "TRADE_ALL_EVENTS", True)
+        monkeypatch.delenv("SKYTOWER_TRADE_STATIC_EVENTS", raising=False)
+        events = [make_event(name="CPI m/m"), make_event(name="NFIB Small Business Index")]
+        result = self._tradeable(events)
+        assert len(result) == 2  # both hard-data events, whitelist ignored
+
+    def test_trade_all_still_excludes_speeches(self, monkeypatch):
+        monkeypatch.setattr(cfg, "TRADE_ALL_EVENTS", True)
+        monkeypatch.delenv("SKYTOWER_TRADE_STATIC_EVENTS", raising=False)
+        events = [make_event(name="CPI m/m"),
+                  make_event(name="FOMC Member Bowman Speaks")]
+        result = self._tradeable(events)
+        names = [e.event_name for e in result]
+        assert names == ["CPI m/m"]  # speech dropped even in trade-all
+
+    def test_next_tradeable_honors_trade_all(self, monkeypatch):
+        monkeypatch.setattr(cfg, "TRADE_ALL_EVENTS", True)
+        agg = CalendarAggregator.__new__(CalendarAggregator)
+        events = [make_event(name="FOMC Member Speaks", hours_ahead=1),
+                  make_event(name="NFIB Small Business Index", hours_ahead=2)]
+        with patch.object(CalendarAggregator, "get_upcoming_events", return_value=events):
+            nxt = agg.get_next_tradeable_event(event_keywords=["CPI"], currencies=["USD"])
+        assert nxt is not None and nxt.event_name == "NFIB Small Business Index"
+
+    def test_next_tradeable_excludes_static_like_full_list(self, monkeypatch):
+        """get_next_tradeable_event must apply the SAME static guard as
+        get_tradeable_events (shared predicate) — a synthetic guessed-time
+        event must never be presented as the next tradeable event."""
+        monkeypatch.setattr(cfg, "TRADE_ALL_EVENTS", True)
+        monkeypatch.delenv("SKYTOWER_TRADE_STATIC_EVENTS", raising=False)
+        agg = CalendarAggregator.__new__(CalendarAggregator)
+        events = [make_event(source="static", name="CPI m/m", hours_ahead=1),
+                  make_event(source="forexfactory", name="GDP m/m", hours_ahead=2)]
+        with patch.object(CalendarAggregator, "get_upcoming_events", return_value=events):
+            nxt = agg.get_next_tradeable_event(event_keywords=["CPI"], currencies=["USD"])
+        assert nxt is not None and nxt.source == "forexfactory"

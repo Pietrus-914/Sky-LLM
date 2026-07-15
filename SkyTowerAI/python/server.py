@@ -126,6 +126,8 @@ def config_events():
             "all_events": cfg.HIGH_IMPACT_EVENTS,
             "currencies": list(cfg.CURRENCY_PAIRS.keys()),
             "min_impact": getattr(cfg, "MIN_IMPACT_LEVEL", "MEDIUM"),
+            "trade_all_events": getattr(cfg, "TRADE_ALL_EVENTS", False),
+            "non_data_markers": getattr(cfg, "NON_DATA_EVENT_MARKERS", []),
         })
 
     # POST: update event config at runtime
@@ -142,6 +144,11 @@ def config_events():
             cfg.MIN_IMPACT_LEVEL = level
             cfg.save_runtime_overrides({"min_impact": level})
             logger.info(f"Min impact level set to {level} via dashboard (persisted)")
+    if 'trade_all_events' in data:
+        flag = bool(data['trade_all_events'])
+        cfg.TRADE_ALL_EVENTS = flag
+        cfg.save_runtime_overrides({"trade_all_events": flag})
+        logger.info(f"Trade-all-events set to {flag} via dashboard (persisted)")
     return jsonify({"status": "ok", "message": "Event config updated"})
 
 
@@ -300,10 +307,22 @@ def get_upcoming_events():
             hours_ahead=hours
         )
 
+        # Drop events that already passed — the cached list is recomputed at
+        # most every 15 min, so between refreshes a just-passed event would
+        # otherwise linger at the top of the table.
+        now = utcnow()
+        upcoming = []
+        for e in events:
+            dt = e.datetime_utc
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            if dt >= now:
+                upcoming.append(e)
+
         return jsonify({
             "status": "ok",
-            "count": len(events),
-            "events": [e.to_dict() for e in events]
+            "count": len(upcoming),
+            "events": [e.to_dict() for e in upcoming]
         })
     except Exception as e:
         logger.error(f"Error getting events: {e}")

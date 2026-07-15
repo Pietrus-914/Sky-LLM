@@ -1062,6 +1062,16 @@
                         <option value="LOW">LOW and above</option>
                     </select>
                 </div>
+                <div class="config-row">
+                    <label for="tradeAllEvents">Trade ALL events (ignore name list)</label>
+                    <input type="checkbox" id="tradeAllEvents">
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
+                    ON (tryb testów): handlujemy każdy event od „Min. Impact Level" w górę,
+                    lista nazw Tier 1/Tier 2 poniżej jest ignorowana. Wypowiedzi (Speaks,
+                    Testifies, Press Conference, Projections) są zawsze pomijane — nie dają
+                    twardej liczby do zaskoczenia. OFF (produkcja): handlujemy tylko nazwy z listy.
+                </div>
             </div>
 
             <!-- Active Currencies -->
@@ -1207,7 +1217,8 @@
                 <table>
                     <thead><tr><th>Parametr</th><th>Co robi</th><th>Set 10k USD</th></tr></thead>
                     <tbody style="font-size:0.82rem">
-                        <tr><td><b>Min. Impact Level</b></td><td>Które eventy system w ogóle rozważa (HIGH / MEDIUM+ / LOW+). Więcej eventów = więcej zagrań, ale słabsze reakcje.</td><td>MEDIUM and above</td></tr>
+                        <tr><td><b>Min. Impact Level</b></td><td>Które eventy system w ogóle rozważa (HIGH / MEDIUM+ / LOW+). Więcej eventów = więcej zagrań, ale słabsze reakcje.</td><td>LOW and above (testy)</td></tr>
+                        <tr><td><b>Trade ALL events</b></td><td>ON: handlujemy każdy event od „Min. Impact Level" w górę, lista nazw Tier 1/Tier 2 jest ignorowana (nazwane eventy i tak są zwykle MEDIUM/HIGH). Wypowiedzi (Speaks/Testifies/Press Conference/Projections) zawsze pomijane. OFF: tylko nazwy z listy.</td><td>ON (faza testów)</td></tr>
                         <tr><td><b>Max trades per day</b></td><td>Globalny limit tradów dziennie (cały serwer, wszystkie pary razem). Po osiągnięciu serwer przestaje wydawać sygnały. Licznik zeruje się o północy UTC (02:00 czasu PL latem). <b>Jedyne miejsce ustawienia — EA nie ma już swojego limitu.</b></td><td>5</td></tr>
                         <tr><td><b>Max daily loss USD</b></td><td>Dzienny budżet straty. Po przekroczeniu serwer blokuje nowe wejścia do północy UTC.</td><td>300 (3% konta)</td></tr>
                         <tr><td><b>Max loss per trade USD</b></td><td>Budżet ryzyka pojedynczego trade'u: <b>z tej kwoty EA liczy wielkość lota</b>, przy tej stracie pozycja jest zamykana (guardrail serwera + offline guardrail EA). Wysyłany do EA automatycznie z każdym sygnałem — <b>jedyne miejsce ustawienia</b>.</td><td>100 (1% konta)</td></tr>
@@ -1329,8 +1340,10 @@
                 <b>Zmieniłem input EA i nic się nie zmieniło.</b> Inputy trzeba zmienić na <b>każdym wykresie osobno</b> — EA na NZDUSD nie widzi ustawień EA na GBPUSD.<br><br>
                 <b>Rano "Trades Today" pokazuje 0, a w nocy było zagranie.</b> Liczniki dzienne zerują się o <b>północy UTC</b> (02:00 czasu PL latem) — nocne zagranie sprzed tej godziny należy do "wczoraj". Samo zagranie nie znika: jest w tabeli <b>Recent Trades</b> na Dashboardzie (trwałej — przeżywa restart serwera).<br><br>
                 <b>FORCE_DECISION (tryb bez SKIP)</b> — wyłącznie na koncie DEMO. Na realnym koncie system musi mieć prawo odpuścić event.<br><br>
-                <b>Faza testów (zbieranie danych):</b> gramy szeroko — filtr impactu nisko i FORCE_DECISION włączony, żeby budować bazę reakcji
-                (reaction history, track record, trade outcomes). <b>Przed przejściem na real:</b> podnieś "Min. Impact Level" do MEDIUM/HIGH
+                <b>Faza testów (zbieranie danych):</b> gramy szeroko — „Min. Impact Level" na LOW, <b>„Trade ALL events" ON</b>
+                (bierzemy każdy event od LOW w górę, bez listy nazw; wypowiedzi zawsze pomijane) i FORCE_DECISION włączony,
+                żeby budować bazę reakcji (reaction history, track record, trade outcomes). <b>Przed przejściem na real:</b>
+                wyłącz „Trade ALL events" (wracamy do listy nazw Tier 1/Tier 2), podnieś „Min. Impact Level" do MEDIUM/HIGH
                 i rozważ wyłączenie FORCE_DECISION w .env — słabe setupy (LOW impact, brak prognozy) statystycznie przegrywają.
             </div>
         </div>
@@ -1880,6 +1893,23 @@
             // Save button
             $('btnSaveConfig').addEventListener('click', saveConfig);
             $('btnResetConfig').addEventListener('click', resetConfig);
+
+            // "Trade all events" persists immediately on toggle (not via the
+            // bulk Save), so it can't be reset by a Save that races the load.
+            $('tradeAllEvents').addEventListener('change', async function() {
+                try {
+                    var resp = await fetch(BASE_URL + '/api/config/events', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ trade_all_events: this.checked })
+                    });
+                    showToast(resp.ok
+                        ? 'Trade-all-events: ' + (this.checked ? 'ON' : 'OFF') + ' (zapisane)'
+                        : 'Nie udało się zapisać przełącznika', resp.ok);
+                } catch(e) {
+                    showToast('Serwer nieosiągalny — przełącznik niezapisany', false);
+                }
+            });
         }
 
         function getConfigState() {
@@ -1908,6 +1938,9 @@
                 currencies: enabledCurrencies,
                 min_impact: $('minImpact').value
             };
+            // NOTE: trade_all_events is intentionally NOT bulk-saved here —
+            // it persists immediately via its own change handler (see init),
+            // so a Save that races the async config load can't reset it.
         }
 
         async function saveConfig() {
@@ -2276,6 +2309,9 @@
                 try {
                     var sc = await apiFetch('/api/config/events');
                     if (sc.min_impact) $('minImpact').value = sc.min_impact;
+                    if (typeof sc.trade_all_events === 'boolean') {
+                        $('tradeAllEvents').checked = sc.trade_all_events;
+                    }
                 } catch(e) { /* offline */ }
                 loadRiskConfig();
             })();

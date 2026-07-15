@@ -52,3 +52,6 @@ SkyTowerAI/python/nul
 
 # Strategy PDF (too large)
 SkyTower-FX_V.3.0.txt
+
+# Local historical data dumps (large binaries — not for the repo)
+dane historyczne/

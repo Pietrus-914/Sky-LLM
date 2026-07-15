@@ -16,6 +16,19 @@ import pytz
 import re
 
 
+def is_non_data_event(event_name: str) -> bool:
+    """
+    True for "talk" events — speeches, testimony, press conferences,
+    projections — that publish no hard number to trade on a surprise.
+    These are never traded, even in TRADE_ALL_EVENTS mode. Markers come
+    from config.NON_DATA_EVENT_MARKERS (matched as case-insensitive
+    substrings).
+    """
+    import config as cfg
+    name = (event_name or "").lower()
+    return any(marker in name for marker in getattr(cfg, "NON_DATA_EVENT_MARKERS", []))
+
+
 @dataclass
 class EconomicEvent:
     """Represents an economic calendar event"""
@@ -436,8 +449,11 @@ class CalendarAggregator:
         # Fallback to static data if no events found
         self.static_calendar = StaticCalendarData()
 
+        # Per-key cache: {cache_key: (events, computed_at)}. Each key ages
+        # independently — a single shared timestamp let a frequently-refreshed
+        # key (the updater's) perpetually reset the TTL of every other key, so
+        # the events table froze on its first-ever result and never refreshed.
         self._cache = {}
-        self._cache_time = None
         self._cache_duration = timedelta(minutes=15)
 
     def get_upcoming_events(
@@ -460,7 +476,7 @@ class CalendarAggregator:
         # Check cache
         cache_key = f"{currencies}_{impact_filter}_{hours_ahead}"
         if self._is_cache_valid(cache_key):
-            return self._cache[cache_key]
+            return self._cache[cache_key][0]
 
         all_events = []
 
@@ -507,9 +523,8 @@ class CalendarAggregator:
         # Sort by datetime
         filtered.sort(key=lambda x: x.datetime_utc)
 
-        # Cache results
-        self._cache[cache_key] = filtered
-        self._cache_time = datetime.now()
+        # Cache results (per-key timestamp)
+        self._cache[cache_key] = (filtered, datetime.now())
 
         return filtered
 
@@ -543,17 +558,13 @@ class CalendarAggregator:
             hours_ahead=168  # 1 week
         )
 
-        # BUG-7 FIX: Post-filter passed events from cache
+        # BUG-7 FIX: Post-filter passed events from cache. Same selection
+        # rule as get_tradeable_events() (shared predicate) — nearest first.
+        params = self._tradeable_params()
         now = datetime.now(pytz.UTC)
         for event in events:
-            # Skip events that already passed (cache may be stale)
-            if event.datetime_utc < now:
-                continue
-            # Check if event matches any keyword
-            event_lower = event.event_name.lower()
-            for keyword in event_keywords:
-                if keyword.lower() in event_lower:
-                    return event
+            if self._event_is_tradeable(event, event_keywords, now, **params):
+                return event
 
         return None
 
@@ -588,22 +599,41 @@ class CalendarAggregator:
             hours_ahead=168  # 1 week
         )
 
-        # Synthetic static-calendar events have GUESSED times — never trade
-        # them unless explicitly enabled (they exist for display/dev only).
-        # A real-but-stale FF cache handles feed outages instead.
-        trade_static = os.getenv("SKYTOWER_TRADE_STATIC_EVENTS", "false").lower() in ("1", "true", "yes")
-
+        params = self._tradeable_params()
         now = datetime.now(pytz.UTC)
-        result = []
-        for event in events:
-            if event.datetime_utc < now:
-                continue
-            if event.source == "static" and not trade_static:
-                continue
-            event_lower = event.event_name.lower()
-            if any(kw.lower() in event_lower for kw in event_keywords):
-                result.append(event)
-        return result
+        return [e for e in events
+                if self._event_is_tradeable(e, event_keywords, now, **params)]
+
+    @staticmethod
+    def _tradeable_params() -> dict:
+        """Read the flags that gate tradeability once per call (not per event)."""
+        import config as cfg
+        return {
+            # Synthetic static-calendar events have GUESSED times — never trade
+            # them unless explicitly enabled (they exist for display/dev only).
+            "trade_static": os.getenv("SKYTOWER_TRADE_STATIC_EVENTS", "false").lower()
+                            in ("1", "true", "yes"),
+            # TRADE_ALL_EVENTS: take every event at/above min-impact (already
+            # impact-filtered in get_upcoming_events), ignoring the name list.
+            "trade_all": getattr(cfg, "TRADE_ALL_EVENTS", False),
+        }
+
+    @staticmethod
+    def _event_is_tradeable(event, event_keywords, now, trade_static, trade_all) -> bool:
+        """Single source of truth for 'should we trade this event?', shared by
+        get_next_tradeable_event and get_tradeable_events so they can never
+        drift. Order: not passed -> not synthetic-static -> not a talk event
+        -> (TRADE_ALL_EVENTS or a TIER name match)."""
+        if event.datetime_utc < now:
+            return False
+        if event.source == "static" and not trade_static:
+            return False
+        if is_non_data_event(event.event_name):
+            return False
+        if trade_all:
+            return True
+        event_lower = event.event_name.lower()
+        return any(kw.lower() in event_lower for kw in event_keywords)
 
     def _deduplicate(self, events: List[EconomicEvent]) -> List[EconomicEvent]:
         """Remove duplicate events from multiple sources"""
@@ -623,12 +653,12 @@ class CalendarAggregator:
         return unique
 
     def _is_cache_valid(self, cache_key: str) -> bool:
-        """Check if cache is still valid"""
-        if cache_key not in self._cache:
+        """Check if THIS key's cached result is still within its TTL."""
+        entry = self._cache.get(cache_key)
+        if entry is None:
             return False
-        if self._cache_time is None:
-            return False
-        return datetime.now() - self._cache_time < self._cache_duration
+        _, computed_at = entry
+        return datetime.now() - computed_at < self._cache_duration
 
 
 # =============================================================================
