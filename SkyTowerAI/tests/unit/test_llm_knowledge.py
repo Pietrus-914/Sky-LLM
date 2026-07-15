@@ -156,8 +156,11 @@ class TestPlaybooks:
         with open(engine.playbooks_file, 'w', encoding='utf-8') as f:
             json.dump({"CPI m/m": {"pattern": "v1"}}, f)
         assert "v1" in engine._playbook_section("CPI m/m", "USD")
-        # rewrite with a new mtime
-        os.utime(engine.playbooks_file, (1, 1))  # reset mtime so rewrite differs
         with open(engine.playbooks_file, 'w', encoding='utf-8') as f:
             json.dump({"CPI m/m": {"pattern": "v2"}}, f)
+        # Force an mtime that cannot collide with the cached one: rewriting
+        # alone can land in the same filesystem timestamp tick as the v1 load
+        # (observed flaky on Windows/NTFS), so stamp a distinct mtime AFTER
+        # the write instead of before it.
+        os.utime(engine.playbooks_file, (1, 1))
         assert "v2" in engine._playbook_section("CPI m/m", "USD")

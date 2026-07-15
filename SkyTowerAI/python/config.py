@@ -348,8 +348,10 @@ TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # Curated event playbooks (hand/Claude-distilled patterns from historical
 # charts) injected into the entry prompt. Optional — missing file = no
 # EVENT PLAYBOOK section. See SkyTowerAI/research/screens/README.md.
+# Lives in knowledge/ (tracked in git), NOT logs/ (gitignored) — the ZIP-based
+# 24/7 deploy must ship this file; it is still hot-reloaded on edit (mtime).
 EVENT_PLAYBOOKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    'logs', 'event_playbooks.json')
+                                    'knowledge', 'event_playbooks.json')
 
 
 def save_runtime_overrides(updates: dict):

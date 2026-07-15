@@ -5,7 +5,7 @@
 LLM podejmuje decyzję o kierunku, ale brakuje mu wiedzy o tym, JAK dany typ eventu
 zwykle porusza rynkiem (spike-and-reverse? trend przez 5 minut? fake move w pierwszej
 minucie?). Ta wiedza jest na Twoich historycznych screenach — destylujemy ją do pliku
-`python/logs/event_playbooks.json`, który serwer automatycznie wstrzykuje do promptu
+`python/knowledge/event_playbooks.json`, który serwer automatycznie wstrzykuje do promptu
 jako sekcję **EVENT PLAYBOOK** (bez restartu — plik jest przeładowywany po zmianie).
 
 ## Jak używać
@@ -19,7 +19,10 @@ jako sekcję **EVENT PLAYBOOK** (bez restartu — plik jest przeładowywany po z
    pułapki pierwszej minuty) i zapisze/zaktualizuje playbooki.
 3. Wpisy możesz też edytować ręcznie — format niżej.
 
-## Format `python/logs/event_playbooks.json`
+## Format `python/knowledge/event_playbooks.json`
+
+(Katalog `knowledge/` jest trackowany w git — w przeciwieństwie do `logs/`,
+które jest ignorowane i nie trafia do ZIP-a wdrożeniowego.)
 
 Klucz = nazwa eventu (dopasowanie po znormalizowanej nazwie: bez wielkości liter,
 nawiasów i miesięcy) ALBO fallback dla całej waluty: `"CURRENCY:USD"`.

@@ -89,10 +89,22 @@ a. Surprise setup: how big is the forecast-vs-previous gap? Which outcome (beat/
    has the asymmetric payoff, and is one side already priced in?
 b. Pre-news drift: what do the last 30-60 min candles show? A strong run INTO the
    event often reverses on release (pre-positioning); a quiet coil often breaks hard.
+   In our historical chart study the release move usually went AGAINST the final 1-3
+   M1 candles — a sharp counter-move in the last minutes before release is more often
+   the trap side than a leak (per-event measured rates are in the EVENT PLAYBOOK
+   section when present). Read the stretch from the raw candles: when a one-sided
+   pre-release run, the last-candle fade and your fundamental read all agree, treat
+   it as strong confirmation. When technicals contradict a GENUINE policy surprise
+   (a rate decision deviating from what markets priced), the fundamentals won
+   historically — a merely as-forecast print is NOT such a surprise.
 c. Chart evidence: read the raw candles — momentum, wicks, rejection levels,
    where the stops likely sit relative to nearest support/resistance.
 d. Volatility fit: are your stop_loss_pips/take_profit_pips consistent with ATR and
-   the current spread (a stop inside 1x spread+ATR noise will be swept)?
+   the current spread (a stop inside 1x spread+ATR noise will be swept)? Entry happens
+   seconds BEFORE the release, so also budget the stop for an adverse stop-run wick
+   in the release seconds — the EVENT PLAYBOOK gives measured wick sizes for many
+   events; if two estimates could apply, budget the LARGER. A stop tighter than
+   wick+spread dies at the print even when the direction is right.
 e. Historical reactions and YOUR TRACK RECORD: what actually happened on past
    releases of this event, and were your own recent calls on this currency right or
    wrong? Do not repeat a documented mistake.
@@ -672,18 +684,25 @@ decision in JSON format."""
                 reasoning = f"{reasoning} (LLM chose SKIP; {note})"
                 logger.warning(f"LLM returned SKIP despite force mode — remapped to {direction}")
 
+            # LLM numeric fields are clamped to the ranges documented in the
+            # output schema (exit 5-15, lot <=85, SL 25-80, TP 30-120) — the
+            # playbook texts quote sub-5-minute historical exits and the model
+            # must not be able to push an out-of-contract value to the EA.
+            # SL/TP of 0 mean "not set" and are passed through for EA fallback.
+            sl_pips = self._num(decision_data.get('stop_loss_pips'), 0)
+            tp_pips = self._num(decision_data.get('take_profit_pips'), 0)
             return TradingDecision(
                 event=event.event_name,
                 currency=event.currency,
                 pair=data_context['suggested_pair'],
                 direction=direction,
-                confidence=decision_data.get('confidence', 0.0),
-                lot_percent=decision_data.get('lot_percent', 70),
+                confidence=self._num(decision_data.get('confidence'), 0.0, 0.0, 1.0),
+                lot_percent=int(self._num(decision_data.get('lot_percent'), 70, 0, 85)),
                 entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
-                exit_minutes_after=decision_data.get('exit_minutes', 10),
-                stop_loss_percent=decision_data.get('stop_loss_percent', 40),
-                stop_loss_pips=decision_data.get('stop_loss_pips', 0),
-                take_profit_pips=decision_data.get('take_profit_pips', 0),
+                exit_minutes_after=int(self._num(decision_data.get('exit_minutes'), 10, 5, 15)),
+                stop_loss_percent=self._num(decision_data.get('stop_loss_percent'), 40, 0, 100),
+                stop_loss_pips=sl_pips if sl_pips <= 0 else min(max(sl_pips, 25.0), 80.0),
+                take_profit_pips=tp_pips if tp_pips <= 0 else min(max(tp_pips, 30.0), 120.0),
                 reasoning=reasoning,
                 data_summary=data_context,
                 timestamp=utcnow(),
@@ -693,6 +712,21 @@ decision in JSON format."""
         except Exception as e:
             logger.error(f"LLM decision error: {e}")
             return self._rule_based_decision(event, data_context)
+
+    @staticmethod
+    def _num(value, default, lo=None, hi=None):
+        """Coerce an LLM-returned numeric field to float and clamp it to the
+        documented schema range. Non-numeric junk (None, "1-2", "fast") falls
+        back to the default so a malformed model reply can't reach the EA."""
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return default
+        if lo is not None:
+            v = max(lo, v)
+        if hi is not None:
+            v = min(hi, v)
+        return v
 
     def _chat(self, prompt: str) -> str:
         """Send one prompt to the configured LLM provider and return the raw text."""

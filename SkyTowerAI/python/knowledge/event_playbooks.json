@@ -1,0 +1,143 @@
+{
+  "Official Cash Rate": {
+    "pattern": "RBNZ: the statement, not the printed rate, drives it — 5 of 6 inline holds still moved 45-132 pips (2018-20, n=9). Holds: spike-and-hold, often a SECOND leg 30-90 min later. Delivered cuts: the 1-minute extreme is the best price, then decay (93->66->61 pips at 1/5/10 min).",
+    "typical_behavior": "1-min move 20-120 pips (median ~85). AUDNZD runs 20-25% further than NZDUSD on the same decision. The release move went AGAINST the last 1-3 pre-release M1 candles in 8/10 cases — a sharp counter-move in the final 3-15 min before release is usually the wrong side (trap).",
+    "notes": "Never chase the 1-min extreme (15-35 pips retrace follows on cut days). Worst trap on record: hold-headline algo whipsaw, 50 pips fully round-tripped inside 60 seconds (Nov 2018). Sample comes from the 2019 easing cycle; the 2026 regime is a hiking one — mirror the asymmetry, don't copy it."
+  },
+  "RBNZ Rate Statement": {
+    "pattern": "Same minute as the Official Cash Rate decision — see that playbook: statement wording decides; inline does NOT mean quiet.",
+    "notes": "On Monetary Policy Statement days a press conference follows ~1h later — residual second-leg risk."
+  },
+  "Cash Rate": {
+    "pattern": "RBA 2018-19: AUD-positive 6/7 regardless of outcome — holds against priced cuts were relief rallies (+50-57 pips from a dead-flat 2h coil), and even the fully priced Jun-2019 cut rallied AUD (sell-the-rumor). Only no-tension holds chopped (4-20 pips).",
+    "typical_behavior": "1-min median ~16 pips, up to 50 when markets priced easing. First-seconds stop-run flush AGAINST the eventual direction in 4/7 — the position opens seconds before the release, so this flush hits it as adverse excursion: budget it into the stop and do not read the first seconds as direction. Invalidation: spike fully round-trips within ~6 min => the day tends to trend the OTHER way (Mar/Apr 2019 signature).",
+    "notes": "Fundamental surprise overrides technicals here: a textbook mean-reversion setup lost to the no-cut relief (Feb 2019). Since the 2024 reform the decision is 14:30 Sydney with a press conference EVERY meeting ~1h later — treat it as a second event; the 2018-19 stats predate it."
+  },
+  "RBA Rate Statement": {
+    "pattern": "Same minute as the Cash Rate decision — see that playbook. Statement tone (easing bias vs neutral) sets the direction on holds.",
+    "notes": "Press conference ~1h later at every meeting since 2024 — second-leg risk."
+  },
+  "Federal Funds Rate": {
+    "pattern": "FOMC: the printed rate is ALWAYS priced (10/10 inline in 2018-19) — statement wording and dots decide; 7/10 still moved 25-90+ pips. Shape: spike, peak favorable at min 4-6, partial giveback by min 10 (10-min < 5-min in 4 of 5 measured).",
+    "typical_behavior": "Median ~38 pips @1min, ~50 @5min (USDCAD). Release move went AGAINST the last 1-3 pre-release M1 candles in 9/10. A sharp shakeout 2-7 min BEFORE the statement, opposite to the coming move, is common (-20 pips then +66 on 31.07.2019).",
+    "notes": "The press conference 30 min later is an independent second event — it fully reversed the statement move in 1-2 of 6 cases; be flat before it. 2019 paradox: expected cuts -> USD strengthened, dovish holds -> USD weakened; actual-vs-forecast is useless for FOMC direction."
+  },
+  "FOMC Statement": {
+    "pattern": "Same minute as the Federal Funds Rate decision — see that playbook. Statement language IS the event.",
+    "notes": "Be flat before the press conference 30 min later."
+  },
+  "Overnight Rate": {
+    "pattern": "BoC: one giant M1 candle at the decision minute driven by the statement/bias, not the rate (sample: hold + dropped hike bias = 45 pips). Spike-and-hold for 30+ min; ~70% fade only hours later.",
+    "typical_behavior": "Zero pre-lean before the candle; a 24-pip 2h drift was erased instantly. 1/5/10-min favorable: 45/46/38 pips (n=1 charted).",
+    "notes": "Inline headline does NOT mean small move. On Monetary Policy Report days a press conference follows — second-leg risk. Decision time moved to 9:45 ET (2026); historical timestamps pre-2023 are 10:00 ET."
+  },
+  "BOC Rate Statement": {
+    "pattern": "Same minute as the Overnight Rate decision — see that playbook; the statement/bias is the mover.",
+    "notes": "MPR days add a press conference — second-leg risk."
+  },
+  "Interest Rate Decision": {
+    "pattern": "Generic rate-decision key (non-FF feeds): the printed rate is usually priced — statement bias decides. Branch by currency: RBNZ holds still move 45-132p and fade the last candles 8/10; RBA 2018-19 had a relief-rally-up bias with first-seconds flushes; FOMC fades last candles 9/10, exit before the presser; BoC = one statement-driven M1 candle, holds 30 min.",
+    "typical_behavior": "Common to all: the 1-min extreme is a bad reference price; a first-seconds counter-flush is normal (budget it into the stop, not evidence of direction); if the spike fully round-trips within ~6 min the day tends to trend the other way.",
+    "notes": "Norges Bank/Riksbank: a single violent candle that fully round-trips within ~25 min — use the minimum exit window and a modest take-profit; the spike refills. Matching caveat: only this exact generic title matches this entry; bank-prefixed titles (e.g. RBNZ Interest Rate Decision) fall back to the CURRENCY entries."
+  },
+  "CPI q/q": {
+    "pattern": "NZ CPI: impulse completes in 1-2 M1 bars, peak at min 3-8, then retrace — 50-75% given back on small/inline surprises, only 20-30% on big ones (n=7). Shape is spike-then-partial-retrace, NOT a trend event.",
+    "typical_behavior": "Median spike ~28 pips on NZDUSD (range 10-95). Magnitude scales with surprise: inline ~10-24p mostly retraced; 0.1pp beat ~28-36p; big miss up to 95p that holds. Adverse pin/stab of 2-18 pips on the release bar in 5/7 — a tight stop dies at the print.",
+    "notes": "Move went against the last pre-release candles in 5/7. An unnaturally quiet pre-release tape (1-2 pip dojis for 2h) preceded the most violent print. AUD legacy quarterly CPI (until ~mid-2027): first spike showed high trap risk — prefer the confirmed post-flush direction."
+  },
+  "CPI m/m": {
+    "pattern": "US CPI: direction follows CORE, not headline (every decisive 2019 case). Clean broad surprise -> spike-and-hold extending 10-30 min; mixed core-vs-headline or inline -> the 6-20 pip spike fully round-trips within 10-25 min.",
+    "typical_behavior": "US on AUDUSD/NZDUSD: 6-17 pips @1min (median ~9), 5-min often already below 1-min on the failures — take profit fast. CAD CPI on USDCAD: median ~50 pips in the first 5 min (2018 M5 sample), but 5/9 CAD data spikes retraced fully; durable only on clean prints without oil/US-data confounds.",
+    "notes": "US CPI often shares the minute with jobless claims or Fed speakers — expect pollution. CAD: deep stop-run wicks (up to 35p) beyond fair value are characteristic; inline CAD CPI = +/-10p whipsaw; in double CAD releases (CPI+retail) the market prices CPI, not retail."
+  },
+  "Core CPI m/m": {
+    "pattern": "Released with CPI m/m — core is the decider: when core and headline disagree, price follows core (see CPI m/m playbook).",
+    "notes": "Mixed core-vs-headline = fade the spike / skip."
+  },
+  "CPI y/y": {
+    "pattern": "For AUD (monthly CPI indicator, primary since Nov 2025): 12 releases/yr dilute the old quarterly bomb — expect smaller reactions than pre-2026 statistics suggest; direction per trimmed-mean/core surprise. For USD it accompanies CPI m/m — see that playbook.",
+    "notes": "AUD monthly CPI has little accumulated reaction history — reduced size until data builds."
+  },
+  "GDP q/q": {
+    "pattern": "NZ: spike-and-hold with a SECOND leg at min 7-10 — 10-min favorable >= 5-min in 3/4 annotated (opposite of CPI); the first-bar counter-stab of 15-18 pips is the NORM, not a reversal signal. AU: purely surprise-driven 4/4 (beats +37/+45p, misses -22/-47p @1min) with shallow retraces (~10p bounces off the lows).",
+    "typical_behavior": "1-min 11-47 pips. NZ releases moved AGAINST the 2h pre-drift in 4/5 decidable cases (the one with-drift spike fully reversed — trap). AU GDP moved against the last pre-release candles 4/4. Both q/q and y/y agreeing = cleanest, most durable moves.",
+    "notes": "Traps: the q/q line decides — a red y/y next to inline q/q misled shorts (Mar 2019); a beat with every 'previous' higher (decelerating economy) produces a small fading move (Sep 2019); canonical manipulation = 15-min push to the range top immediately before a -68p collapse (AU, Dec 2018)."
+  },
+  "GDP m/m": {
+    "pattern": "CAD monthly GDP: 17-31 pip spike, peak at min 2-6, 50-60% retraced by min 10-16 (n=2). Exit within ~5 min.",
+    "typical_behavior": "No clean 30-min trend in the sample.",
+    "notes": "GBP GDP m/m (team guidance, n=2, low confidence): fade the 'textbook' run-up of the final 10-15 min before the print; trade only top-tier GBP releases."
+  },
+  "Employment Change q/q": {
+    "pattern": "NZ jobs: a clean one-sided surprise prints ONE giant M1 candle (46-74 pips, median ~52) then holds or retraces 25-45%; mixed internals (unemployment rate / participation / labour costs disagreeing with the headline) whipsaw or fully reverse within 3-10 min.",
+    "typical_behavior": "5-min 45-58 pips, extenders reach 58-66 by min 10-15. Entering at the 1-min extreme costs 15-35 pips of adverse retrace (worst pin: 35p). AUDNZD expression ~3-4x larger than NZDUSD for the same release.",
+    "notes": "Check unemployment + participation before trusting the headline — if they conflict, skip or fade the spike. No leaks/early moves observed in 8 genuine instances."
+  },
+  "Employment Change": {
+    "pattern": "AUD: the simultaneous UNEMPLOYMENT RATE overrides the jobs headline — 3/3 conflict cases traded per the rate, not the headline. CAD: the same-minute US NFP decides durability — NFP surprising the OPPOSITE way fully reversed the CAD-direction spike 5/5; NFP aligned or absent and the spike held/extended 4/4.",
+    "typical_behavior": "AUD on AUDNZD: 1-min median ~32p (24-49); clean prints keep 50-100% through min 10-15; conflicted prints give back half by min 5. One 49-pip rally fully reversed at ~min 40 — the 30-min max-hold guardrail is right. CAD on USDCAD is ~2x the cross size; surprises under ~5K vs forecast = whipsaw only.",
+    "notes": "First-seconds counter-spike in ~5/7 AUD cases (8-12p adverse) — wait it out. CAD details fake headlines: -88K with hot wages fully reversed (Feb 2018). CAD jobs on an NFP day: decide off BOTH prints or skip."
+  },
+  "Unemployment Rate": {
+    "pattern": "Released together with Employment Change — for AUD it IS the driver: a falling rate rallied AUD even on a big jobs miss (Mar 2019), a rising rate sank AUD on a jobs blowout (May/Jun 2019).",
+    "notes": "See the Employment Change playbook for shape and sizing."
+  },
+  "Non-Farm Employment Change": {
+    "pattern": "NFP in this dataset acted mainly as the dominant contaminant of same-minute CAD jobs (opposite-direction NFP fully reversed CAD spikes 5/5). The USD side is the least predictable major — fakes/whipsaw in roughly half of USD events.",
+    "typical_behavior": "Average Hourly Earnings can invert the headline (Mar 2018: +313K but wage miss -> USD sold).",
+    "notes": "The BTMM source explicitly blacklists NFP for discretionary news-fading; the pre-NFP trap can form up to 2 days earlier followed by long consolidation. Extra caution / reduced size warranted."
+  },
+  "Retail Sales q/q": {
+    "pattern": "NZ retail: tradeable ONLY when core and headline surprise the same way — spike peaks ~min 2 (+28p), ~50% given back by min 5-10. Core-vs-headline conflict produced NO reaction at all (+/-8-10p recovered wicks).",
+    "typical_behavior": "1-min ~20-22 pips on the clean print. Decaying profile — take profit fast.",
+    "notes": "Mixed print = skip. Directionless stop-hunt wicks appear on mixed days, including ~45 min before the release."
+  },
+  "Retail Sales m/m": {
+    "pattern": "CAD: 20-35 pips within the first 1-3 min on a clean print, peak min 2-6, then 30-50% retrace by min 15-25 — exit within ~5 min. AU (pre-2025 series): median only ~13p and 4/5 spikes faded 50-100% within 5-15 min unless the surprise was big AND the same-minute trade balance agreed.",
+    "typical_behavior": "The m/m line dominates the same-minute trade balance; a red quarterly (q/q) retail row flips or negates a small m/m beat (whipsaw).",
+    "notes": "AU Retail Sales was DISCONTINUED after Jun-2025 data (successor: Household Spending m/m — treat as a new, thin-history event). US retail often shares the minute with other US data."
+  },
+  "Core Retail Sales m/m": {
+    "pattern": "Released with Retail Sales m/m — core+headline agreement decides whether the spike holds (see Retail Sales m/m playbook).",
+    "notes": "Conflict between core and headline = fade-prone print."
+  },
+  "Household Spending m/m": {
+    "pattern": "Successor to AU Retail Sales (ABS, since 2025). No accumulated reaction history — expect retail-like fade-prone behavior until data builds.",
+    "notes": "Start with reduced size; collect reactions before trusting any direction rule."
+  },
+  "CURRENCY:NZD": {
+    "pattern": "NZ releases land in dead liquidity (early NZ morning): stop-run stabs of 2-18 pips on the release bar are the NORM, spreads spike, and one M1 bar can span 30-95 pips. The post-release move went against the last 1-3 pre-release M1 candles in ~70-80% of rate/CPI/GDP cases.",
+    "typical_behavior": "Rate decisions median ~85p @1min; jobs ~52p; CPI ~28p; GDP ~25p with a second leg at min 7-10. AUDNZD expresses NZD events 20-25% (rates) to 3-4x (jobs) stronger than NZDUSD.",
+    "notes": "A sharp counter-move in the final minutes before an NZD release is usually the trap side. Do not chase the 1-min extreme."
+  },
+  "CURRENCY:AUD": {
+    "pattern": "AUD reacts cleanly but prints stop-run wicks first: a first-seconds flush AGAINST the true direction appeared in roughly half of AUD events (8-20p) — since entry precedes the release, expect that much adverse excursion before the true move and size the stop for it.",
+    "typical_behavior": "Jobs ~32p, GDP ~37-47p, RBA relief days 50-57p, retail only ~13p and fade-prone. Unemployment rate > jobs headline; GDP is purely surprise-driven; flat 2h coil before a rate decision = biggest explosion risk.",
+    "notes": "A 49-pip post-news rally fully reversed at ~min 40 — keep the 30-min max hold. Invalidation: spike round-trips within ~6 min."
+  },
+  "CURRENCY:CAD": {
+    "pattern": "No reliable early lean before CAD prints — the '10-30s early reaction' folklore did NOT verify (pre-lean was misleading in ~1/3 of cases); the release move went AGAINST the last candles in 71% instead.",
+    "typical_behavior": "Jobs on USDCAD: median ~50p first 5 min; CPI/retail/GDP 17-60p with 30-60% retrace by min 15-25. On AUDCAD/NZDCAD crosses the same events run ~1/3 to 1/2 the USDCAD size.",
+    "notes": "Three overrides: same-minute US data (NFP/CPI) decides durability; oil moves can erase even 100p CAD-data spikes within hours; details (wages, full-time split) fake headlines. Inline prints = +/-10p whipsaw."
+  },
+  "CURRENCY:USD": {
+    "pattern": "Least predictable major: the printed number is usually priced and statement/wording decides; roughly half of USD events had fakes or two-way whipsaw before resolving.",
+    "typical_behavior": "Peak favorable ~4-6 min after release, decaying by min 10 — exit early. Scheduled speeches/pressers are separate events with reversal power.",
+    "notes": "Fading the last pre-release candles worked 9/10 on FOMC; pre-statement shakeouts 2-7 min before are common."
+  },
+  "CURRENCY:GBP": {
+    "pattern": "Reactions vary and are often weak — trade only top-tier GBP releases (team guidance).",
+    "typical_behavior": "Observed pattern (n=2, low confidence): a 'textbook' run-up in the final 10-15 minutes before the print reversed on release.",
+    "notes": "Keep GBP under observation rather than as a primary market."
+  },
+  "CURRENCY:NOK": {
+    "pattern": "One violent M1 candle, mostly wick, that refills within 1-2 candles (verified 4/4 in 2019 sample) — the favorable move rarely survives to a 5-minute exit, so prefer SKIP or a modest take-profit the spike can hit before refilling. Reactions often begin 2-5 min BEFORE the official minute.",
+    "typical_behavior": "Data prints 30-110 points; Norges Bank ~500 points — and even that fully round-tripped within ~25 min.",
+    "notes": "First-tick direction unreliable (wrong side 2/6). With entry fixed seconds before the official minute, an early NOK reaction may already be underway at entry — reduced size or SKIP is reasonable for this system's timing."
+  },
+  "CURRENCY:SEK": {
+    "pattern": "Like NOK but slightly longer-lived: extension 6-10 min, then ~50% retrace by min 15-30.",
+    "typical_behavior": "Data prints 60-190 points in the first candle(s).",
+    "notes": "Use the minimum exit window with a modest take-profit; expect pre-minute fakes (early reactions like NOK)."
+  }
+}
