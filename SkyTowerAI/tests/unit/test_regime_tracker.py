@@ -55,6 +55,10 @@ class TestRateDecisionDetection:
                      "Fed Chair Speaks"):
             assert not is_rate_decision(name), name
 
+    def test_ignores_vote_count_events(self):
+        # Vote tallies ("0-0-9") would parse as rate 0 and fake a cut
+        assert not is_rate_decision("MPC Official Bank Rate Votes")
+
 
 class TestDeterministic:
     def test_hike_sets_hiking(self, tracker):

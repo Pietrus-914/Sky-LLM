@@ -60,6 +60,11 @@ DECISIONS_KEPT = 12
 
 def is_rate_decision(event_name: str) -> bool:
     name = normalize_event_name(event_name)
+    # "MPC Official Bank Rate Votes" carries vote counts ("0-0-9"), not a
+    # rate — parse_numeric would read it as 0 and fake a cut. Caught by the
+    # historical replay when GBP's regime came out corrupted.
+    if "votes" in name:
+        return False
     return any(marker in name for marker in RATE_DECISION_MARKERS)
 
 
@@ -248,8 +253,10 @@ class RegimeTracker:
                         f"({action} @ {actual}, {source})")
 
     @staticmethod
-    def _deterministic(decisions: List[Dict]) -> str:
-        """Facts-only classification from the observed decision list."""
+    def _deterministic(decisions: List[Dict], as_of: datetime = None) -> str:
+        """Facts-only classification from the observed decision list.
+        as_of: staleness reference point — utcnow() live, the EVENT time in
+        historical replay (else every old cycle would look expired)."""
         last_move = None
         holds_since = 0
         for d in reversed(decisions):
@@ -263,7 +270,7 @@ class RegimeTracker:
             return "hold"
         try:
             moved_at = to_naive_utc(datetime.fromisoformat(last_move['date']))
-            if utcnow() - moved_at > timedelta(days=STALE_MOVE_DAYS):
+            if (as_of or utcnow()) - moved_at > timedelta(days=STALE_MOVE_DAYS):
                 return "hold"
         except (ValueError, TypeError, KeyError):
             pass

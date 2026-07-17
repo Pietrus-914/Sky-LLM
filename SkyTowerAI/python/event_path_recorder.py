@@ -59,6 +59,104 @@ BACKFILL_WINDOW_SECONDS = 48 * 3600
 BACKFILL_MAX_ATTEMPTS = 12
 
 
+def measure_path(bar_map: Dict[int, Dict[str, float]], t0_min: int, pip: float,
+                 allow_partial: bool) -> Optional[Dict]:
+    """
+    Pure path math over minute bars — SHARED by the live recorder and the
+    historical bootstrap so both datasets are computed identically.
+
+    Args:
+        bar_map: minute-epoch -> {open, high, low, close} (floats; epochs in
+            the same clock as t0_min — broker time live, UTC historically)
+        t0_min: release minute epoch (floored)
+        pip: pip size for the pair
+        allow_partial: False = only a COMPLETE 30-min window yields a result
+            (caller retries later); True = accept a partial path (give-up /
+            historical gaps), still requiring at least the 1-min move
+
+    Returns metrics dict (price_at_event, move_{1,5,15,30}min_pips,
+    first5_high/low_pips, high/low_30min_pips, pre_release_3m_pips,
+    complete) or None when nothing meaningful is measurable.
+    """
+    if not bar_map:
+        return None
+    newest = max(bar_map)
+    # The data must reach back to the release bar at all
+    if min(bar_map) > t0_min:
+        return None
+
+    def price_at(t: int) -> Optional[float]:
+        """Price at instant t: open of the bar starting at t (set on its
+        first tick — valid even while forming), else close of the previous
+        minute's bar, but ONLY when a bar at/after t exists proving that
+        previous bar closed — the newest bar in a live push is still
+        forming, and its close is the push-instant price, not the boundary."""
+        b = bar_map.get(t)
+        if b is not None:
+            return b["open"]
+        if newest >= t:
+            b = bar_map.get(t - 60)
+            if b is not None:
+                return b["close"]
+        return None
+
+    p0 = price_at(t0_min)
+    if p0 is None:
+        return None
+
+    def move(minutes: int) -> Optional[float]:
+        p = price_at(t0_min + minutes * 60)
+        return round((p - p0) / pip, 1) if p is not None else None
+
+    def window_extremes(minutes: int):
+        end = t0_min + (minutes - 1) * 60
+        # Full confidence needs every window bar CLOSED (a bar at end+60
+        # exists); in partial mode accept a still-forming/last bar — its
+        # high/low are true observed extremes of a partial minute
+        if newest < (end if allow_partial else end + 60):
+            return None, None
+        window = [b for t, b in bar_map.items() if t0_min <= t <= end]
+        # Demand most of the window (quiet single-bar gaps are fine,
+        # a half-empty window is not a measurement)
+        if len(window) < max(2, minutes - minutes // 5):
+            return None, None
+        hi = max(b["high"] for b in window)
+        lo = min(b["low"] for b in window)
+        return round((hi - p0) / pip, 1), round((lo - p0) / pip, 1)
+
+    moves = {m: move(m) for m in (1, 5, 15, 30)}
+    first5_high, first5_low = window_extremes(5)
+    high30, low30 = window_extremes(30)
+
+    complete = (all(v is not None for v in moves.values())
+                and high30 is not None and first5_high is not None)
+    if not complete and not allow_partial:
+        return None   # caller retries when fuller data exists
+    if moves[1] is None:
+        # No real path data — a record with just a release price is noise
+        return None
+
+    # Pre-release drift over the last 3 full pre-event minutes
+    pre_pips = None
+    b_start, b_end = bar_map.get(t0_min - 180), bar_map.get(t0_min - 60)
+    if b_start is not None and b_end is not None:
+        pre_pips = round((b_end["close"] - b_start["open"]) / pip, 1)
+
+    return {
+        "price_at_event": p0,
+        "move_1min_pips": moves[1],
+        "move_5min_pips": moves[5],
+        "move_15min_pips": moves[15],
+        "move_30min_pips": moves[30],
+        "first5_high_pips": first5_high,
+        "first5_low_pips": first5_low,
+        "high_30min_pips": high30,
+        "low_30min_pips": low30,
+        "pre_release_3m_pips": pre_pips,
+        "complete": complete,
+    }
+
+
 class EventPathRecorder:
     """Thread-safe scheduler + JSONL store for post-event price paths."""
 
@@ -342,88 +440,15 @@ class EventPathRecorder:
                                            ("open", "high", "low", "close")}
             except (KeyError, TypeError, ValueError):
                 continue
-        if not bar_map:
+        metrics = measure_path(bar_map, t0_min, pip, allow_partial=give_up)
+        if metrics is None:
             return None
-        newest = max(bar_map)
-
-        # The push must reach back to the release bar at all
-        if min(bar_map) > t0_min:
-            return None
-
-        def price_at(t: int) -> Optional[float]:
-            """Price at instant t: open of the bar starting at t (set on its
-            first tick — valid even while forming), else close of the previous
-            minute's bar, but ONLY when a bar at/after t exists proving that
-            previous bar closed — the newest bar in a push is still forming,
-            and its close is the push-instant price, not the boundary."""
-            b = bar_map.get(t)
-            if b is not None:
-                return b["open"]
-            if newest >= t:
-                b = bar_map.get(t - 60)
-                if b is not None:
-                    return b["close"]
-            return None
-
-        p0 = price_at(t0_min)
-        if p0 is None:
-            return None
-
-        def move(minutes: int) -> Optional[float]:
-            p = price_at(t0_min + minutes * 60)
-            return round((p - p0) / pip, 1) if p is not None else None
-
-        def window_extremes(minutes: int):
-            end = t0_min + (minutes - 1) * 60
-            # Full confidence needs every window bar CLOSED (a bar at end+60
-            # exists); at give-up accept a still-forming last bar — its
-            # high/low are true observed extremes of a partial minute
-            if newest < (end if give_up else end + 60):
-                return None, None
-            window = [b for t, b in bar_map.items() if t0_min <= t <= end]
-            # Demand most of the window (quiet single-bar gaps are fine,
-            # a half-empty window is not a measurement)
-            if len(window) < max(2, minutes - minutes // 5):
-                return None, None
-            hi = max(b["high"] for b in window)
-            lo = min(b["low"] for b in window)
-            return round((hi - p0) / pip, 1), round((lo - p0) / pip, 1)
-
-        moves = {m: move(m) for m in (1, 5, 15, 30)}
-        first5_high, first5_low = window_extremes(5)
-        high30, low30 = window_extremes(30)
-
-        complete = (all(v is not None for v in moves.values())
-                    and high30 is not None and first5_high is not None)
-        if not complete and not give_up:
-            return None   # defer — a later push will cover the full window
-        if moves[1] is None:
-            # No real path data (e.g. only a pre-event stale push survives) —
-            # a record with just a release price is noise, not a measurement
-            return None
-
-        # Pre-release drift over the last 3 full pre-event minutes
-        pre_pips = None
-        b_start, b_end = bar_map.get(t0_min - 180), bar_map.get(t0_min - 60)
-        if b_start is not None and b_end is not None:
-            pre_pips = round((b_end["close"] - b_start["open"]) / pip, 1)
 
         record = self._base_record(entry, pair, offset,
-                                   "ok" if complete else "partial")
+                                   "ok" if metrics.pop("complete") else "partial")
         spread_snap = entry["spreads"].get(pair)
-        record.update({
-            "price_at_event": p0,
-            "move_1min_pips": moves[1],
-            "move_5min_pips": moves[5],
-            "move_15min_pips": moves[15],
-            "move_30min_pips": moves[30],
-            "first5_high_pips": first5_high,
-            "first5_low_pips": first5_low,
-            "high_30min_pips": high30,
-            "low_30min_pips": low30,
-            "pre_release_3m_pips": pre_pips,
-            "spread_points_t0": spread_snap[1] if spread_snap else None,
-        })
+        record.update(metrics)
+        record["spread_points_t0"] = spread_snap[1] if spread_snap else None
         return record
 
     # ------------------------------------------------------------------
