@@ -125,6 +125,13 @@ bool           g_panelCreated = false;
 string         g_currentEventName = "";
 double         g_currentConfidence = 0;
 
+// Decision lineage (F2): the server sends decision_id with every signal and
+// the EA echoes it back in opened/closed/event-reaction reports, joining the
+// trade and the measured reaction to the exact decision_history row even
+// across a server restart. Empty from an old server — all consumers tolerate.
+string         g_signalDecisionId = "";  // id of the latest parsed signal
+string         g_tradeDecisionId = "";   // id bound to the OPEN position
+
 // AI Position Management
 datetime       g_lastPositionReport = 0;    // Last time we reported to server
 bool           g_aiManagementActive = false; // AI is managing the position
@@ -148,6 +155,7 @@ string         g_reactionCurrency[REACTION_SLOTS];
 string         g_reactionEventTimeUTC[REACTION_SLOTS]; // ISO UTC string from the server signal
 double         g_reactionPrice0[REACTION_SLOTS];       // bid at event time
 double         g_reactionPrice1[REACTION_SLOTS];       // bid at T+60s
+string         g_reactionDecisionId[REACTION_SLOTS];   // lineage echo (F2)
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -809,9 +817,11 @@ void SendEventReaction(int slot, double priceAfter5Min)
 {
    string json = StringFormat(
       "{\"pair\":\"%s\",\"event_name\":\"%s\",\"currency\":\"%s\",\"event_time\":\"%s\","
+      "\"decision_id\":\"%s\","
       "\"price_at_event\":%.5f,\"price_after_1min\":%.5f,\"price_after_5min\":%.5f}",
       _Symbol, EscapeJson(g_reactionEventName[slot]), EscapeJson(g_reactionCurrency[slot]),
       EscapeJson(g_reactionEventTimeUTC[slot]),
+      EscapeJson(g_reactionDecisionId[slot]),
       g_reactionPrice0[slot], g_reactionPrice1[slot], priceAfter5Min);
 
    string url = "http://" + InpServerHost + ":" + IntegerToString(InpServerPort) + "/api/event-reaction";
@@ -867,6 +877,7 @@ void CheckForSignals()
    int timeUntilEvent = (int)ExtractJsonDouble(result, "time_until_event");
    string eventName = ExtractJsonString(result, "event_name");
    string reasoning = ExtractJsonString(result, "reasoning");
+   string decisionId = ExtractJsonString(result, "decision_id");  // lineage (F2)
 
    //--- Per-trade risk budget from the server (panel "Max loss per trade
    //--- USD") — single source of truth for lot sizing + max-loss guardrail.
@@ -923,6 +934,7 @@ void CheckForSignals()
    g_eventSLPercent = (slPercent > 0) ? slPercent : InpDefaultSLPercent;
    g_eventSLPips = slPips;  // SL in pips from LLM (0 if not provided)
    g_eventTPPips = tpPips;  // TP in pips from LLM (0 if not provided)
+   g_signalDecisionId = decisionId;
 
    //--- Arm post-event reaction tracking (snapshots at T0 / T+60s / T+300s)
    if(InpReportReactions)
@@ -935,6 +947,11 @@ void CheckForSignals()
          if(g_reactionPending[s] && g_reactionEventName[s] == eventName &&
             MathAbs((long)(g_reactionEventTime[s] - g_eventTime)) <= 2)
          {
+            // Re-delivered signal (e.g. after a spread-rejected entry) may
+            // carry a NEWER decision_id (server re-analysis) — refresh so the
+            // reaction joins the decision that actually drives the trade
+            if(StringLen(decisionId) > 0)
+               g_reactionDecisionId[s] = decisionId;
             slot = -2;  // already armed
             break;
          }
@@ -948,6 +965,7 @@ void CheckForSignals()
          g_reactionEventName[slot] = eventName;
          g_reactionCurrency[slot] = ExtractJsonString(result, "event_currency");
          g_reactionEventTimeUTC[slot] = ExtractJsonString(result, "event_time");
+         g_reactionDecisionId[slot] = decisionId;
          g_reactionPrice0[slot] = 0;
          g_reactionPrice1[slot] = 0;
       }
@@ -1238,6 +1256,9 @@ void ExecuteEventTrade()
          g_currentPositionId = (ulong)PositionGetInteger(POSITION_IDENTIFIER);
       else
          g_currentPositionId = g_currentTicket;
+      // Bind the lineage id NOW: a later signal for the next event must not
+      // relabel this trade's reports
+      g_tradeDecisionId = g_signalDecisionId;
 
       Print("==============================================");
       Print("TRADE EXECUTED");
@@ -1575,11 +1596,11 @@ void NotifyPositionOpened()
       "{\"ticket\":%d,\"symbol\":\"%s\",\"direction\":\"%s\","
       "\"entry_price\":%.5f,\"lots\":%.2f,\"sl\":%.5f,\"tp\":%.5f,"
       "\"tick_value\":%.4f,\"account_balance\":%.2f,"
-      "\"event_name\":\"%s\"}",
+      "\"event_name\":\"%s\",\"decision_id\":\"%s\"}",
       (int)g_currentTicket, symbol, g_eventDirection,
       entryPrice, lots, sl, tp,
       tickValue, balance,
-      g_currentEventName
+      EscapeJson(g_currentEventName), EscapeJson(g_tradeDecisionId)
    );
 
    string url = "http://" + InpServerHost + ":" + IntegerToString(InpServerPort) + "/api/position/opened";
@@ -1652,8 +1673,10 @@ void NotifyPositionClosed(double closePrice, double profit, string reason,
                           string profitSource = "floating")
 {
    string json = StringFormat(
-      "{\"ticket\":%d,\"close_price\":%.5f,\"profit\":%.2f,\"reason\":\"%s\",\"profit_source\":\"%s\"}",
-      (int)g_currentTicket, closePrice, profit, reason, profitSource
+      "{\"ticket\":%d,\"close_price\":%.5f,\"profit\":%.2f,\"reason\":\"%s\","
+      "\"profit_source\":\"%s\",\"decision_id\":\"%s\"}",
+      (int)g_currentTicket, closePrice, profit, EscapeJson(reason),
+      profitSource, EscapeJson(g_tradeDecisionId)
    );
 
    string url = "http://" + InpServerHost + ":" + IntegerToString(InpServerPort) + "/api/position/closed";

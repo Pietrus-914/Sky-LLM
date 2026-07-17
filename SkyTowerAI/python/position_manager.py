@@ -301,7 +301,9 @@ class PositionManager:
                 "opened_at": "",
                 "closed_at": utcnow().isoformat(),
                 "decisions_count": 0,
-                "decision_id": "",
+                # EA echo (F2): keeps lineage even for an orphaned close,
+                # where the opened-time binding died with the old process
+                "decision_id": str(data.get("decision_id") or ""),
                 "forced": False,
                 "entry_price": 0.0,
                 "close_price": data.get("close_price", 0.0),
@@ -326,7 +328,9 @@ class PositionManager:
                     "event_name": self.position.event_name,
                     "opened_at": self.position.open_time.isoformat(),
                     "decisions_count": len(self.position.ai_decisions),
-                    "decision_id": self.position.decision_id,
+                    # Tracked binding first (set at open), EA echo as backup
+                    "decision_id": (self.position.decision_id
+                                    or str(data.get("decision_id") or "")),
                     "forced": self.position.forced,
                     "entry_price": self.position.entry_price,
                     "sl": self.position.sl,

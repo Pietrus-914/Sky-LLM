@@ -181,3 +181,59 @@ class TestPlaybooks:
         # the write instead of before it.
         os.utime(engine.playbooks_file, (1, 1))
         assert "v2" in engine._playbook_section("CPI m/m", "USD")
+
+
+class TestTrackRecordDecisionIdJoin:
+    """F2: reactions carrying the EA-echoed decision_id join the track
+    record by EXACT id; minute matching stays the legacy fallback."""
+
+    def _decision(self, **over):
+        d = {"timestamp": "2026-07-15T13:28", "currency": "USD",
+             "event_name": "CPI m/m", "event_datetime": "2026-07-15T13:30",
+             "direction": "BUY", "pair": "USDCAD", "confidence": 0.6,
+             "decision_id": "dec-1"}
+        d.update(over)
+        return d
+
+    def _engine_with(self, tmp_path, decision, reactions):
+        engine = make_engine(tmp_path)
+        engine.decision_log = Mock()
+        engine.decision_log.get_recent.return_value = [decision]
+        engine.reaction_history = Mock()
+        engine.reaction_history.get_matching.return_value = reactions
+        return engine
+
+    def test_exact_id_beats_minute_mismatch(self, tmp_path):
+        # Feed timestamp drifted a minute — the id still joins the outcome
+        reaction = {"decision_id": "dec-1", "event_time": "2026-07-15T13:31",
+                    "pair": "USDCAD", "move_5min_pips": 12.0}
+        text = self._engine_with(tmp_path, self._decision(),
+                                 [reaction])._build_track_record("USD")
+        assert "CORRECT" in text
+
+    def test_foreign_id_skipped_despite_minute_match(self, tmp_path):
+        # Same minute but a DIFFERENT decision's reaction — must not join
+        reaction = {"decision_id": "dec-OTHER", "event_time": "2026-07-15T13:30",
+                    "pair": "USDCAD", "move_5min_pips": 12.0}
+        text = self._engine_with(tmp_path, self._decision(),
+                                 [reaction])._build_track_record("USD")
+        assert "outcome not measured yet" in text
+
+    def test_legacy_records_fall_back_to_minute(self, tmp_path):
+        # Pre-echo reaction (no id): minute matching still joins it
+        reaction = {"event_time": "2026-07-15T13:30",
+                    "pair": "USDCAD", "move_5min_pips": -8.0}
+        text = self._engine_with(tmp_path, self._decision(),
+                                 [reaction])._build_track_record("USD")
+        assert "WRONG" in text
+
+    def test_foreign_id_first_does_not_shadow_legacy_match(self, tmp_path):
+        # Adversarial ordering: a foreign-id reaction sits BEFORE the right
+        # legacy (id-less) one — the skip must not consume the join
+        foreign = {"decision_id": "dec-OTHER", "event_time": "2026-07-15T13:30",
+                   "pair": "USDCAD", "move_5min_pips": 99.0}
+        legacy = {"event_time": "2026-07-15T13:30",
+                  "pair": "USDCAD", "move_5min_pips": 12.0}
+        text = self._engine_with(tmp_path, self._decision(),
+                                 [foreign, legacy])._build_track_record("USD")
+        assert "+12.0 pips" in text and "CORRECT" in text

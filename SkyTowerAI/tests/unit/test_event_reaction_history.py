@@ -260,3 +260,17 @@ class TestCurrencyFallback:
         h.record(make_reaction(currency="GBP", event_name="GDP"))
         assert h.summarize_currency_fallback("USD") is None
         assert h.summarize_currency_fallback("GBP") is not None
+
+
+class TestDecisionIdEcho:
+    """F2: the EA echoes the signal's decision_id in reaction reports."""
+
+    def test_echo_recorded(self, tmp_path):
+        history = EventReactionHistory(log_dir=str(tmp_path))
+        entry = history.record(make_reaction(decision_id="abc123"))
+        assert entry["decision_id"] == "abc123"
+
+    def test_old_ea_without_echo_records_empty(self, tmp_path):
+        history = EventReactionHistory(log_dir=str(tmp_path))
+        entry = history.record(make_reaction())
+        assert entry["decision_id"] == ""

@@ -461,8 +461,16 @@ confidence — do NOT inflate it just because a direction is required."""
             for d in recent[:limit]:
                 outcome = " -> outcome not measured yet"
                 evt_minute = (d.get('event_datetime') or '')[:16]
+                d_id = d.get('decision_id')
                 for r in self.reaction_history.get_matching(d.get('event_name', ''), currency, limit=10):
-                    if (r.get('event_time') or '')[:16] != evt_minute:
+                    r_id = r.get('decision_id')
+                    if d_id and r_id:
+                        # Exact lineage join (F2 EA echo) — immune to feed
+                        # timestamp drift; minute matching stays the fallback
+                        # for records from before the echo existed
+                        if r_id != d_id:
+                            continue
+                    elif (r.get('event_time') or '')[:16] != evt_minute:
                         continue
                     move = r.get('move_5min_pips')
                     if move is None:
