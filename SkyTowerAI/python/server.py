@@ -1100,13 +1100,18 @@ def api_regimes():
         return jsonify({"status": "error", "message": "tracker unavailable"}), 503
 
     if request.method == 'POST':
-        data = request.json or {}
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"status": "error",
+                            "message": "JSON object body required"}), 400
         try:
+            # set_manual validates both fields (unknown currency -> ValueError)
             entry = regime_tracker.set_manual(str(data.get('currency', '')),
                                               str(data.get('regime', '')))
         except ValueError as e:
             return jsonify({"status": "error", "message": str(e)}), 400
-        return jsonify({"status": "ok", "currency": str(data.get('currency', '')).upper(),
+        return jsonify({"status": "ok",
+                        "currency": str(data.get('currency', '')).upper().strip(),
                         "entry": entry})
 
     return jsonify({"status": "ok", "regimes": regime_tracker.all()})
@@ -2015,16 +2020,28 @@ def _get_next_unanalyzed_events() -> list:
 
 
 def _run_regime_scan():
-    """Feed newly-backfilled rate decisions to the regime tracker. May make
-    ONE short LLM call (ambiguous hold), so it follows the backfill guard:
-    never while a decision is active (event imminent, updater must stay
-    responsive)."""
+    """Feed newly-backfilled rate decisions to the regime tracker. The scan
+    may make ONE LLM call (~up to 30s, ambiguous hold) in the updater
+    thread, so it is double-guarded: never while a decision is active, and
+    never when a monitored event is imminent — a stall here could push
+    event analysis past the entry window."""
     if regime_tracker is None or path_recorder is None:
         return
     try:
         with decision_lock:
             if next_decision is not None:
                 return
+        # Imminent-event gate (cache-hit: same calendar key as the updater)
+        now = utcnow()
+        for event in calendar.get_monitored_events():
+            event_time = event.datetime_utc
+            if event_time.tzinfo is not None:
+                event_time = event_time.replace(tzinfo=None)
+            until = (event_time - now).total_seconds()
+            if 0 <= until <= 480:
+                return
+            if until > 480:
+                break   # sorted by time — nothing imminent
         regime_tracker.scan(path_recorder.get_recent(150))
     except Exception as e:
         logger.debug(f"Regime scan error: {e}")

@@ -149,12 +149,18 @@ class RegimeTracker:
             return json.loads(json.dumps(self._state['currencies']))
 
     def set_manual(self, currency: str, regime: str) -> Dict:
-        """Panel override. Wins until the bank's next OBSERVED decision."""
-        currency = (currency or '').upper()
+        """Panel override. Wins until the bank's next OBSERVED decision
+        (unless set AFTER that decision's release — then it outranks it).
+        Only currencies already known to the state are accepted — a typo'd
+        or empty currency would otherwise persist as a phantom row with no
+        delete path."""
+        currency = (currency or '').upper().strip()
         if regime not in REGIMES:
             raise ValueError(f"regime must be one of {REGIMES}")
         with self._lock:
-            entry = self._state['currencies'].setdefault(currency, {"decisions": []})
+            if currency not in self._state['currencies']:
+                raise ValueError(f"unknown currency '{currency}'")
+            entry = self._state['currencies'][currency]
             entry.update({"regime": regime, "source": "manual",
                           "updated_at": utcnow().isoformat() + "Z",
                           "rationale": "manual override (panel)"})
@@ -165,9 +171,14 @@ class RegimeTracker:
     def scan(self, path_records: List[Dict]) -> int:
         """Feed recent event-path records (newest first, as get_recent returns
         them); processes unseen rate decisions that already have an 'actual'.
-        Returns how many new decisions were observed. LLM is only consulted
-        for ambiguous holds, i.e. at most once per central-bank meeting."""
+        Returns how many new decisions were observed. At most ONE LLM
+        adjudication per scan pass — a backlog replay (fresh state file)
+        must not stall the updater thread with back-to-back 30s calls;
+        further ambiguous holds in the same pass fall back to the
+        deterministic rule (acceptable: only the newest decision drives
+        live tagging, and a backlog is a rare cold-start artifact)."""
         processed = 0
+        llm_budget = 1
         for r in reversed(path_records or []):   # oldest first
             try:
                 if r.get('test') or r.get('actual') in (None, ''):
@@ -179,8 +190,18 @@ class RegimeTracker:
                 with self._lock:
                     if key in self._state['seen_events']:
                         continue
-                self._observe(key, r)
-                processed += 1
+                    # Reserve atomically: check-then-act under ONE lock, so a
+                    # concurrent scan can't double-append the same decision,
+                    # and a permanently-unparseable record is never retried
+                    # on every cleanup cycle forever
+                    self._state['seen_events'] = (self._state['seen_events']
+                                                  [-199:] + [key])
+                observed, llm_used = self._observe(key, r,
+                                                   llm_allowed=llm_budget > 0)
+                if observed:
+                    processed += 1
+                if llm_used:
+                    llm_budget -= 1
             except Exception as e:
                 logger.warning(f"Regime scan failed for a record: {e}")
         return processed
@@ -189,12 +210,14 @@ class RegimeTracker:
     # Observation + classification
     # ------------------------------------------------------------------
 
-    def _observe(self, key: str, record: Dict):
+    def _observe(self, key: str, record: Dict,
+                 llm_allowed: bool = True) -> tuple:
+        """Process one rate-decision record. Returns (observed, llm_used)."""
         currency = (record.get('currency') or '').upper()
         actual = parse_numeric(record.get('actual'))
         previous = parse_numeric(record.get('previous'))
         if actual is None:
-            return
+            return False, False
 
         if previous is None:
             with self._lock:
@@ -222,35 +245,52 @@ class RegimeTracker:
                            "rationale": "", "decisions": []})
             entry['decisions'] = (entry.get('decisions') or [])[-(DECISIONS_KEPT - 1):] + [decision]
             entry['rate'] = actual
-            self._state['seen_events'] = (self._state['seen_events']
-                                          [-(200 - 1):] + [key])
+            # Persist the observed decision NOW — a failure later (e.g. in
+            # the LLM path) must not lose it across a restart
+            self._save_locked()
             det = self._deterministic(entry['decisions'])
 
         regime, source, rationale = det, "rule", f"calendar: {action} to {actual}"
+        llm_used = False
 
         # Ambiguity worth an LLM look: bank HELD while the cycle direction is
         # still alive — pause within the cycle, or end of it?
-        if action == "hold" and det != "hold" and self._llm_enabled:
+        if action == "hold" and det != "hold" and self._llm_enabled and llm_allowed:
+            llm_used = True
             verdict = self._llm_adjudicate(currency, record, entry_snapshot={
                 "decisions": list(entry['decisions']), "cycle": det})
             if verdict and verdict.get('regime') in (det, "hold"):
                 regime = verdict['regime']
                 source = "llm"
-                rationale = verdict.get('rationale', '')[:300]
+                # 'rationale' may be present-but-null in otherwise valid JSON
+                rationale = str(verdict.get('rationale') or '')[:300]
 
         with self._lock:
             entry = self._state['currencies'][currency]
             old = entry.get('regime')
-            entry.update({"regime": regime, "source": source,
-                          "updated_at": utcnow().isoformat() + "Z",
-                          "rationale": rationale})
-            self._save_locked()
-        if old != regime:
+            # An operator override set AFTER this release (they saw the
+            # decision and chose a stance) outranks the automatic verdict;
+            # the decision itself is already persisted above
+            manual_after_release = (
+                entry.get('source') == 'manual'
+                and str(entry.get('updated_at') or '')[:19]
+                    > str(record.get('event_time') or '')[:19])
+            if not manual_after_release:
+                entry.update({"regime": regime, "source": source,
+                              "updated_at": utcnow().isoformat() + "Z",
+                              "rationale": rationale})
+                self._save_locked()
+        if manual_after_release:
+            logger.info(f"Regime observation for {currency} kept manual "
+                        f"override (set after the release) — auto verdict "
+                        f"was {regime}")
+        elif old != regime:
             logger.warning(f"REGIME CHANGE: {currency} {old} -> {regime} "
                            f"({source}; {rationale})")
         else:
             logger.info(f"Regime confirmed: {currency} = {regime} "
                         f"({action} @ {actual}, {source})")
+        return True, llm_used
 
     @staticmethod
     def _deterministic(decisions: List[Dict], as_of: datetime = None) -> str:
@@ -312,11 +352,22 @@ class RegimeTracker:
             for d in entry_snapshot['decisions'][-6:])
         reaction = ""
         if record.get('move_5min_pips') is not None:
-            reaction = (f"Measured market reaction on {record.get('pair')}: "
+            # Project invariant: NEVER leave base/quote semantics implicit —
+            # +20 pips on NZDUSD after a USD event means USD WEAKENED
+            pair = (record.get('pair') or '').upper()
+            if len(pair) >= 6 and currency == pair[:3]:
+                semantics = (f"{currency} is the BASE of {pair}: positive "
+                             f"pips = {currency} STRENGTHENED")
+            elif len(pair) >= 6 and currency == pair[3:6]:
+                semantics = (f"{currency} is the QUOTE of {pair}: positive "
+                             f"pips = {currency} WEAKENED")
+            else:
+                semantics = f"pair {pair} (unknown side for {currency})"
+            reaction = (f"Measured market reaction on {pair}: "
                         f"{record.get('move_1min_pips')} pips/1min, "
                         f"{record.get('move_5min_pips')} pips/5min, "
-                        f"{record.get('move_30min_pips')} pips/30min "
-                        f"(positive = pair up).")
+                        f"{record.get('move_30min_pips')} pips/30min. "
+                        f"NOTE: {semantics}.")
 
         prompt = f"""Central bank rate decision just released for {currency}:
 event: {record.get('event_name')}

@@ -61,6 +61,46 @@ def recorder(tmp_path):
     return EventPathRecorder(log_dir=str(tmp_path))
 
 
+class TestMeasurePathDirect:
+    """The extracted pure function, exercised the way the HISTORICAL builder
+    uses it: UTC epochs, allow_partial=True, gap tolerance."""
+
+    def _bar_map(self, start_utc, minutes, skip=()):
+        bars = make_bars(start_utc, minutes)
+        return {b["time"] - BROKER_OFFSET:
+                {k: b[k] for k in ("open", "high", "low", "close")}
+                for i, b in enumerate(bars) if i not in skip}
+
+    def test_complete_window(self):
+        t0 = utc_epoch(UTC_NOW)
+        bm = self._bar_map(UTC_NOW - timedelta(minutes=5), 40)
+        m = epr.measure_path(bm, t0, 0.0001, allow_partial=True)
+        assert m["complete"] is True
+        assert m["move_1min_pips"] == pytest.approx(2.0, abs=0.11)
+        assert m["move_30min_pips"] == pytest.approx(60.0, abs=0.11)
+
+    def test_partial_when_data_ends_early(self):
+        t0 = utc_epoch(UTC_NOW)
+        bm = self._bar_map(UTC_NOW - timedelta(minutes=5), 15)  # do T+9
+        m = epr.measure_path(bm, t0, 0.0001, allow_partial=True)
+        assert m is not None and m["complete"] is False
+        assert m["move_5min_pips"] is not None
+        assert m["move_30min_pips"] is None
+        # strict mode defers instead
+        assert epr.measure_path(bm, t0, 0.0001, allow_partial=False) is None
+
+    def test_single_bar_gaps_tolerated(self):
+        t0 = utc_epoch(UTC_NOW)
+        bm = self._bar_map(UTC_NOW - timedelta(minutes=5), 40, skip={9, 21})
+        m = epr.measure_path(bm, t0, 0.0001, allow_partial=True)
+        assert m["complete"] is True
+
+    def test_no_release_bar_means_none(self):
+        t0 = utc_epoch(UTC_NOW)
+        bm = self._bar_map(UTC_NOW + timedelta(minutes=3), 30)  # zaczyna po T0
+        assert epr.measure_path(bm, t0, 0.0001, allow_partial=True) is None
+
+
 class TestOffsetInference:
     def test_infers_broker_offset(self):
         pushed = UTC_NOW

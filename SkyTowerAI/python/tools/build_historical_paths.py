@@ -167,10 +167,14 @@ def _num(value):
 
 
 def regime_at(timeline, currency, epoch):
+    """Regime STRICTLY BEFORE the given instant (bisect_left, not _right):
+    a rate decision is stamped with the PRE-decision regime — matching the
+    live recorder, which stamps at T+31min, before the tracker can observe
+    the decision. Historical and live tags must bucket identically."""
     points = timeline.get(currency)
     if not points:
         return None
-    idx = bisect.bisect_right([p[0] for p in points], epoch) - 1
+    idx = bisect.bisect_left([p[0] for p in points], epoch) - 1
     return points[idx][1] if idx >= 0 else None
 
 

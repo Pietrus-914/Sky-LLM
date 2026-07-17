@@ -31,7 +31,9 @@ import sys
 from datetime import datetime, timezone
 
 CURRENCIES = {"USD", "NZD", "CAD", "AUD", "GBP"}
-EVENT_RE = re.compile(r'\{"id":\d+,.*?"soloUrl":"[^"]*"\}')
+# [^{}] keeps the match inside ONE flat JSON object — a lazy .*? could run
+# past a non-conforming object's boundary and swallow the NEXT event
+EVENT_RE = re.compile(r'\{"id":\d+,[^{}]*?"soloUrl":"[^"]*"\}')
 
 
 def parse_file(path: str):
@@ -89,7 +91,12 @@ def main():
             except (KeyError, TypeError, ValueError):
                 continue
             if row['currency'] in CURRENCIES:
-                all_rows[(row['currency'], row['name'], row['dateline'])] = row
+                # FF ids are stable across reschedules — id-keyed dedupe
+                # collapses an event that moved between two week pages into
+                # one row (the later page carries the final state)
+                dedupe_key = obj.get('id') or (row['currency'], row['name'],
+                                               row['dateline'])
+                all_rows[dedupe_key] = row
 
     rows = sorted(all_rows.values(), key=lambda r: r['dateline'])
 

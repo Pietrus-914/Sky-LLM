@@ -185,3 +185,69 @@ class TestLlmAdjudication:
         t.scan([path_record(actual="2.50%", previous="2.50%",
                             when=now + timedelta(days=42))])
         assert t.get("NZD") == "hiking"
+
+    def test_null_rationale_does_not_crash(self, tmp_path, monkeypatch):
+        """Valid JSON with 'rationale': null must not TypeError mid-observe."""
+        t = RegimeTracker(state_file=str(tmp_path / "r.json"), llm_enabled=True)
+        monkeypatch.setattr(t, "_llm_adjudicate",
+                            lambda *a, **k: {"regime": "hold", "rationale": None})
+        now = utcnow()
+        t.scan([path_record(actual="2.50%", previous="2.25%", when=now)])
+        t.scan([path_record(actual="2.50%", previous="2.50%",
+                            when=now + timedelta(days=42))])
+        assert t.get("NZD") == "hold"
+        assert t.all()["NZD"]["rationale"] == ""
+
+    def test_one_llm_call_per_scan_pass(self, tmp_path, monkeypatch):
+        """Backlog replay: only the first ambiguous hold gets the LLM."""
+        t = RegimeTracker(state_file=str(tmp_path / "r.json"), llm_enabled=True)
+        calls = []
+        monkeypatch.setattr(t, "_llm_adjudicate",
+                            lambda cur, *a, **k: calls.append(cur) or
+                            {"regime": "hold", "rationale": "x"})
+        now = utcnow()
+        # scan() expects get_recent() order = NEWEST FIRST (it reverses
+        # internally to process chronologically)
+        t.scan([
+            path_record(currency="AUD", actual="4.35%", previous="4.35%",
+                        name="Cash Rate", when=now + timedelta(days=42)),
+            path_record(currency="NZD", actual="2.50%", previous="2.50%",
+                        when=now + timedelta(days=42)),
+            path_record(currency="AUD", actual="4.35%", previous="4.10%",
+                        name="Cash Rate", when=now),
+            path_record(currency="NZD", actual="2.50%", previous="2.25%", when=now),
+        ])
+        assert len(calls) == 1          # budget = 1 per pass
+        # the second ambiguous hold fell back to the deterministic rule
+        assert t.all()["AUD"]["source"] in ("rule", "llm")
+
+    def test_manual_override_after_release_survives_observation(self, tmp_path):
+        """Operator overrides AFTER seeing the decision — the later scan of
+        that same decision must not clobber their call."""
+        t = RegimeTracker(state_file=str(tmp_path / "r.json"), llm_enabled=False,
+                          seed={"NZD": "hold"})
+        past = utcnow() - timedelta(hours=2)
+        t.set_manual("NZD", "cutting")           # set NOW, release was 2h ago
+        t.scan([path_record(actual="2.75%", previous="2.50%", when=past)])
+        assert t.get("NZD") == "cutting"          # manual survived
+        assert t.all()["NZD"]["source"] == "manual"
+        # ...but the decision itself was recorded for future classification
+        assert len(t.all()["NZD"]["decisions"]) == 1
+
+    def test_manual_rejects_unknown_currency(self, tmp_path):
+        t = RegimeTracker(state_file=str(tmp_path / "r.json"), llm_enabled=False,
+                          seed={"USD": "hold"})
+        with pytest.raises(ValueError):
+            t.set_manual("", "hold")
+        with pytest.raises(ValueError):
+            t.set_manual("XYZZY", "hold")
+
+    def test_deterministic_as_of_reference(self, tmp_path):
+        """Replay correctness: staleness is judged against as_of, not now."""
+        old = utcnow() - timedelta(days=400)
+        decisions = [{"date": old.isoformat(), "action": "hike", "rate": 2.5}]
+        # From today's perspective the cycle expired...
+        assert RegimeTracker._deterministic(decisions) == "hold"
+        # ...but as of one month after the hike it was alive
+        as_of = old + timedelta(days=30)
+        assert RegimeTracker._deterministic(decisions, as_of=as_of) == "hiking"
