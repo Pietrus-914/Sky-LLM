@@ -115,9 +115,11 @@ d. Volatility fit: are your stop_loss_pips/take_profit_pips consistent with ATR 
    in the release seconds — the EVENT PLAYBOOK gives measured wick sizes for many
    events; if two estimates could apply, budget the LARGER. A stop tighter than
    wick+spread dies at the print even when the direction is right.
-e. Historical reactions and YOUR TRACK RECORD: what actually happened on past
-   releases of this event, and were your own recent calls on this currency right or
-   wrong? Do not repeat a documented mistake.
+e. Historical reactions, LEARNED EVENT STATISTICS (when provided) and YOUR
+   TRACK RECORD: the measured medians and hit-rates are your statistical prior —
+   anchor on them, then adjust for today's specifics. Respect sample sizes:
+   n under ~10 is weak evidence, never a rule. Were your own recent calls on
+   this currency right or wrong? Do not repeat a documented mistake.
 f. Quoting check (principle 7): confirm the direction maps correctly to the pair.
 
 DECISION OUTPUT FORMAT:
@@ -160,7 +162,8 @@ confidence — do NOT inflate it just because a direction is required."""
                 .replace("%SKIP_POLICY%", self.SKIP_POLICY_NORMAL))
 
     def __init__(self, api_key: str = None, provider: str = None,
-                 decision_log=None, trade_history_file: str = None):
+                 decision_log=None, trade_history_file: str = None,
+                 regime_provider=None):
         """
         Initialize the decision engine
 
@@ -173,6 +176,10 @@ confidence — do NOT inflate it just because a direction is required."""
                 prompt section would never include in-session decisions.
             trade_history_file: path to the closed-trades JSONL written by
                 PositionManager; feeds the RECENT TRADE OUTCOMES section.
+            regime_provider: callable currency -> regime|None (the live
+                RegimeTracker). Selects the current-regime bucket of the
+                LEARNED EVENT STATISTICS; falls back to the static
+                config.CURRENCY_REGIMES seed when not wired (tests).
         """
         # Auto-detect provider from config or environment
         self.provider = provider or LLM_CONFIG.get("provider", "openrouter")
@@ -187,12 +194,18 @@ confidence — do NOT inflate it just because a direction is required."""
         # model can see (and correct for) its own hit rate
         self.decision_log = decision_log or DecisionHistory()
         # Closed trades (realized P/L) — feeds RECENT TRADE OUTCOMES
-        from config import TRADE_HISTORY_FILE, EVENT_PLAYBOOKS_FILE
+        from config import (TRADE_HISTORY_FILE, EVENT_PLAYBOOKS_FILE,
+                            LEARNED_STATS_FILE)
         self.trade_history_file = trade_history_file or TRADE_HISTORY_FILE
         # Curated event playbooks (optional knowledge file)
         self.playbooks_file = EVENT_PLAYBOOKS_FILE
         self._playbooks_cache = None
         self._playbooks_mtime = None
+        # Machine-built frequency stats (LEARNED EVENT STATISTICS section)
+        self.learned_stats_file = LEARNED_STATS_FILE
+        self._learned_cache = None
+        self._learned_mtime = None
+        self._regime_provider = regime_provider
 
         # Initialize LLM client
         self._init_llm_client()
@@ -349,6 +362,27 @@ confidence — do NOT inflate it just because a direction is required."""
         if playbook:
             source_status["playbook"] = "ok"
 
+        # Machine-measured frequency statistics for this event/pair, plus a
+        # compact recap repeated at the END of the prompt (models weigh the
+        # tail of long prompts far more than the middle)
+        suggested = (market_context or {}).get('pair') or pair
+        learned_stats = learned_recap = learned_error = None
+        try:
+            learned = self._learned_stats_section(event.event_name, currency,
+                                                  suggested)
+            if learned:
+                learned_stats, learned_recap = learned
+        except Exception as e:
+            # WARNING, not debug: a bad stats regeneration would silently
+            # strip the statistical prior from EVERY decision — the audit
+            # trail must distinguish "no stats exist" from "lookup broke"
+            logger.warning(f"Learned stats lookup failed: {e}")
+            learned_error = str(e) or e.__class__.__name__
+        source_status["learned_stats"] = (
+            "ok" if learned_stats
+            else f"error: {learned_error}" if learned_error
+            else "no_data")
+
         return {
             "event": {
                 "name": event.event_name,
@@ -367,6 +401,8 @@ confidence — do NOT inflate it just because a direction is required."""
             "track_record": track_record,
             "trade_outcomes": trade_outcomes,
             "playbook": playbook,
+            "learned_stats": learned_stats,
+            "learned_recap": learned_recap,
             "_source_status": source_status,
         }
 
@@ -588,6 +624,209 @@ confidence — do NOT inflate it just because a direction is required."""
                 lines.append(f"{field.replace('_', ' ')}: {entry[field]}")
         return "\n".join(lines) if lines else None
 
+    # ------------------------------------------------------------------
+    # Learned event statistics (machine-built by tools/build_learned_stats.py
+    # from historical + live measured post-release paths)
+    # ------------------------------------------------------------------
+
+    # Rendering gates: medians need a real sample and rates need more — a
+    # 3-of-4 "75%" would anchor the model far harder than the data justifies
+    STATS_MIN_N = 5
+    STATS_RATE_MIN_N = 10
+
+    def _load_learned_stats(self) -> Dict:
+        """knowledge/learned_stats.json, cached by mtime so an offline
+        regeneration is picked up without a restart. Missing/broken/foreign
+        schema = {} (the prompt section simply disappears)."""
+        path = self.learned_stats_file
+        try:
+            if not path or not os.path.exists(path):
+                return {}
+            mtime = os.path.getmtime(path)
+            if self._learned_cache is not None and mtime == self._learned_mtime:
+                return self._learned_cache
+            # utf-8-sig: a stray Notepad/PowerShell resave on the deploy box
+            # adds a BOM that plain utf-8 json.load rejects
+            with open(path, 'r', encoding='utf-8-sig') as f:
+                data = json.load(f)
+            if not isinstance(data, dict) or \
+                    (data.get('_meta') or {}).get('schema_version') != 1:
+                logger.warning("learned_stats.json has an unexpected schema — ignoring")
+                data = {}
+            self._learned_cache = data
+            self._learned_mtime = mtime
+            return data
+        except Exception as e:
+            logger.warning(f"Could not load learned stats: {e}")
+            return {}
+
+    def _current_regime(self, currency: str) -> Optional[str]:
+        """Live regime from the tracker when wired, else the config seed —
+        same fallback contract as EventPathRecorder._regime_for."""
+        if self._regime_provider is not None:
+            try:
+                return self._regime_provider(currency)
+            except Exception as e:
+                logger.debug(f"Regime provider failed for {currency}: {e}")
+        import config as cfg
+        return (getattr(cfg, 'CURRENCY_REGIMES', {}) or {}).get(currency)
+
+    def _usable_pairs(self, entry) -> Dict:
+        """Pair blocks of a stats entry that pass the sample-size gate."""
+        if not isinstance(entry, dict):
+            return {}
+        return {p: b for p, b in (entry.get('pairs') or {}).items()
+                if isinstance(b, dict) and b.get('n', 0) >= self.STATS_MIN_N}
+
+    def _fmt_dist(self, dist) -> Optional[str]:
+        """'median 18.2 (IQR 9.1-30.0, n=64)' — None below the gate."""
+        if not isinstance(dist, dict) or dist.get('n', 0) < self.STATS_MIN_N:
+            return None
+        text = f"median {dist['median']:g}"
+        if 'p25' in dist and 'p75' in dist:
+            text += f" (IQR {dist['p25']:g}-{dist['p75']:g}, n={dist['n']})"
+        else:
+            text += f" (n={dist['n']})"
+        return text
+
+    def _fmt_rate(self, stat) -> Optional[str]:
+        """'68% (n=40)' — None below the rate gate."""
+        if not isinstance(stat, dict) or stat.get('n', 0) < self.STATS_RATE_MIN_N:
+            return None
+        return f"{round(stat['rate'] * 100)}% (n={stat['n']})"
+
+    def _learned_stats_section(self, event_name: str, currency: str, pair: str):
+        """(full_section_text, recap_text) for this event/pair, or None when
+        nothing passes the sample gates. Lookup order: exact event key, then
+        the bundle-dominant alias (e.g. 'core cpi m/m' resolves to the CPI
+        release bundle whose shared path was attributed to 'cpi m/m').
+        recap_text may be None when no headline stat qualifies."""
+        data = self._load_learned_stats()
+        events = data.get('events') or {}
+        if not events:
+            return None
+        cur = (currency or '').upper()
+        key = f"{cur}|{normalize_event_name(event_name)}"
+        note = None
+        entry = events.get(key)
+        usable = self._usable_pairs(entry)
+        if not usable:
+            alias = (data.get('bundle_alias') or {}).get(key)
+            entry = events.get((alias or {}).get('to'))
+            usable = self._usable_pairs(entry)
+            if not usable:
+                return None
+            note = (f"No standalone sample for this exact event — it co-released "
+                    f"with {entry.get('currency')} \"{entry.get('event_name')}\" "
+                    f"{alias.get('n')}x and the stats below describe that SHARED "
+                    f"release path (attributed to the dominant event).")
+
+        pair_norm = normalize_pair(pair or '')
+        block = usable.get(pair_norm)
+        pair_label = pair_norm
+        if block is None:
+            pair_label, block = max(usable.items(), key=lambda kv: kv[1]['n'])
+            note = ((note + "\n") if note else "") + \
+                (f"No {pair_norm} sample for this event — stats shown for "
+                 f"{pair_label} instead; scale pip magnitudes with care.")
+
+        span = entry.get('span') or ['?', '?']
+        lines = []
+        if note:
+            lines.append(f"NOTE: {note}")
+        lines.append(f"{cur} \"{entry.get('event_name')}\" on {pair_label}: "
+                     f"n={block['n']} measured releases, {span[0]}..{span[1]}:")
+
+        moves = []
+        for label, field in (("1min", "abs_move_1min"), ("5min", "abs_move_5min"),
+                             ("15min", "abs_move_15min"), ("30min", "abs_move_30min")):
+            txt = self._fmt_dist(block.get(field))
+            if txt:
+                moves.append(f"{label} {txt}")
+        if moves:
+            lines.append("- |move| after release: " + "; ".join(moves))
+
+        wick = block.get('adverse_wick_5min')
+        if isinstance(wick, dict) and wick.get('n', 0) >= self.STATS_MIN_N:
+            wick_txt = f"median {wick['median']:g}"
+            if 'p75' in wick:
+                wick_txt += f", p75 {wick['p75']:g}"
+            if 'p90' in wick:
+                wick_txt += f", p90 {wick['p90']:g}"
+            lines.append(f"- adverse wick in first 5min (excursion AGAINST the "
+                         f"eventual 5-min direction): {wick_txt} pips (n={wick['n']}) "
+                         f"— the stop must survive the tail of this, not the median")
+
+        cont = self._fmt_rate(block.get('continuation_5to30'))
+        if cont:
+            lines.append(f"- 5->30min continuation (same direction still at 30min): {cont}")
+        fade = self._fmt_rate(block.get('fade_pre_drift'))
+        if fade:
+            lines.append(f"- release moved AGAINST the last-3-min pre-release drift: {fade}")
+
+        beat = self._fmt_rate(block.get('beat_currency_up_5min'))
+        miss = self._fmt_rate(block.get('miss_currency_down_5min'))
+        if beat or miss:
+            parts = []
+            if beat:
+                parts.append(f"BEAT -> {cur} stronger: {beat}")
+            if miss:
+                parts.append(f"MISS -> {cur} weaker: {miss}")
+            lines.append("- surprise direction within 5min (currency-strength, "
+                         "base/quote already accounted for): " + "; ".join(parts))
+
+        regime = self._current_regime(cur)
+        if regime:
+            regime_line = f"- current {cur} policy regime: {regime}"
+            bucket = (block.get('by_regime') or {}).get(regime)
+            if isinstance(bucket, dict):
+                sub = []
+                move5 = self._fmt_dist(bucket.get('abs_move_5min'))
+                if move5:
+                    sub.append(f"5min |move| {move5}")
+                r_beat = self._fmt_rate(bucket.get('beat_currency_up_5min'))
+                if r_beat:
+                    sub.append(f"BEAT->{cur} stronger {r_beat}")
+                r_miss = self._fmt_rate(bucket.get('miss_currency_down_5min'))
+                if r_miss:
+                    sub.append(f"MISS->{cur} weaker {r_miss}")
+                if sub:
+                    regime_line += (f". In past {regime}-regime releases: "
+                                    + "; ".join(sub))
+            lines.append(regime_line)
+
+        sigma = entry.get('surprise_sigma')
+        if sigma is not None:
+            lines.append(f"- typical surprise size for this event: "
+                         f"sigma(actual-forecast)={sigma:g} in the event's own "
+                         f"units (n={entry.get('surprise_sigma_n')}) — small "
+                         f"surprises (well under 1 sigma) historically tend to "
+                         f"fade, large ones to follow through")
+
+        if entry.get('bundled_with'):
+            lines.append("- usually co-releases with: "
+                         + ", ".join(entry['bundled_with'])
+                         + " (the shared path is attributed to the dominant release)")
+
+        if len(lines) <= 1 + (1 if note else 0):
+            return None   # header alone (all stats below the gates) is noise
+
+        recap_parts = []
+        move5 = self._fmt_dist(block.get('abs_move_5min'))
+        if move5:
+            recap_parts.append(f"5-min |move| {move5}")
+        if beat:
+            recap_parts.append(f"BEAT->{cur} stronger {beat}")
+        if miss:
+            recap_parts.append(f"MISS->{cur} weaker {miss}")
+        if fade:
+            recap_parts.append(f"faded pre-drift {fade}")
+        recap = None
+        if recap_parts:
+            recap = (f"{cur} {entry.get('event_name')} on {pair_label}: "
+                     + "; ".join(recap_parts))
+        return "\n".join(lines), recap
+
     def _trade_outcomes_section(self, currency: str) -> Optional[str]:
         """RECENT TRADE OUTCOMES prompt block: last few closed trades of this
         currency with realized P/L and close reason, plus an aggregate line."""
@@ -638,11 +877,34 @@ confidence — do NOT inflate it just because a direction is required."""
     def _llm_decision(self, event: EconomicEvent, data_context: Dict) -> TradingDecision:
         """Use LLM to make trading decision"""
         # Optional curated-knowledge section — only included when a playbook
-        # entry exists for this event/currency (token budget)
+        # entry exists for this event/currency (token budget). Framed as
+        # observed frequencies, NOT instructions — the model must weigh them
+        # against the measured statistics instead of obeying them.
         playbook_block = ""
         if data_context.get('playbook'):
-            playbook_block = (f"\nEVENT PLAYBOOK (curated from historical charts of this "
-                              f"event type):\n{data_context['playbook']}\n")
+            # Cross-reference the stats section only when it is actually in
+            # the prompt — pointing the model at an absent section invites
+            # confusion
+            stats_xref = ("; where they disagree with LEARNED EVENT STATISTICS, "
+                          "trust the statistics"
+                          if data_context.get('learned_stats') else "")
+            playbook_block = (f"\nEVENT PLAYBOOK (curated observations from historical charts "
+                              f"of this event type — small-sample frequencies, NOT rules"
+                              f"{stats_xref}):\n{data_context['playbook']}\n")
+        # Machine-measured base rates for this event/pair (F3 learning loop)
+        learned_block = ""
+        if data_context.get('learned_stats'):
+            learned_block = (f"\nLEARNED EVENT STATISTICS (machine-measured from recorded "
+                             f"post-release price paths 2021->today; frequencies with sample "
+                             f"sizes — treat as your statistical prior):\n"
+                             f"{data_context['learned_stats']}\n")
+        # The same headline numbers repeated at the END of the prompt —
+        # long-prompt attention favors the tail; buried mid-prompt stats
+        # measurably get ignored ("lost in the middle")
+        recap_block = ""
+        if data_context.get('learned_recap'):
+            recap_block = (f"\nKEY BASE RATES (measured; re-read and weigh these before "
+                           f"committing): {data_context['learned_recap']}\n")
 
         prompt = f"""Analyze this upcoming economic event and make a trading decision:
 
@@ -667,7 +929,7 @@ IMPORTANT: read each pair's stated '{data_context['event']['currency']}-strength
 
 HISTORICAL REACTIONS TO THIS EVENT:
 {data_context.get('reaction_history') or "No history yet (the system is building this dataset)"}
-{playbook_block}
+{learned_block}{playbook_block}
 YOUR TRACK RECORD ({data_context['event']['currency']} events):
 {data_context.get('track_record') or "No prior decisions for this currency yet"}
 
@@ -675,7 +937,7 @@ RECENT TRADE OUTCOMES ({data_context['event']['currency']}, realized P/L):
 {data_context.get('trade_outcomes') or "No completed trades for this currency yet"}
 
 SUGGESTED PAIR: {data_context['suggested_pair']}
-
+{recap_block}
 Work through the ANALYSIS CHECKLIST against this data, then provide your trading
 decision in JSON format."""
 

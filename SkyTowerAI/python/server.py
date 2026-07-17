@@ -76,18 +76,21 @@ def init_services():
     # the engine's TRACK RECORD section reads the same instance the server
     # records into (a private copy never sees in-session decisions)
     decision_history = DecisionHistory()
+    # Regime tracking: fed automatically by recorded rate decisions; the
+    # config map only SEEDS a fresh state (observed decisions outrank it).
+    # Created BEFORE the engine — the LEARNED EVENT STATISTICS prompt section
+    # selects its per-regime bucket through this provider.
+    from config import CURRENCY_REGIMES
+    regime_tracker = RegimeTracker(seed=CURRENCY_REGIMES)
     decision_engine = LLMDecisionEngine(decision_log=decision_history,
-                                        trade_history_file=TRADE_HISTORY_FILE)
+                                        trade_history_file=TRADE_HISTORY_FILE,
+                                        regime_provider=regime_tracker.get)
     calendar = CalendarAggregator()
     zone_analyzer = ZoneAnalyzer(ZONE_CONFIG)
     target_calculator = TargetCalculator(ZONE_CONFIG)
     exit_engine = ExitDecisionEngine()
     position_manager = PositionManager(exit_engine=exit_engine,
                                        history_file=TRADE_HISTORY_FILE)
-    # Regime tracking: fed automatically by recorded rate decisions; the
-    # config map only SEEDS a fresh state (observed decisions outrank it)
-    from config import CURRENCY_REGIMES
-    regime_tracker = RegimeTracker(seed=CURRENCY_REGIMES)
     # Post-event price paths for ALL monitored events (traded or not) —
     # measured server-side from EA-pushed M1, the system's learning substrate
     path_recorder = EventPathRecorder(regime_provider=regime_tracker.get)

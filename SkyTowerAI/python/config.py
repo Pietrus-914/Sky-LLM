@@ -353,6 +353,15 @@ TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 EVENT_PLAYBOOKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     'knowledge', 'event_playbooks.json')
 
+# Machine-built frequency statistics (tools/build_learned_stats.py aggregates
+# knowledge/historical_paths.jsonl.gz + logs/event_paths.jsonl) injected into
+# the entry prompt as LEARNED EVENT STATISTICS. Generated file — NEVER edit by
+# hand and never mix with the curated playbook above; regenerate offline with
+# the tool. Hot-reloaded by mtime like the playbook. Missing file = section
+# absent (prompt degrades gracefully).
+LEARNED_STATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  'knowledge', 'learned_stats.json')
+
 # Monetary-policy regime per currency: "hiking" / "cutting" / "hold".
 # SEED ONLY — from here on the RegimeTracker (regime_tracker.py) maintains the
 # live value automatically: every recorded rate decision updates it (hike/cut
