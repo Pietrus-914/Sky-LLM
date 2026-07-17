@@ -6,8 +6,9 @@ import json
 from datetime import datetime
 from timeutil import utcnow
 from typing import Dict, Optional, List
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from loguru import logger
+from uuid import uuid4
 import os
 
 # Import our data modules
@@ -38,10 +39,19 @@ class TradingDecision:
     data_summary: Dict = None
     timestamp: datetime = None
     forced: bool = False  # True when FORCE_DECISION test mode influenced this decision
+    # Stable id joining this decision to its signal, trade and reaction
+    # records (decision_history / trade_history / event_reactions JSONL)
+    decision_id: str = field(default_factory=lambda: uuid4().hex)
+    # Raw LLM reply text — persisted to logs/decision_context/ for post-hoc
+    # audit ("what did the model actually say"), empty for rule-based decisions
+    raw_response: str = ""
 
     def to_dict(self):
         d = asdict(self)
         d['timestamp'] = self.timestamp.isoformat()
+        # Raw LLM text lives in logs/decision_context/ — duplicating it into
+        # every /api/decision poll (serialized under decision_lock) is waste
+        d.pop('raw_response', None)
         return d
 
 
@@ -111,15 +121,18 @@ e. Historical reactions and YOUR TRACK RECORD: what actually happened on past
 f. Quoting check (principle 7): confirm the direction maps correctly to the pair.
 
 DECISION OUTPUT FORMAT:
-You must respond with a JSON object containing:
+You must respond with a JSON object. Write the "reasoning" field FIRST — work
+through the checklist there (historical base rate, then your adjustments, then
+a brief over/under-confidence self-check) — and only then commit the numeric
+and direction fields:
 {
-    "direction": %DIRECTION_VALUES%,
-    "confidence": 0.0 to 1.0,
-    "lot_percent": 60 to 85 (percent of max lot),
-    "exit_minutes": 5 to 15,
+    "reasoning": "Base rate -> adjustments -> confidence self-check -> conclusion. CONCISE: max ~120 words — the response must never be cut off before the fields below",
     "stop_loss_pips": 25 to 80 (wider for JPY pairs: 40-80),
     "take_profit_pips": 30 to 120 (1.5x to 2x of SL),
-    "reasoning": "Brief explanation of decision"
+    "exit_minutes": 5 to 15,
+    "lot_percent": 60 to 85 (percent of max lot),
+    "direction": %DIRECTION_VALUES%,
+    "confidence": 0.0 to 1.0
 }
 
 %SKIP_POLICY%"""
@@ -396,8 +409,12 @@ confidence — do NOT inflate it just because a direction is required."""
         Realized trade P/L is appended when a closed trade matches a decision.
         """
         try:
+            # forced=true rows come from FORCE_DECISION test mode — the model
+            # HAD to pick a side, so they are not its genuine calls and must
+            # not masquerade as live track record
             recent = [d for d in self.decision_log.get_recent(50)
                       if d.get('currency') == currency
+                      and not d.get('forced')
                       and d.get('direction') in ('BUY', 'SELL')]
             if not recent:
                 return None
@@ -462,10 +479,14 @@ confidence — do NOT inflate it just because a direction is required."""
 
     def _trades_for_currency(self, currency: str, limit: int = 5) -> List[Dict]:
         """Most recent closed trades whose symbol contains the currency
-        (base or quote), newest first."""
+        (base or quote), newest first. FORCE_DECISION test-mode trades are
+        excluded — the prompt tells the model to calibrate against these
+        outcomes, and demo coin-flips must not pose as real experience."""
         currency = (currency or '').upper()
         out = []
         for rec in reversed(self._load_recent_trades()):
+            if rec.get('forced'):
+                continue
             pair = normalize_pair(str(rec.get('symbol') or ''))
             if len(pair) >= 6 and currency in (pair[:3], pair[3:6]):
                 out.append(rec)
@@ -476,8 +497,18 @@ confidence — do NOT inflate it just because a direction is required."""
     @staticmethod
     def _find_trade_for_decision(decision: Dict, trades: List[Dict]) -> Optional[float]:
         """Realized P/L of the closed trade matching a past decision.
-        Primary match: same normalized event name + same UTC date.
-        Fallback: same pair, opened within 30 min of the decision."""
+        Exact match by decision_id when both sides carry it (post-F0 rows);
+        legacy fallbacks: normalized event name + same UTC date, then same
+        pair opened within 30 min of the decision."""
+        d_id = decision.get('decision_id')
+        if d_id:
+            for t in trades:
+                if t.get('decision_id') == d_id:
+                    try:
+                        return float(t.get('profit_usd'))
+                    except (TypeError, ValueError):
+                        return None
+
         d_event = normalize_event_name(decision.get('event_name') or '')
         d_date = (decision.get('timestamp') or '')[:10]
         d_pair = normalize_pair(decision.get('pair') or '')
@@ -706,7 +737,8 @@ decision in JSON format."""
                 reasoning=reasoning,
                 data_summary=data_context,
                 timestamp=utcnow(),
-                forced=FORCE_DECISION
+                forced=FORCE_DECISION,
+                raw_response=response_text or ""
             )
 
         except Exception as e:
@@ -877,14 +909,27 @@ decision in JSON format."""
         return direction, f"{note}; {currency} {bias.lower()} -> {direction} {normalize_pair(pair)}"
 
     def _parse_llm_response(self, response: str) -> Dict:
-        """Parse JSON from LLM response"""
+        """Parse JSON from LLM response. Salvage order: whole text as JSON,
+        then the outermost {...} slice (survives braces INSIDE the reasoning
+        string, which the flat regex below cannot), then the legacy regex."""
+        response = response or ""
+        for candidate in (response.strip(),
+                          response[response.find('{'):response.rfind('}') + 1]
+                          if '{' in response and '}' in response else ''):
+            if not candidate:
+                continue
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+            except ValueError:
+                continue
         try:
-            # Try to find JSON in response
             import re
             json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group())
-        except:
+        except Exception:
             pass
 
         # Default response if parsing fails (_parse_failed lets callers

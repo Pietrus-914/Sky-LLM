@@ -353,6 +353,26 @@ TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 EVENT_PLAYBOOKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     'knowledge', 'event_playbooks.json')
 
+# Monetary-policy regime per currency: "hiking" / "cutting" / "hold".
+# HAND-MAINTAINED — update when a central bank's stance changes. Stamped into
+# every event_paths.jsonl record so reaction statistics can be split by regime
+# (the same event often reacts OPPOSITE ways in hiking vs cutting cycles —
+# pooling them produces misleading stats). Unknown currency -> null tag.
+# Verified 2026-07-16 (energy-shock tightening wave after the Iran conflict):
+#   USD hiking = bias call (no hike delivered yet; June SEP dots + ~50% July-29
+#       market odds). AUD hiking = weakest call (3 hikes in 2026, 2-meeting
+#       pause framed as within-cycle; Aug 11 live). CAD next decision Sep 2.
+CURRENCY_REGIMES = {
+    "USD": "hiking",   # Fed 3.50-3.75%, cut bias removed, hike expected H2
+    "NZD": "hiking",   # RBNZ +25bp -> 2.50% (Jul 8), more signalled
+    "CAD": "hold",     # BoC 2.25%, 5th straight hold (Jul 15)
+    "AUD": "hiking",   # RBA 4.35% after 3 hikes, pause within cycle
+    "GBP": "hold",     # BoE 3.75% (7-2), cutting cycle over, no near move
+    "EUR": "hiking",   # ECB +25bp -> 2.25% depo (Jun 11), first in 3 years
+    "JPY": "hiking",   # BoJ +25bp -> 1.00% (Jun 16), more tightening guided
+    "CHF": "hold",     # SNB 0.00%, prefers FX intervention
+}
+
 
 def save_runtime_overrides(updates: dict):
     """Merge updates into the overrides file (atomic write)."""

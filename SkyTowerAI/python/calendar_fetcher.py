@@ -528,6 +528,23 @@ class CalendarAggregator:
 
         return filtered
 
+    def get_monitored_events(self) -> List[EconomicEvent]:
+        """
+        All upcoming events the system MONITORS: configured currencies,
+        impact >= MIN_IMPACT_LEVEL, one week ahead — with NO name whitelist.
+        Single accessor shared by the tradeable-event selectors and the event
+        path recorder, so every caller hits the SAME per-key calendar cache
+        (a drifted argument at any call site would silently split the cache
+        and turn one of them into an independent feed fetcher).
+        """
+        import config as cfg
+        return self.get_upcoming_events(
+            currencies=list(cfg.CURRENCY_PAIRS.keys()),
+            # Runtime attribute read — the dashboard can change it on the fly
+            impact_filter=getattr(cfg, "MIN_IMPACT_LEVEL", "MEDIUM"),
+            hours_ahead=168,
+        )
+
     def get_next_tradeable_event(
             self,
             event_keywords: List[str] = None,
@@ -548,15 +565,17 @@ class CalendarAggregator:
 
         if event_keywords is None:
             event_keywords = cfg.HIGH_IMPACT_EVENTS
-        if currencies is None:
-            currencies = list(cfg.CURRENCY_PAIRS.keys())
 
-        events = self.get_upcoming_events(
-            currencies=currencies,
-            # Runtime attribute read — the dashboard can change it on the fly
-            impact_filter=getattr(cfg, "MIN_IMPACT_LEVEL", "MEDIUM"),
-            hours_ahead=168  # 1 week
-        )
+        # Default currency set -> shared monitored-events accessor (same
+        # cache entry as every other default caller); custom set -> own key
+        if currencies is None:
+            events = self.get_monitored_events()
+        else:
+            events = self.get_upcoming_events(
+                currencies=currencies,
+                impact_filter=getattr(cfg, "MIN_IMPACT_LEVEL", "MEDIUM"),
+                hours_ahead=168  # 1 week
+            )
 
         # BUG-7 FIX: Post-filter passed events from cache. Same selection
         # rule as get_tradeable_events() (shared predicate) — nearest first.
@@ -589,15 +608,17 @@ class CalendarAggregator:
 
         if event_keywords is None:
             event_keywords = cfg.HIGH_IMPACT_EVENTS
-        if currencies is None:
-            currencies = list(cfg.CURRENCY_PAIRS.keys())
 
-        events = self.get_upcoming_events(
-            currencies=currencies,
-            # Runtime attribute read — the dashboard can change it on the fly
-            impact_filter=getattr(cfg, "MIN_IMPACT_LEVEL", "MEDIUM"),
-            hours_ahead=168  # 1 week
-        )
+        # Default currency set -> shared monitored-events accessor (same
+        # cache entry as every other default caller); custom set -> own key
+        if currencies is None:
+            events = self.get_monitored_events()
+        else:
+            events = self.get_upcoming_events(
+                currencies=currencies,
+                impact_filter=getattr(cfg, "MIN_IMPACT_LEVEL", "MEDIUM"),
+                hours_ahead=168  # 1 week
+            )
 
         params = self._tradeable_params()
         now = datetime.now(pytz.UTC)

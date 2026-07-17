@@ -92,12 +92,65 @@ def _drift_pips(bars: List[Dict], n_bars: int, pip: float) -> Optional[float]:
     return round((float(bars[-1]["close"]) - float(bars[-(n_bars + 1)]["close"])) / pip, 1)
 
 
-def _compact_candles(bars: List[Dict], count: int) -> List[str]:
-    """Last `count` bars as compact 'HH:MM O/H/L/C' strings (oldest first)."""
+from timeutil import to_naive_utc, utc_epoch as _utc_epoch
+
+
+def entry_age_seconds(entry: Dict, now: datetime = None) -> float:
+    """Age of a pushed market-data entry (its 'updated_at' ISO stamp) in
+    seconds. Canonical freshness helper — server gates and the path recorder
+    must agree on the same answer. inf when the stamp is missing/garbage."""
+    try:
+        ts = to_naive_utc(datetime.fromisoformat(entry.get('updated_at', '')))
+        return ((now or utcnow()) - ts).total_seconds()
+    except (ValueError, TypeError):
+        return float('inf')
+
+
+def infer_broker_offset_seconds(bars: List[Dict], pushed_at: datetime) -> Optional[int]:
+    """
+    MT5 bar times (rates[].time) are BROKER time epochs, not UTC. Infer the
+    broker's UTC offset from the newest bar: a fresh finest-timeframe bar
+    opened at most ~2 minutes before the push, so (last_bar_time - push_time)
+    rounded to the nearest 30 min is the offset.
+
+    Returns None when not inferable — including when the newest bar is too
+    OLD relative to the push (quiet market, halt): a large gap would snap the
+    rounding to a wrong 30-min multiple, and a silently-wrong offset poisons
+    both candle labels and path measurements. Callers must treat None as
+    "don't trust bar times right now", not as offset 0.
+    """
+    if not bars:
+        return None
+    try:
+        last_t = int(bars[-1].get("time", 0))
+    except (TypeError, ValueError):
+        return None
+    if last_t <= 0:
+        return None
+    raw = last_t - _utc_epoch(pushed_at)
+    offset = int(round((raw + 60) / 1800.0)) * 1800
+    # FX brokers live within UTC-12..UTC+14; anything else is a broken clock
+    if not -12 * 3600 <= offset <= 14 * 3600:
+        return None
+    # Residual = how far the newest bar sits from "just before the push".
+    # A fresh M1/M5 bar gives residual in [-120, 0]; beyond ~8 minutes the
+    # 30-min rounding can no longer be trusted — refuse instead of guessing.
+    if abs(raw - offset + 60) > 480:
+        return None
+    return offset
+
+
+def _compact_candles(bars: List[Dict], count: int,
+                     broker_offset_seconds: int = 0) -> List[str]:
+    """Last `count` bars as compact 'HH:MM O/H/L/C' strings (oldest first).
+    Bar times arrive in BROKER time — broker_offset_seconds shifts the labels
+    to true UTC (the prompt promises UTC; unshifted labels would misalign the
+    candles against the event time the model reasons about)."""
     out = []
     for b in bars[-count:]:
         try:
-            ts = datetime.fromtimestamp(int(b.get("time", 0)), tz=timezone.utc).strftime("%H:%M")
+            ts = datetime.fromtimestamp(int(b.get("time", 0)) - broker_offset_seconds,
+                                        tz=timezone.utc).strftime("%H:%M")
         except (ValueError, OSError, OverflowError):
             ts = "--:--"
         out.append(f"{ts} {float(b['open']):.5f}/{float(b['high']):.5f}/"
@@ -186,10 +239,30 @@ def build_market_context(
         # summary JSON block by the prompt builder and rendered as a table.
         # M1 tail is deliberately short (token budget) — fine pre-news detail
         # comes mostly from trend/RSI/drift computed on the full M1 set.
+        # Bar times are broker time — shift labels to the promised UTC using
+        # the offset inferred from the finest timeframe's newest bar.
+        push_ts = None
+        if registered_at:
+            try:
+                push_ts = datetime.fromisoformat(registered_at.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                push_ts = None
+        # Only M1/M5 bars are fresh enough for a reliable inference (an H1
+        # bar can be an hour old, which defeats the 30-min rounding)
+        offset = None
+        if finest in ("M1", "M5"):
+            offset = infer_broker_offset_seconds(usable[finest], push_ts or utcnow())
+        if offset is None:
+            # Don't silently regress to mislabeled times — tell the model
+            # (this note stays in the summary JSON the prompt renders)
+            context["candle_times_note"] = (
+                "bar clock offset could not be verified — candle HH:MM labels "
+                "may be BROKER time, not UTC; do not anchor timing on them")
         context["candles"] = {}
         for tf, count in (("M1", 20), ("M5", 36), ("M15", 24), ("H1", 24)):
             if tf in usable:
-                context["candles"][tf] = _compact_candles(usable[tf], count)
+                context["candles"][tf] = _compact_candles(usable[tf], count,
+                                                          offset or 0)
 
         # Daily range position & distance to extremes from the widest window we have
         widest = max(usable.values(), key=len) if "H1" not in usable else usable["H1"]

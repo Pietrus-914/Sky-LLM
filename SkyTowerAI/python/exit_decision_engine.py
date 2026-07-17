@@ -1,4 +1,4 @@
-"""
+﻿"""
 SkyTower-AI Exit Decision Engine
 Uses LLM to make strategic position management decisions.
 Operates on USD values for instrument-independent analysis.
@@ -44,12 +44,14 @@ AVAILABLE ACTIONS:
 - PARTIAL_CLOSE: Close portion of position. Provide close_percent (25-75). Use at key levels.
 - CLOSE: Full position close. Use when target reached, momentum lost, or protecting gains.
 
-IMPORTANT: Respond with ONLY a JSON object, no markdown or explanation outside JSON:
+IMPORTANT: Respond with ONLY a JSON object, no markdown or explanation outside JSON.
+Write the "reasoning" field FIRST (think it through there), then commit the action.
+Keep reasoning under 40 words - the response must NEVER be cut off before "action":
 {
-    "action": "HOLD",
+    "reasoning": "Brief explanation (max 40 words)",
     "sl_price": 0.0,
     "close_percent": 0,
-    "reasoning": "Brief explanation"
+    "action": "HOLD"
 }"""
 
 
@@ -173,7 +175,7 @@ Respond with JSON only."""
                     {"role": "system", "content": EXIT_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=500,
+                max_tokens=900,
                 temperature=0.2,
                 timeout=30.0,
                 extra_headers={
@@ -186,7 +188,7 @@ Respond with JSON only."""
         elif self.provider == "anthropic":
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=500,
+                max_tokens=900,
                 system=EXIT_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
                 timeout=30.0
@@ -200,7 +202,7 @@ Respond with JSON only."""
                     {"role": "system", "content": EXIT_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=500,
+                max_tokens=900,
                 temperature=0.2,
                 timeout=30.0
             )
@@ -220,7 +222,15 @@ Respond with JSON only."""
                 json_lines = [l for l in lines if not l.startswith("```")]
                 clean = "\n".join(json_lines)
 
-            data = json.loads(clean)
+            try:
+                data = json.loads(clean)
+            except json.JSONDecodeError:
+                # Salvage: outermost {...} slice (model wrapped the JSON in
+                # prose, or trailing junk after the object)
+                if '{' in clean and '}' in clean:
+                    data = json.loads(clean[clean.find('{'):clean.rfind('}') + 1])
+                else:
+                    raise
 
             action = data.get("action", "HOLD").upper()
             if action not in ("HOLD", "MODIFY_SL", "MODIFY_TP", "PARTIAL_CLOSE", "CLOSE"):

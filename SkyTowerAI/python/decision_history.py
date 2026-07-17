@@ -56,6 +56,7 @@ class DecisionHistory:
         """
         entry = {
             "timestamp": utcnow().isoformat() + "Z",
+            "decision_id": getattr(decision, 'decision_id', ''),
             "event_name": getattr(decision, 'event', ''),
             "currency": getattr(decision, 'currency', ''),
             "pair": getattr(decision, 'pair', ''),
@@ -63,6 +64,12 @@ class DecisionHistory:
             "confidence": getattr(decision, 'confidence', 0),
             "forced": getattr(decision, 'forced', False),
             "reasoning": getattr(decision, 'reasoning', ''),
+            # The LLM's numeric choices — without them SL-sizing and
+            # exit-window calibration can never be evaluated later
+            "lot_percent": getattr(decision, 'lot_percent', None),
+            "stop_loss_pips": getattr(decision, 'stop_loss_pips', None),
+            "take_profit_pips": getattr(decision, 'take_profit_pips', None),
+            "exit_minutes": getattr(decision, 'exit_minutes_after', None),
             "event_datetime": None,
             "data_sources": data_sources_status or {},
         }
@@ -87,6 +94,11 @@ class DecisionHistory:
                     **source_status,
                 }
 
+        # Full context dump — everything the model saw (data_summary) plus its
+        # raw reply, keyed by decision_id. The JSONL stays slim; this side file
+        # is what makes "what did it see vs what happened" answerable later.
+        self._dump_context(entry, data_summary, getattr(decision, 'raw_response', ''))
+
         with self._lock:
             # Append to file
             try:
@@ -102,6 +114,53 @@ class DecisionHistory:
 
         logger.info(f"Decision recorded: {entry['event_name']} -> {entry['direction']} "
                      f"(confidence: {entry['confidence']:.0%})")
+
+    # Keep at most this many context dumps; oldest are pruned. ~10-20 KB each,
+    # a few per day live but one per event in TRADE_ALL+FORCE test phases —
+    # without a cap the directory grows unbounded.
+    CONTEXT_DUMP_KEEP = 2000
+
+    def _dump_context(self, entry: Dict, data_summary, raw_response: str):
+        """Write the decision's full prompt inputs + raw LLM reply to
+        logs/decision_context/<decision_id>.json. The JSONL entry is spread
+        in whole — single source of truth, so every future field recorded
+        there lands in the archive automatically. Best-effort: a dump
+        failure must never block recording the decision itself."""
+        decision_id = entry.get("decision_id")
+        if not decision_id:
+            return
+        try:
+            ctx_dir = os.path.join(os.path.dirname(self._file_path), 'decision_context')
+            os.makedirs(ctx_dir, exist_ok=True)
+            dump = {
+                **entry,
+                "raw_response": raw_response or "",
+                "data_summary": data_summary if isinstance(data_summary, dict) else None,
+            }
+            path = os.path.join(ctx_dir, f"{decision_id}.json")
+            with open(path, 'w', encoding='utf-8') as f:
+                # default=str: data_summary may hold datetimes/dataclasses
+                json.dump(dump, f, ensure_ascii=False, default=str)
+            self._prune_context_dir(ctx_dir)
+        except Exception as e:
+            logger.debug(f"Decision context dump failed: {e}")
+
+    def _prune_context_dir(self, ctx_dir: str):
+        """Drop the oldest dumps beyond CONTEXT_DUMP_KEEP (mtime order)."""
+        try:
+            names = [n for n in os.listdir(ctx_dir) if n.endswith('.json')]
+            excess = len(names) - self.CONTEXT_DUMP_KEEP
+            if excess <= 0:
+                return
+            paths = [os.path.join(ctx_dir, n) for n in names]
+            paths.sort(key=lambda p: os.path.getmtime(p))
+            for p in paths[:excess]:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        except Exception as e:
+            logger.debug(f"Decision context prune failed: {e}")
 
     def get_recent(self, limit: int = 20) -> List[Dict]:
         """Get most recent decisions (newest first)."""

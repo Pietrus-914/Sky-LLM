@@ -14,7 +14,8 @@ from loguru import logger
 
 from config import SERVER_CONFIG, TRADING_CONFIG, ZONE_CONFIG, EXIT_CONFIG, POSITION_MANAGEMENT_CONFIG
 from config import HIGH_IMPACT_EVENTS, CURRENCY_PAIRS, DEFAULT_PAIRS
-from market_context import build_market_context, normalize_pair, summarize_pair_brief
+from market_context import (build_market_context, normalize_pair,
+                            summarize_pair_brief, entry_age_seconds)
 from calendar_fetcher import CalendarAggregator
 from cot_analyzer import COTAnalyzer
 from sentiment_analyzer import SentimentAggregator
@@ -24,6 +25,7 @@ from target_calculator import TargetCalculator, calculate_trade_targets
 from position_manager import PositionManager
 from exit_decision_engine import ExitDecisionEngine
 from decision_history import DecisionHistory
+from event_path_recorder import EventPathRecorder
 
 app = Flask(__name__)
 CORS(app)
@@ -39,6 +41,7 @@ target_calculator = None
 position_manager = None
 exit_engine = None
 decision_history = None
+path_recorder = None
 next_decision = None
 decision_lock = threading.Lock()
 
@@ -63,7 +66,7 @@ market_data_lock = threading.Lock()
 
 def init_services():
     """Initialize all services"""
-    global decision_engine, calendar, zone_analyzer, target_calculator, position_manager, exit_engine, decision_history
+    global decision_engine, calendar, zone_analyzer, target_calculator, position_manager, exit_engine, decision_history, path_recorder
     logger.info("Initializing SkyTower-AI services...")
 
     from config import TRADE_HISTORY_FILE
@@ -79,6 +82,9 @@ def init_services():
     exit_engine = ExitDecisionEngine()
     position_manager = PositionManager(exit_engine=exit_engine,
                                        history_file=TRADE_HISTORY_FILE)
+    # Post-event price paths for ALL monitored events (traded or not) —
+    # measured server-side from EA-pushed M1, the system's learning substrate
+    path_recorder = EventPathRecorder()
 
     logger.info("Services initialized successfully (with AI Position Manager + Decision History)")
 
@@ -905,13 +911,9 @@ MARKET_DATA_MAX_AGE_SECONDS = 1800
 
 
 def _market_data_age_seconds(entry) -> float:
-    try:
-        ts = datetime.fromisoformat(entry.get('updated_at', ''))
-        if ts.tzinfo is not None:
-            ts = ts.replace(tzinfo=None)
-        return (utcnow() - ts).total_seconds()
-    except (ValueError, TypeError):
-        return float('inf')
+    # Thin wrapper over the canonical helper (market_context.entry_age_seconds)
+    # so the server gates and the path recorder can never disagree on age
+    return entry_age_seconds(entry)
 
 
 def _build_market_context_for_event(event):
@@ -1072,6 +1074,16 @@ def get_event_reactions():
     return jsonify({"status": "ok", "count": len(reactions), "reactions": reactions})
 
 
+@app.route('/api/event-paths', methods=['GET'])
+def get_event_paths():
+    """Recorded post-event price paths (server-measured, ALL monitored
+    events). Filters: ?limit=50"""
+    ensure_services()
+    limit = request.args.get('limit', 50, type=int)
+    paths = path_recorder.get_recent(limit) if path_recorder else []
+    return jsonify({"status": "ok", "count": len(paths), "paths": paths})
+
+
 # Backfill guards: the fetch runs in the single updater thread, so it must
 # never stall the decision pipeline or hammer ForexFactory forever
 _last_backfill_fetch = 0.0
@@ -1101,7 +1113,11 @@ def _backfill_reaction_actuals():
                    if r.get('actual') in (None, '')
                    and not r.get('test')
                    and (r.get('event_time') or '') >= cutoff]
-        if not pending:
+        # Recorder applies its own (tighter, 48h) window + non-data/attempt
+        # exclusions — see EventPathRecorder._backfillable
+        paths_pending = (path_recorder is not None
+                         and path_recorder.has_pending_actuals())
+        if not pending and not paths_pending:
             return
 
         _last_backfill_fetch = time.time()
@@ -1116,7 +1132,10 @@ def _backfill_reaction_actuals():
                     logger.debug(f"Backfill calendar fetch failed: {e}")
                 break
         if events:
-            history.backfill_actuals(events)
+            if pending:
+                history.backfill_actuals(events)
+            if paths_pending:
+                path_recorder.backfill_actuals(events)
     except Exception as e:
         logger.debug(f"Reaction backfill error: {e}")
 
@@ -1324,6 +1343,10 @@ def select_best_pair():
 
 # Tracks which decision was already logged as served (log once, not per poll)
 _signal_served_log_key = None
+# Snapshot of the decision most recently SERVED to an EA (signal:true).
+# The true lineage anchor for /api/position/opened: next_decision may already
+# point at the NEXT event (or be cleared) by the time the open report lands.
+_last_served_signal = None  # {"decision_id","reasoning","forced","served_at"}
 
 
 @app.route('/api/signal', methods=['GET'])
@@ -1408,8 +1431,17 @@ def get_mt5_signal():
                 sl_pips = getattr(next_decision, 'stop_loss_pips', 0)
                 tp_pips = getattr(next_decision, 'take_profit_pips', 0)
 
+                # Capture the served decision for lineage stamping at
+                # /api/position/opened (see _last_served_signal note)
+                global _signal_served_log_key, _last_served_signal
+                _last_served_signal = {
+                    "decision_id": getattr(next_decision, 'decision_id', ''),
+                    "reasoning": next_decision.reasoning,
+                    "forced": getattr(next_decision, 'forced', False),
+                    "served_at": utcnow(),
+                }
+
                 # Trade-lifecycle log: one line when the EA first picks up the signal
-                global _signal_served_log_key
                 serve_key = f"{next_decision.event}_{event_time.isoformat()}_{requesting_pair}"
                 if _signal_served_log_key != serve_key:
                     _signal_served_log_key = serve_key
@@ -1419,6 +1451,9 @@ def get_mt5_signal():
 
                 return jsonify({
                     "signal": True,
+                    # Lineage key: joins this signal to its decision_history
+                    # row; the EA may echo it back in reports (optional field)
+                    "decision_id": getattr(next_decision, 'decision_id', ''),
                     "direction": next_decision.direction,
                     "pair": decision_pair,  # MT5 format (no slash)
                     "lot_percent": next_decision.lot_percent,
@@ -1541,13 +1576,27 @@ def position_opened():
         if not data:
             return jsonify({"status": "error", "message": "No data provided"}), 400
 
-        # Get entry reasoning from current decision
+        # Lineage binding: EA echo (future protocol) wins; else the signal
+        # actually SERVED to this EA (captured at /api/signal time — the true
+        # anchor); next_decision only as a last resort, because by the time a
+        # late open report lands it may already hold the NEXT event's decision.
         entry_reasoning = ""
+        forced_flag = False
+        decision_id = data.get("decision_id", "")
         with decision_lock:
-            if next_decision:
+            served = _last_served_signal
+            if served and (utcnow() - served["served_at"]).total_seconds() <= 900:
+                decision_id = decision_id or served["decision_id"]
+                entry_reasoning = served["reasoning"]
+                forced_flag = served["forced"]
+            elif next_decision:
+                decision_id = decision_id or getattr(next_decision, 'decision_id', '')
                 entry_reasoning = next_decision.reasoning
+                forced_flag = getattr(next_decision, 'forced', False)
 
-        position_manager.on_position_opened(data, entry_reasoning=entry_reasoning)
+        position_manager.on_position_opened(data, entry_reasoning=entry_reasoning,
+                                            decision_id=decision_id,
+                                            forced=forced_flag)
 
         # Also mark trade as executed (same as /api/trade-executed)
         event_key_to_cleanup = None
@@ -1905,10 +1954,9 @@ def _get_next_unanalyzed_events() -> list:
     Get upcoming tradeable events, excluding already-analyzed ones.
     Returns list of events sorted by time (nearest first).
     """
-    events = calendar.get_tradeable_events(
-        event_keywords=HIGH_IMPACT_EVENTS,
-        currencies=list(CURRENCY_PAIRS.keys())
-    )
+    # No explicit currencies: the default path routes through the shared
+    # get_monitored_events() accessor — one cache entry for all callers
+    events = calendar.get_tradeable_events(event_keywords=HIGH_IMPACT_EVENTS)
 
     fake = _get_fake_test_event()
     if fake is not None:
@@ -1936,6 +1984,45 @@ def _get_next_unanalyzed_events() -> list:
         result.append(event)
 
     return result
+
+
+def _run_event_path_recorder():
+    """Feed the event-path recorder each updater tick: schedule monitored
+    events approaching release and measure passed ones from EA-pushed M1.
+    Uses the SAME calendar call signature as get_tradeable_events, so it hits
+    the per-key cache and adds ZERO feed fetches. Impact-only filter — events
+    outside the name whitelist are recorded too (learning from everything,
+    not just what we would trade)."""
+    if path_recorder is None or calendar is None:
+        return
+
+    # While a decision is active an event is imminent — never risk a calendar
+    # fetch (expired cache = seconds of HTTP) in the updater thread. Pending
+    # measurements and the T0 spread snapshot still run; scheduling loses
+    # nothing because events enter the pending list up to 2h in advance.
+    with decision_lock:
+        decision_active = next_decision is not None
+
+    events = []
+    if not decision_active:
+        try:
+            # Shared accessor = shared cache entry with the decision pipeline;
+            # this call can never become an independent feed fetcher
+            events = calendar.get_monitored_events()
+        except Exception as e:
+            logger.debug(f"Path recorder calendar read failed: {e}")
+            events = []
+
+    fake = _get_fake_test_event()
+    if fake is not None:
+        events = list(events) + [fake]
+
+    # Shallow snapshot under the lock; the recorder only reads bar lists and
+    # the market-data handler replaces entries wholesale, never mutates them
+    with market_data_lock:
+        snapshot = {pair: dict(entry) for pair, entry in market_data_reports.items()}
+
+    path_recorder.tick(events, snapshot)
 
 
 def background_decision_updater():
@@ -1966,6 +2053,14 @@ def background_decision_updater():
                 _cleanup_analyzed_events()
                 _backfill_reaction_actuals()
                 last_cleanup_time = time.time()
+
+            # Event-path recorder: schedule upcoming monitored events and
+            # measure passed ones from EA-pushed M1 (in-memory + one JSONL
+            # append per event; never blocks the decision pipeline)
+            try:
+                _run_event_path_recorder()
+            except Exception as e:
+                logger.debug(f"Event path recorder error: {e}")
 
             # === PHASE 1: Check state & find event to analyze (under lock, fast) ===
             event_to_analyze = None

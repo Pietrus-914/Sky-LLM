@@ -64,7 +64,7 @@ class TestSharedDecisionLog:
 
         decision = SimpleNamespace(
             event="Core CPI m/m", currency="USD", pair="USDCAD",
-            direction="BUY", confidence=0.65, forced=True,
+            direction="BUY", confidence=0.65, forced=False,
             reasoning="test", data_summary=None,
         )
         shared.record(decision)
@@ -73,6 +73,23 @@ class TestSharedDecisionLog:
         assert track is not None
         assert "Core CPI m/m" in track
         assert "BUY USDCAD" in track
+
+    def test_forced_decisions_excluded_from_track_record(self, tmp_path):
+        """FORCE_DECISION test-mode rows are not the model's genuine calls —
+        they must never masquerade as live track record."""
+        shared = DecisionHistory(log_dir=str(tmp_path / "dh"))
+        engine = make_engine(tmp_path, decision_log=shared)
+        engine.reaction_history = Mock()
+        engine.reaction_history.get_matching.return_value = []
+
+        decision = SimpleNamespace(
+            event="Core CPI m/m", currency="USD", pair="USDCAD",
+            direction="BUY", confidence=0.65, forced=True,
+            reasoning="test", data_summary=None,
+        )
+        shared.record(decision)
+
+        assert engine._build_track_record("USD") is None
 
 
 class TestTradeOutcomes:
@@ -111,7 +128,7 @@ class TestTradeOutcomes:
         write_trades(engine.trade_history_file, [make_trade()])
         decision = SimpleNamespace(
             event="Core CPI m/m", currency="USD", pair="USDCAD",
-            direction="BUY", confidence=0.65, forced=True,
+            direction="BUY", confidence=0.65, forced=False,
             reasoning="test", data_summary=None,
         )
         shared.record(decision)  # today's date == closed_at? no — match by event+date

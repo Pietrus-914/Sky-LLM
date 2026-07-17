@@ -72,6 +72,67 @@ def classify_surprise(actual: Optional[str], forecast: Optional[str]) -> str:
     return "INLINE"
 
 
+def surprise_magnitude(actual, forecast) -> Optional[float]:
+    """Numeric surprise = actual - forecast (calendar units). The SIGN alone
+    (classify_surprise) loses the information that a 2pp beat and a 0.1pp
+    beat behave very differently — magnitude is what the standardized-surprise
+    statistics need once enough history accumulates."""
+    a, f = parse_numeric(actual), parse_numeric(forecast)
+    if a is None or f is None:
+        return None
+    return round(a - f, 6)
+
+
+def apply_release_to_record(record: Dict, event) -> None:
+    """
+    Apply a released calendar row to a stored record: fill 'actual' (and a
+    missing 'forecast'), detect a revision of the 'previous' reading (a
+    second, simultaneous surprise — markets often move on it, not the
+    headline), and refresh surprise sign + magnitude.
+
+    SINGLE source of truth for release-matching semantics, shared by
+    EventReactionHistory and EventPathRecorder so their datasets can never
+    drift apart on surprise/revision labels. Caller has already matched the
+    event to the record (name/currency/time) and verified event.actual is set.
+    """
+    record['actual'] = event.actual
+    if record.get('forecast') in (None, '') and event.forecast:
+        record['forecast'] = event.forecast
+    # Revision check BEFORE any overwrite of the stored value
+    if (record.get('previous') not in (None, '')
+            and event.previous
+            and str(event.previous) != str(record['previous'])):
+        record['previous_revised'] = event.previous
+        rev = surprise_magnitude(event.previous, record['previous'])
+        if rev is not None:
+            record['revision_magnitude'] = rev
+    if record.get('previous') in (None, '') and event.previous:
+        record['previous'] = event.previous
+    record['surprise'] = classify_surprise(record['actual'], record.get('forecast'))
+    record['surprise_magnitude'] = surprise_magnitude(record['actual'],
+                                                      record.get('forecast'))
+
+
+def atomic_rewrite_jsonl(file_path: str, records: List[Dict]) -> bool:
+    """Rewrite a JSONL store atomically (tmp + os.replace) so a crash/kill
+    mid-write cannot truncate an accumulated dataset. Returns True on
+    success. Shared by all JSONL stores that rewrite in place."""
+    tmp_path = file_path + '.tmp'
+    try:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            for r in records:
+                f.write(json.dumps(r) + '\n')
+        os.replace(tmp_path, file_path)
+        return True
+    except Exception as e:
+        logger.error(f"Error rewriting {os.path.basename(file_path)}: {e}")
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        return False
+
+
 class EventReactionHistory:
     """Thread-safe JSONL store of post-release price reactions."""
 
@@ -134,6 +195,8 @@ class EventReactionHistory:
             "previous": reaction.get('previous'),
             "actual": reaction.get('actual'),
             "surprise": classify_surprise(reaction.get('actual'), reaction.get('forecast')),
+            "surprise_magnitude": surprise_magnitude(reaction.get('actual'),
+                                                     reaction.get('forecast')),
             "price_at_event": reaction.get('price_at_event'),
             "move_1min_pips": move_pips(reaction.get('price_after_1min')),
             "move_5min_pips": move_pips(reaction.get('price_after_5min')),
@@ -229,19 +292,25 @@ class EventReactionHistory:
                 f"Use only as a volatility/behavior prior, not an event-specific signal.")
 
     def get_recent(self, limit: int = 50) -> List[Dict]:
+        """Newest first. Returns COPIES — backfill mutates the live dicts in
+        the updater thread, and a shared reference handed to Flask's jsonify
+        can tear mid-serialization."""
+        if limit <= 0:
+            return []
         with self._lock:
-            return list(reversed(self._records[-limit:]))
+            return [dict(r) for r in reversed(self._records[-limit:])]
 
     def backfill_actuals(self, calendar_events: List) -> int:
         """
-        Fill in 'actual' (and surprise) for records that were stored before
+        Fill in 'actual' (and surprise/revision) for records stored before
         the calendar published the released value. calendar_events is a list
         of EconomicEvent objects (may include past events with .actual set).
         Rewrites the JSONL when anything changed. Returns count updated.
         """
         updated = 0
         with self._lock:
-            pending = [r for r in self._records if r.get('actual') in (None, '')]
+            pending = [r for r in self._records
+                       if r.get('actual') in (None, '') and not r.get('test')]
             if not pending:
                 return 0
 
@@ -258,31 +327,12 @@ class EventReactionHistory:
                     event_time_str = event.datetime_utc.isoformat()[:16]
                     if event_time_str != rec_time:
                         continue
-                    record['actual'] = event.actual
-                    if record.get('forecast') in (None, '') and event.forecast:
-                        record['forecast'] = event.forecast
-                    if record.get('previous') in (None, '') and event.previous:
-                        record['previous'] = event.previous
-                    record['surprise'] = classify_surprise(record['actual'], record.get('forecast'))
+                    apply_release_to_record(record, event)
                     updated += 1
                     break
 
-            if updated:
-                # Atomic rewrite: temp file + os.replace, so a crash/kill
-                # mid-write cannot truncate the accumulated dataset
-                tmp_path = self._file_path + '.tmp'
-                try:
-                    with open(tmp_path, 'w', encoding='utf-8') as f:
-                        for r in self._records:
-                            f.write(json.dumps(r) + '\n')
-                    os.replace(tmp_path, self._file_path)
-                    logger.info(f"Backfilled 'actual' for {updated} event reaction(s)")
-                except Exception as e:
-                    logger.error(f"Error rewriting event reactions during backfill: {e}")
-                    try:
-                        os.remove(tmp_path)
-                    except OSError:
-                        pass
+            if updated and atomic_rewrite_jsonl(self._file_path, self._records):
+                logger.info(f"Backfilled 'actual' for {updated} event reaction(s)")
 
         return updated
 

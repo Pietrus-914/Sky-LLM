@@ -37,6 +37,11 @@ class OpenPosition:
     last_update: datetime
     event_name: str
     entry_reasoning: str        # reasoning from entry decision
+    # Joins this trade back to its entry decision (decision_history JSONL)
+    decision_id: str = ""
+    # FORCE_DECISION test-mode trade — must never enter the model's
+    # "realized experience" prompt sections as a genuine outcome
+    forced: bool = False
 
     # Market context from EA
     spread_pips: float = 0.0
@@ -231,7 +236,8 @@ class PositionManager:
                            f"({self.daily_trades} today) — EA used the "
                            f"fallback notification, no position management")
 
-    def on_position_opened(self, data: Dict, entry_reasoning: str = "") -> None:
+    def on_position_opened(self, data: Dict, entry_reasoning: str = "",
+                           decision_id: str = "", forced: bool = False) -> None:
         """Called when EA reports a new position opened."""
         with self.lock:
             self._reset_daily_if_needed()
@@ -256,6 +262,8 @@ class PositionManager:
                 last_update=now,
                 event_name=data.get("event_name", ""),
                 entry_reasoning=entry_reasoning,
+                decision_id=decision_id,
+                forced=forced,
             )
             self.daily_trades += 1
             self.pending_command = None
@@ -277,20 +285,58 @@ class PositionManager:
             profit = data.get("profit", 0.0)
             self.daily_pnl_usd += profit
 
+            # One schema for both branches: shared/EA-supplied fields with
+            # neutral defaults; the tracked branch overlays the position's
+            # real values. New fields get added exactly once — a forgotten
+            # second literal would silently produce mixed-schema JSONL rows.
+            record = {
+                "ticket": data.get("ticket", 0),
+                "symbol": data.get("symbol", "?"),
+                "direction": data.get("direction", "?"),
+                "lots": data.get("lots", 0.0),
+                "event_name": "(position lost in restart)",
+                "profit_usd": profit,
+                "profit_source": data.get("profit_source", "unknown"),
+                "reason": data.get("reason", "unknown"),
+                "opened_at": "",
+                "closed_at": utcnow().isoformat(),
+                "decisions_count": 0,
+                "decision_id": "",
+                "forced": False,
+                "entry_price": 0.0,
+                "close_price": data.get("close_price", 0.0),
+                "sl": 0.0,
+                "tp": 0.0,
+                "max_profit_usd": 0.0,
+                "max_drawdown_usd": 0.0,
+                "spread_pips": 0.0,
+                "entry_reasoning": "",
+                "ai_decisions": [],
+            }
+
             if self.position:
-                record = {
+                # Everything here was already in memory and used to be
+                # discarded at close — persisted so trade quality (MFE/MAE,
+                # SL sizing, exit trail) is analyzable after the fact
+                record.update({
                     "ticket": self.position.ticket,
                     "symbol": self.position.symbol,
                     "direction": self.position.direction,
                     "lots": self.position.lots,
                     "event_name": self.position.event_name,
-                    "profit_usd": profit,
-                    "profit_source": data.get("profit_source", "unknown"),
-                    "reason": data.get("reason", "unknown"),
                     "opened_at": self.position.open_time.isoformat(),
-                    "closed_at": utcnow().isoformat(),
                     "decisions_count": len(self.position.ai_decisions),
-                }
+                    "decision_id": self.position.decision_id,
+                    "forced": self.position.forced,
+                    "entry_price": self.position.entry_price,
+                    "sl": self.position.sl,
+                    "tp": self.position.tp,
+                    "max_profit_usd": self.position.max_profit_usd,
+                    "max_drawdown_usd": self.position.max_drawdown_usd,
+                    "spread_pips": self.position.spread_pips,
+                    "entry_reasoning": self.position.entry_reasoning,
+                    "ai_decisions": list(self.position.ai_decisions),
+                })
                 logger.info(f"Position closed: {self.position.symbol} | "
                             f"P/L: ${profit:.2f} | Reason: {data.get('reason', 'unknown')} | "
                             f"Daily P/L: ${self.daily_pnl_usd:.2f}")
@@ -298,19 +344,6 @@ class PositionManager:
                 # Orphaned close — position state was lost (server restart).
                 # Its open was never counted post-restart, so count it here.
                 self.daily_trades += 1
-                record = {
-                    "ticket": data.get("ticket", 0),
-                    "symbol": data.get("symbol", "?"),
-                    "direction": data.get("direction", "?"),
-                    "lots": data.get("lots", 0.0),
-                    "event_name": "(position lost in restart)",
-                    "profit_usd": profit,
-                    "profit_source": data.get("profit_source", "unknown"),
-                    "reason": data.get("reason", "unknown"),
-                    "opened_at": "",
-                    "closed_at": utcnow().isoformat(),
-                    "decisions_count": 0,
-                }
                 logger.warning(f"Orphaned position close (no tracked position) | "
                                f"ticket={record['ticket']} | P/L: ${profit:.2f} | "
                                f"Daily P/L: ${self.daily_pnl_usd:.2f}")
@@ -538,7 +571,14 @@ class PositionManager:
                 # Live limits so the dashboard shows what is actually enforced
                 "max_daily_trades": self.config.get("max_daily_trades", 5),
                 "max_daily_loss_usd": self.config.get("max_daily_loss_usd", 300.0),
-                # Last closed trades (persistent, across UTC-day resets/restarts)
-                "recent_trades": list(reversed(self.recent_trades[-10:])),
+                # Last closed trades (persistent, across UTC-day resets/restarts).
+                # Slimmed: the exit-decision trail and reasoning stay in
+                # trade_history.jsonl — shipping them here would add hundreds
+                # of KB to every dashboard poll for data nothing renders
+                "recent_trades": [
+                    {k: v for k, v in t.items()
+                     if k not in ("ai_decisions", "entry_reasoning")}
+                    for t in reversed(self.recent_trades[-10:])
+                ],
                 "pending_command": self.pending_command.to_dict() if self.pending_command else None,
             }
