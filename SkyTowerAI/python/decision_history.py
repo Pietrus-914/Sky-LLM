@@ -29,7 +29,7 @@ class DecisionHistory:
         self._recent: List[Dict] = []
         self._load_recent()
 
-    def _load_recent(self, max_entries: int = 100):
+    def _load_recent(self, max_entries: int = 300):
         """Load most recent entries from disk into memory cache."""
         try:
             if os.path.exists(self._file_path):
@@ -107,10 +107,13 @@ class DecisionHistory:
             except Exception as e:
                 logger.error(f"Error writing decision history: {e}")
 
-            # Update in-memory cache
+            # Update in-memory cache. Floor 300: the calibration ledger (F4)
+            # reads get_recent(300) — trimming below that would silently
+            # shrink the scored sample (and reset the n>=50 prompt gate
+            # after restarts, which also load 300 now)
             self._recent.append(entry)
-            if len(self._recent) > 200:
-                self._recent = self._recent[-100:]
+            if len(self._recent) > 600:
+                self._recent = self._recent[-300:]
 
         logger.info(f"Decision recorded: {entry['event_name']} -> {entry['direction']} "
                      f"(confidence: {entry['confidence']:.0%})")

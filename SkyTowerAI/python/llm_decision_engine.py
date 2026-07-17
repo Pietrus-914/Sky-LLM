@@ -163,7 +163,7 @@ confidence — do NOT inflate it just because a direction is required."""
 
     def __init__(self, api_key: str = None, provider: str = None,
                  decision_log=None, trade_history_file: str = None,
-                 regime_provider=None):
+                 regime_provider=None, paths_provider=None):
         """
         Initialize the decision engine
 
@@ -180,6 +180,9 @@ confidence — do NOT inflate it just because a direction is required."""
                 RegimeTracker). Selects the current-regime bucket of the
                 LEARNED EVENT STATISTICS; falls back to the static
                 config.CURRENCY_REGIMES seed when not wired (tests).
+            paths_provider: callable () -> list of measured event-path
+                records (the live EventPathRecorder's in-memory copies).
+                Feeds the CALIBRATION prompt line; None (tests) = no line.
         """
         # Auto-detect provider from config or environment
         self.provider = provider or LLM_CONFIG.get("provider", "openrouter")
@@ -206,6 +209,7 @@ confidence — do NOT inflate it just because a direction is required."""
         self._learned_cache = None
         self._learned_mtime = None
         self._regime_provider = regime_provider
+        self._paths_provider = paths_provider
 
         # Initialize LLM client
         self._init_llm_client()
@@ -383,6 +387,15 @@ confidence — do NOT inflate it just because a direction is required."""
             else f"error: {learned_error}" if learned_error
             else "no_data")
 
+        # Measured calibration of the model's own past confidence (F4) —
+        # rendered only once the sample passes the n-gate inside prompt_line
+        calibration_line = None
+        try:
+            calibration_line = self._calibration_line()
+        except Exception as e:
+            logger.warning(f"Calibration line build failed: {e}")
+        source_status["calibration"] = "ok" if calibration_line else "no_data"
+
         return {
             "event": {
                 "name": event.event_name,
@@ -403,6 +416,7 @@ confidence — do NOT inflate it just because a direction is required."""
             "playbook": playbook,
             "learned_stats": learned_stats,
             "learned_recap": learned_recap,
+            "calibration_line": calibration_line,
             "_source_status": source_status,
         }
 
@@ -835,6 +849,19 @@ confidence — do NOT inflate it just because a direction is required."""
                      + "; ".join(recap_parts))
         return "\n".join(lines), recap
 
+    def _calibration_line(self) -> Optional[str]:
+        """Measured calibration of past directional calls vs recorded event
+        paths (calibration.py). Needs the live recorder's records via
+        paths_provider — absent (tests / cold start), there is no line."""
+        if self._paths_provider is None:
+            return None
+        paths = self._paths_provider()
+        if not paths:
+            return None
+        from calibration import build_summary, prompt_line
+        decisions = self.decision_log.get_recent(300)
+        return prompt_line(build_summary(decisions, paths))
+
     def _trade_outcomes_section(self, currency: str) -> Optional[str]:
         """RECENT TRADE OUTCOMES prompt block: last few closed trades of this
         currency with realized P/L and close reason, plus an aggregate line."""
@@ -913,6 +940,12 @@ confidence — do NOT inflate it just because a direction is required."""
         if data_context.get('learned_recap'):
             recap_block = (f"\nKEY BASE RATES (measured; re-read and weigh these before "
                            f"committing): {data_context['learned_recap']}\n")
+        # Measured calibration of the model's own stated confidence (F4);
+        # sits near the prompt tail on purpose — it must influence the
+        # confidence field the model is ABOUT to write
+        calibration_block = ""
+        if data_context.get('calibration_line'):
+            calibration_block = f"\n{data_context['calibration_line']}\n"
 
         prompt = f"""Analyze this upcoming economic event and make a trading decision:
 
@@ -945,7 +978,7 @@ RECENT TRADE OUTCOMES ({data_context['event']['currency']}, realized P/L):
 {data_context.get('trade_outcomes') or "No completed trades for this currency yet"}
 
 SUGGESTED PAIR: {data_context['suggested_pair']}
-{recap_block}
+{calibration_block}{recap_block}
 Work through the ANALYSIS CHECKLIST against this data, then provide your trading
 decision in JSON format."""
 

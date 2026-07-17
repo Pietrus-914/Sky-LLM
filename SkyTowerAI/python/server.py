@@ -84,7 +84,13 @@ def init_services():
     regime_tracker = RegimeTracker(seed=CURRENCY_REGIMES)
     decision_engine = LLMDecisionEngine(decision_log=decision_history,
                                         trade_history_file=TRADE_HISTORY_FILE,
-                                        regime_provider=regime_tracker.get)
+                                        regime_provider=regime_tracker.get,
+                                        # Deferred: path_recorder is created a
+                                        # few lines below; the lambda resolves
+                                        # the module global at call time
+                                        paths_provider=lambda: (
+                                            path_recorder.get_recent(2000)
+                                            if path_recorder else []))
     calendar = CalendarAggregator()
     zone_analyzer = ZoneAnalyzer(ZONE_CONFIG)
     target_calculator = TargetCalculator(ZONE_CONFIG)
@@ -1081,6 +1087,23 @@ def get_event_reactions():
         reactions = history.get_recent(limit)
 
     return jsonify({"status": "ok", "count": len(reactions), "reactions": reactions})
+
+
+@app.route('/api/calibration', methods=['GET'])
+def api_calibration():
+    """Calibration ledger (F4): past decisions incl. SKIPs scored against
+    the measured post-event paths — Brier, hit rate vs stated confidence,
+    reliability buckets, skip outcomes. Dashboard card + audit."""
+    ensure_services()
+    try:
+        from calibration import build_summary
+        decisions = decision_history.get_recent(300) if decision_history else []
+        paths = path_recorder.get_recent(2000) if path_recorder else []
+        return jsonify({"status": "ok",
+                        "calibration": build_summary(decisions, paths)})
+    except Exception as e:
+        logger.error(f"Error building calibration summary: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route('/api/event-paths', methods=['GET'])

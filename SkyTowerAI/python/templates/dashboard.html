@@ -1179,6 +1179,14 @@
                 </table>
             </div>
         </div>
+
+        <!-- Calibration ledger (F4): stated confidence vs measured outcomes -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Calibration (stated confidence vs measured 5-min outcome)</span>
+            </div>
+            <div id="calibrationContent" class="no-data">No scored decisions yet</div>
+        </div>
     </div>
 
     <!-- ================================================================
@@ -2168,6 +2176,54 @@
             // Also refresh position management log + persistent history
             refreshAILog();
             refreshDecisionHistory();
+            refreshCalibration();
+        }
+
+        async function refreshCalibration() {
+            try {
+                var data = await apiFetch('/api/calibration');
+                var c = (data && data.calibration) || {};
+                var el = $('calibrationContent');
+                if (!c.n_scored) {
+                    var skipsOnly = (c.skips && c.skips.n) || 0;
+                    el.className = 'no-data';
+                    el.innerHTML = skipsOnly
+                        ? 'No measured directional calls yet (' + skipsOnly + ' SKIPs recorded)'
+                        : 'No scored decisions yet (forced/demo decisions are excluded)';
+                    return;
+                }
+                var gap = Math.round((c.avg_confidence - c.hit_rate) * 100);
+                var verdict = gap >= 5 ? ('<span style="color:var(--accent-red)">overconfident by ' + gap + ' pts</span>')
+                            : gap <= -5 ? ('<span style="color:var(--accent-green)">underconfident by ' + (-gap) + ' pts</span>')
+                            : '<span style="color:var(--accent-green)">well calibrated</span>';
+                var html = '<div style="font-size:0.85rem;line-height:1.7">' +
+                    '<b>' + c.n_scored + '</b> measured directional calls: stated confidence avg <b>' +
+                    Math.round(c.avg_confidence * 100) + '%</b>, hit rate <b>' +
+                    Math.round(c.hit_rate * 100) + '%</b> (Brier ' + c.brier + ') — ' + verdict;
+                if (c.n_flat_excluded) html += ' <span style="color:var(--text-muted)">(+' + c.n_flat_excluded + ' flat &lt;1 pip excluded)</span>';
+                html += '</div>';
+                var rows = '';
+                (c.buckets || []).forEach(function(b) {
+                    rows += '<tr><td>' + escapeHtml(b.label) + '</td><td>' + b.n + '</td><td>' +
+                        (b.n ? Math.round(b.avg_confidence * 100) + '%' : '--') + '</td><td>' +
+                        (b.n ? Math.round(b.hit_rate * 100) + '%' : '--') + '</td></tr>';
+                });
+                if (rows) {
+                    html += '<table style="margin-top:6px"><thead><tr><th>Stated conf</th><th>n</th><th>Avg stated</th><th>Actual hit</th></tr></thead><tbody>' + rows + '</tbody></table>';
+                }
+                if (c.skips && c.skips.n) {
+                    html += '<div style="font-size:0.8rem;color:var(--text-muted);margin-top:6px">SKIPs with measured paths: ' +
+                        c.skips.n + ', median |5-min move| ' + c.skips.median_abs_move_5min + ' pips, big movers (&ge;15 pips): ' +
+                        Math.round((c.skips.big_move_share || 0) * 100) + '%</div>';
+                }
+                var el2 = $('calibrationContent');
+                el2.className = '';
+                el2.innerHTML = html;
+            } catch(e) {
+                var errEl = $('calibrationContent');
+                errEl.className = 'no-data';
+                errEl.innerHTML = 'Failed to load calibration: ' + escapeHtml(e.message);
+            }
         }
 
         async function refreshDecisionHistory() {
