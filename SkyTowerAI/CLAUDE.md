@@ -187,6 +187,8 @@ docker compose logs -f           # watch logs
 | `/api/market-data` | POST | EA pushes OHLC (M1/M5/M15/H1) per pair → LLM market context + cross-pair picture |
 | `/api/event-reaction` | POST | EA reports post-release price snapshots (T0/T+60s/T+300s) |
 | `/api/event-reactions` | GET | Recorded reactions (?event=CPI&currency=USD) |
+| `/api/event-paths` | GET | Server-measured post-event price paths, ALL monitored events (?limit=50) |
+| `/api/regimes` | GET/POST | Auto-tracked monetary-policy regime per currency; POST {currency, regime} = manual override |
 | `/api/cot/{currency}` | GET | COT data for currency |
 | `/api/sentiment/{pair}` | GET | Sentiment for pair |
 

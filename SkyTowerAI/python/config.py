@@ -354,11 +354,17 @@ EVENT_PLAYBOOKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     'knowledge', 'event_playbooks.json')
 
 # Monetary-policy regime per currency: "hiking" / "cutting" / "hold".
-# HAND-MAINTAINED — update when a central bank's stance changes. Stamped into
-# every event_paths.jsonl record so reaction statistics can be split by regime
-# (the same event often reacts OPPOSITE ways in hiking vs cutting cycles —
-# pooling them produces misleading stats). Unknown currency -> null tag.
-# Verified 2026-07-16 (energy-shock tightening wave after the Iran conflict):
+# SEED ONLY — from here on the RegimeTracker (regime_tracker.py) maintains the
+# live value automatically: every recorded rate decision updates it (hike/cut
+# are facts from the calendar; an ambiguous hold is adjudicated by the LLM
+# using the measured market reaction). State: logs/currency_regimes.json;
+# view/override: GET|POST /api/regimes. This map is applied only to
+# currencies the state file doesn't know yet (fresh deploy) — editing it
+# later does NOT override tracked values; use the panel/API for that.
+# Stamped into every event_paths.jsonl record so reaction statistics can be
+# split by regime (the same event often reacts OPPOSITE ways in hiking vs
+# cutting cycles). Unknown currency -> null tag.
+# Seed verified 2026-07-16 (energy-shock tightening wave after Iran conflict):
 #   USD hiking = bias call (no hike delivered yet; June SEP dots + ~50% July-29
 #       market odds). AUD hiking = weakest call (3 hikes in 2026, 2-meeting
 #       pause framed as within-cycle; Aug 11 live). CAD next decision Sep 2.

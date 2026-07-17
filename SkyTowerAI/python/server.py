@@ -26,6 +26,7 @@ from position_manager import PositionManager
 from exit_decision_engine import ExitDecisionEngine
 from decision_history import DecisionHistory
 from event_path_recorder import EventPathRecorder
+from regime_tracker import RegimeTracker
 
 app = Flask(__name__)
 CORS(app)
@@ -42,6 +43,7 @@ position_manager = None
 exit_engine = None
 decision_history = None
 path_recorder = None
+regime_tracker = None
 next_decision = None
 decision_lock = threading.Lock()
 
@@ -66,7 +68,7 @@ market_data_lock = threading.Lock()
 
 def init_services():
     """Initialize all services"""
-    global decision_engine, calendar, zone_analyzer, target_calculator, position_manager, exit_engine, decision_history, path_recorder
+    global decision_engine, calendar, zone_analyzer, target_calculator, position_manager, exit_engine, decision_history, path_recorder, regime_tracker
     logger.info("Initializing SkyTower-AI services...")
 
     from config import TRADE_HISTORY_FILE
@@ -82,9 +84,13 @@ def init_services():
     exit_engine = ExitDecisionEngine()
     position_manager = PositionManager(exit_engine=exit_engine,
                                        history_file=TRADE_HISTORY_FILE)
+    # Regime tracking: fed automatically by recorded rate decisions; the
+    # config map only SEEDS a fresh state (observed decisions outrank it)
+    from config import CURRENCY_REGIMES
+    regime_tracker = RegimeTracker(seed=CURRENCY_REGIMES)
     # Post-event price paths for ALL monitored events (traded or not) —
     # measured server-side from EA-pushed M1, the system's learning substrate
-    path_recorder = EventPathRecorder()
+    path_recorder = EventPathRecorder(regime_provider=regime_tracker.get)
 
     logger.info("Services initialized successfully (with AI Position Manager + Decision History)")
 
@@ -1084,6 +1090,28 @@ def get_event_paths():
     return jsonify({"status": "ok", "count": len(paths), "paths": paths})
 
 
+@app.route('/api/regimes', methods=['GET', 'POST'])
+def api_regimes():
+    """Monetary-policy regime per currency (auto-tracked from recorded rate
+    decisions; LLM adjudicates ambiguous holds). POST {currency, regime}
+    sets a manual override that wins until the bank's next observed decision."""
+    ensure_services()
+    if regime_tracker is None:
+        return jsonify({"status": "error", "message": "tracker unavailable"}), 503
+
+    if request.method == 'POST':
+        data = request.json or {}
+        try:
+            entry = regime_tracker.set_manual(str(data.get('currency', '')),
+                                              str(data.get('regime', '')))
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+        return jsonify({"status": "ok", "currency": str(data.get('currency', '')).upper(),
+                        "entry": entry})
+
+    return jsonify({"status": "ok", "regimes": regime_tracker.all()})
+
+
 # Backfill guards: the fetch runs in the single updater thread, so it must
 # never stall the decision pipeline or hammer ForexFactory forever
 _last_backfill_fetch = 0.0
@@ -1986,6 +2014,22 @@ def _get_next_unanalyzed_events() -> list:
     return result
 
 
+def _run_regime_scan():
+    """Feed newly-backfilled rate decisions to the regime tracker. May make
+    ONE short LLM call (ambiguous hold), so it follows the backfill guard:
+    never while a decision is active (event imminent, updater must stay
+    responsive)."""
+    if regime_tracker is None or path_recorder is None:
+        return
+    try:
+        with decision_lock:
+            if next_decision is not None:
+                return
+        regime_tracker.scan(path_recorder.get_recent(150))
+    except Exception as e:
+        logger.debug(f"Regime scan error: {e}")
+
+
 def _run_event_path_recorder():
     """Feed the event-path recorder each updater tick: schedule monitored
     events approaching release and measure passed ones from EA-pushed M1.
@@ -2052,6 +2096,7 @@ def background_decision_updater():
                 cleanup_stale_registrations()
                 _cleanup_analyzed_events()
                 _backfill_reaction_actuals()
+                _run_regime_scan()
                 last_cleanup_time = time.time()
 
             # Event-path recorder: schedule upcoming monitored events and

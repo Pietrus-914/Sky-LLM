@@ -62,10 +62,13 @@ BACKFILL_MAX_ATTEMPTS = 12
 class EventPathRecorder:
     """Thread-safe scheduler + JSONL store for post-event price paths."""
 
-    def __init__(self, log_dir: str = None):
+    def __init__(self, log_dir: str = None, regime_provider=None):
         if log_dir is None:
             log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
         os.makedirs(log_dir, exist_ok=True)
+        # Callable currency -> regime|None (live RegimeTracker); falls back
+        # to the static config.CURRENCY_REGIMES seed when not wired (tests)
+        self._regime_provider = regime_provider
         self._file_path = os.path.join(log_dir, 'event_paths.jsonl')
         self._lock = Lock()
         self._records: List[Dict] = []      # full history (backfill rewrites)
@@ -279,10 +282,17 @@ class EventPathRecorder:
     # Per-pair measurement from M1 bars
     # ------------------------------------------------------------------
 
+    def _regime_for(self, currency: str) -> Optional[str]:
+        if self._regime_provider is not None:
+            try:
+                return self._regime_provider(currency)
+            except Exception as e:
+                logger.debug(f"Regime provider failed for {currency}: {e}")
+        import config as cfg
+        return (getattr(cfg, 'CURRENCY_REGIMES', {}) or {}).get(currency)
+
     def _base_record(self, entry: Dict, pair: Optional[str],
                      offset: Optional[int], status: str) -> Dict:
-        import config as cfg
-        regimes = getattr(cfg, 'CURRENCY_REGIMES', {}) or {}
         return {
             "recorded_at": utcnow().isoformat() + "Z",
             "source": "server_m1",
@@ -299,7 +309,7 @@ class EventPathRecorder:
             "surprise": "UNKNOWN",
             "surprise_magnitude": None,
             "non_data": entry.get("non_data", False),
-            "regime": regimes.get(entry["currency"]),
+            "regime": self._regime_for(entry["currency"]),
             "pair": pair,
             "broker_utc_offset_min": (offset // 60) if offset is not None else None,
             "data_status": status,

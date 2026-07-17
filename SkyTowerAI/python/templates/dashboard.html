@@ -1106,6 +1106,22 @@
                 </div>
             </div>
 
+            <!-- Currency Regimes (auto-tracked) -->
+            <div class="config-section">
+                <h3>Currency Regimes (auto)</h3>
+                <div id="regimesRows">
+                    <div class="no-data">Loading…</div>
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
+                    Reżim polityki banku centralnego per waluta — aktualizowany
+                    AUTOMATYCZNIE z zarejestrowanych decyzji o stopach (podwyżka/obniżka
+                    = fakt z kalendarza; niejednoznaczny hold rozstrzyga LLM na bazie
+                    zmierzonej reakcji rynku). Zmiana w dropdownie = ręczny override,
+                    obowiązuje do następnej zaobserwowanej decyzji banku. Trafia jako
+                    etykieta do statystyk reakcji (event_paths), nie wpływa na ryzyko.
+                </div>
+            </div>
+
             <!-- Save Button -->
             <div class="config-actions">
                 <button class="btn btn-primary" id="btnSaveConfig">Save Configuration</button>
@@ -1223,6 +1239,7 @@
                         <tr><td><b>Max daily loss USD</b></td><td>Dzienny budżet straty. Po przekroczeniu serwer blokuje nowe wejścia do północy UTC.</td><td>300 (3% konta)</td></tr>
                         <tr><td><b>Max loss per trade USD</b></td><td>Budżet ryzyka pojedynczego trade'u: <b>z tej kwoty EA liczy wielkość lota</b>, przy tej stracie pozycja jest zamykana (guardrail serwera + offline guardrail EA). Wysyłany do EA automatycznie z każdym sygnałem — <b>jedyne miejsce ustawienia</b>.</td><td>100 (1% konta)</td></tr>
                         <tr><td><b>Tier 1 / Tier 2 / Currencies</b></td><td>Które typy eventów i waluty są aktywne.</td><td>bez zmian</td></tr>
+                        <tr><td><b>Currency Regimes (auto)</b></td><td>Reżim polityki banku (hiking/cutting/hold) per waluta — etykieta do statystyk reakcji, <b>nie wpływa na ryzyko</b>. Aktualizuje się SAM z każdej zarejestrowanej decyzji o stopach (niejednoznaczny hold ocenia LLM po reakcji rynku). Dropdown = ręczny override do następnej decyzji banku. EUR/JPY/CHF nie mają par na wykresach, więc nie auto-aktualizują się — dla nich override ręczny.</td><td>auto</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1987,6 +2004,64 @@
             } catch(e) { /* server offline - leave blank */ }
         }
 
+        async function loadRegimes() {
+            var box = $('regimesRows');
+            if (!box) return;
+            try {
+                var data = await apiFetch('/api/regimes');
+                var regimes = data.regimes || {};
+                var currencies = Object.keys(regimes).sort();
+                if (!currencies.length) {
+                    box.innerHTML = '<div class="no-data">No regime data yet</div>';
+                    return;
+                }
+                box.innerHTML = '';
+                currencies.forEach(function(cur) {
+                    var entry = regimes[cur] || {};
+                    var row = document.createElement('div');
+                    row.className = 'config-row';
+
+                    var label = document.createElement('label');
+                    var meta = (entry.source || '?') +
+                               (entry.updated_at ? ' · ' + String(entry.updated_at).slice(0, 10) : '');
+                    label.innerHTML = '<b>' + cur + '</b> <span style="color:var(--text-muted);font-size:0.75rem">' +
+                                      meta + '</span>';
+                    if (entry.rationale) label.title = entry.rationale;
+
+                    var sel = document.createElement('select');
+                    sel.style.width = '110px';
+                    ['hiking', 'cutting', 'hold'].forEach(function(r) {
+                        var opt = document.createElement('option');
+                        opt.value = r; opt.textContent = r;
+                        if (entry.regime === r) opt.selected = true;
+                        sel.appendChild(opt);
+                    });
+                    sel.addEventListener('change', async function() {
+                        try {
+                            var resp = await fetch(BASE_URL + '/api/regimes', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ currency: cur, regime: sel.value })
+                            });
+                            if (resp.ok) {
+                                showToast('Regime override: ' + cur + ' -> ' + sel.value +
+                                          ' (do następnej decyzji banku)');
+                                loadRegimes();
+                            } else {
+                                showToast('Override rejected', false);
+                            }
+                        } catch(e) { showToast('Override failed: ' + e.message, false); }
+                    });
+
+                    row.appendChild(label);
+                    row.appendChild(sel);
+                    box.appendChild(row);
+                });
+            } catch(e) {
+                box.innerHTML = '<div class="no-data">Server offline</div>';
+            }
+        }
+
         function resetConfig() {
             // Check all Tier 1
             TIER1_EVENTS.forEach(function(name) {
@@ -2314,6 +2389,7 @@
                     }
                 } catch(e) { /* offline */ }
                 loadRiskConfig();
+                loadRegimes();
             })();
         }
 
