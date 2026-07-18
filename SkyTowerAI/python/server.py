@@ -1089,6 +1089,109 @@ def get_event_reactions():
     return jsonify({"status": "ok", "count": len(reactions), "reactions": reactions})
 
 
+_playbook_proposals = None   # lazy PlaybookProposals store (F5)
+_playbook_proposals_lock = threading.Lock()
+
+
+def _proposals_store():
+    # Lock: two first-callers racing here would get two store instances,
+    # and decide()'s per-instance lock could then double-apply a proposal
+    global _playbook_proposals
+    with _playbook_proposals_lock:
+        if _playbook_proposals is None:
+            from config import PLAYBOOK_PROPOSALS_FILE
+            from playbook_distiller import PlaybookProposals
+            _playbook_proposals = PlaybookProposals(PLAYBOOK_PROPOSALS_FILE)
+        return _playbook_proposals
+
+
+@app.route('/api/playbooks/distill', methods=['POST'])
+def api_playbooks_distill():
+    """Draft a playbook update for one event from the MEASURED statistics
+    (F5). Synchronous LLM call (~10-30s) — triggered manually from the
+    dashboard, never automatically. The result is a PENDING proposal; the
+    operator approves/rejects it separately."""
+    ensure_services()
+    try:
+        data = request.json or {}
+        event_name = str(data.get('event_name') or '').strip()
+        currency = str(data.get('currency') or '').strip().upper()
+        if not event_name or len(currency) != 3:
+            return jsonify({"status": "error",
+                            "message": "event_name and 3-letter currency required"}), 400
+
+        from llm_util import make_chat_fn
+        chat_fn = make_chat_fn(max_tokens=600, timeout=60.0)
+        if chat_fn is None:
+            return jsonify({"status": "error",
+                            "message": "LLM unavailable (no API key)"}), 503
+
+        from playbook_distiller import (generate_proposal, find_playbook_key)
+        from event_reaction_history import normalize_event_name
+        stats = decision_engine._load_learned_stats()
+        events = stats.get('events', {})
+        key_stats = f"{currency}|{normalize_event_name(event_name)}"
+        learned = events.get(key_stats)
+        if learned is None:
+            # Bundle members (e.g. Core CPI m/m) carry their stats under the
+            # dominant release — same alias fallback the entry prompt uses
+            alias = (stats.get('bundle_alias') or {}).get(key_stats)
+            learned = events.get((alias or {}).get('to'))
+        playbooks = decision_engine._load_playbooks()
+        key = find_playbook_key(playbooks, event_name)
+        current = playbooks.get(key) if isinstance(playbooks.get(key), dict) else None
+
+        proposal = generate_proposal(chat_fn, event_name, currency,
+                                     learned, current, key)
+        if proposal is None:
+            return jsonify({"status": "error",
+                            "message": "model returned no usable proposal"}), 502
+        if not _proposals_store().add(proposal):
+            return jsonify({"status": "error",
+                            "message": "proposal could not be persisted"}), 500
+        logger.info(f"Playbook proposal drafted: {currency} {event_name} "
+                    f"({proposal['id'][:8]})")
+        return jsonify({"status": "ok", "proposal": proposal})
+    except Exception as e:
+        logger.error(f"Error distilling playbook: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/playbooks/proposals', methods=['GET'])
+def api_playbooks_proposals():
+    """Distillation proposals, newest first (?status=pending)."""
+    try:
+        status = request.args.get('status') or None
+        return jsonify({"status": "ok",
+                        "proposals": _proposals_store().list(status=status)})
+    except Exception as e:
+        logger.error(f"Error listing playbook proposals: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/playbooks/proposals/decide', methods=['POST'])
+def api_playbooks_decide():
+    """Operator gate (F5): approve applies the entry to
+    knowledge/event_playbooks.json (hot-reloaded by the engine); reject
+    only marks the proposal. Body: {id, action: approve|reject}."""
+    try:
+        data = request.json or {}
+        from config import EVENT_PLAYBOOKS_FILE
+        result = _proposals_store().decide(str(data.get('id') or ''),
+                                           str(data.get('action') or ''),
+                                           EVENT_PLAYBOOKS_FILE)
+        if not result.get('ok'):
+            return jsonify({"status": "error",
+                            "message": result.get('error')}), 400
+        logger.info(f"Playbook proposal {data.get('action')}d: "
+                    f"{result['proposal'].get('currency')} "
+                    f"{result['proposal'].get('event_name')}")
+        return jsonify({"status": "ok", "proposal": result['proposal']})
+    except Exception as e:
+        logger.error(f"Error deciding playbook proposal: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route('/api/calibration', methods=['GET'])
 def api_calibration():
     """Calibration ledger (F4): past decisions incl. SKIPs scored against
@@ -1765,13 +1868,59 @@ def position_closed():
         if not data:
             return jsonify({"status": "error", "message": "No data provided"}), 400
 
-        position_manager.on_position_closed(data)
+        record = position_manager.on_position_closed(data)
+
+        # Post-trade reflection (F5): background thread — the EA's HTTP
+        # call must return immediately, and a journal failure is never fatal
+        try:
+            _spawn_reflection(record)
+        except Exception as e:
+            logger.debug(f"Reflection spawn failed: {e}")
 
         return jsonify({"status": "ok", "message": "Position close recorded"})
 
     except Exception as e:
         logger.error(f"Error recording position close: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+_reflection_chat_fn = None          # lazily-built aux LLM channel (F5)
+_reflection_chat_ready = False
+
+
+def _spawn_reflection(trade_record):
+    """Fire-and-forget reflection generation for a closed trade."""
+    from config import REFLECTIONS_ENABLED
+    from reflections import trade_eligible
+    if not REFLECTIONS_ENABLED or not trade_eligible(trade_record):
+        return
+
+    def worker():
+        global _reflection_chat_fn, _reflection_chat_ready
+        try:
+            if not _reflection_chat_ready:
+                from llm_util import make_chat_fn
+                _reflection_chat_fn = make_chat_fn()
+                _reflection_chat_ready = True
+            if _reflection_chat_fn is None or decision_engine is None:
+                return
+            # Event currency from the decision row (the symbol's base
+            # currency is wrong for e.g. CAD events on USDCAD)
+            currency = None
+            d_id = trade_record.get('decision_id')
+            if d_id and decision_history is not None:
+                for d in decision_history.get_recent(300):
+                    if d.get('decision_id') == d_id:
+                        currency = d.get('currency')
+                        break
+            from reflections import generate_and_store
+            generate_and_store(_reflection_chat_fn,
+                               decision_engine.reflection_store,
+                               trade_record, currency=currency)
+        except Exception as e:
+            logger.warning(f"Reflection worker failed: {e}")
+
+    threading.Thread(target=worker, name="reflection", daemon=True).start()
 
 
 @app.route('/api/position/status', methods=['GET'])

@@ -361,6 +361,9 @@ class PositionManager:
 
         # Disk write outside the lock — see _write_history_line
         self._write_history_line(record)
+        # Returned so the server can hand the closed trade to post-trade
+        # consumers (F5 reflections) without re-reading the JSONL
+        return record
 
     def update_position(self, data: Dict) -> Dict:
         """

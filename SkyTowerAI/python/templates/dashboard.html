@@ -1122,6 +1122,27 @@
                 </div>
             </div>
 
+            <!-- Playbook distillation proposals (F5) -->
+            <div class="config-section">
+                <h3>Playbook proposals (AI-drafted, wymagają Twojej zgody)</h3>
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+                    <input type="text" id="distillEventName" placeholder="Event name (np. CPI m/m)"
+                           style="flex:1;min-width:180px;padding:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px">
+                    <select id="distillCurrency"
+                            style="padding:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px">
+                        <option>USD</option><option>NZD</option><option>CAD</option>
+                        <option>AUD</option><option>GBP</option>
+                    </select>
+                    <button class="btn btn-secondary" id="btnDistill">Generate proposal</button>
+                </div>
+                <div id="proposalsRows"><div class="no-data">No pending proposals</div></div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
+                    Model (tier exit) destyluje ZMIERZONE statystyki eventu do wpisu playbooka —
+                    jako częstości z n=, nie nakazy. NIC nie zapisuje się samo: Approve wpisuje
+                    do knowledge/event_playbooks.json (hot-reload), Reject tylko oznacza propozycję.
+                </div>
+            </div>
+
             <!-- Save Button -->
             <div class="config-actions">
                 <button class="btn btn-primary" id="btnSaveConfig">Save Configuration</button>
@@ -1918,6 +1939,7 @@
             // Save button
             $('btnSaveConfig').addEventListener('click', saveConfig);
             $('btnResetConfig').addEventListener('click', resetConfig);
+            $('btnDistill').addEventListener('click', distillPlaybook);
 
             // "Trade all events" persists immediately on toggle (not via the
             // bulk Save), so it can't be reset by a Save that races the load.
@@ -2068,6 +2090,93 @@
             } catch(e) {
                 box.innerHTML = '<div class="no-data">Server offline</div>';
             }
+        }
+
+        // ============================================================
+        // PLAYBOOK PROPOSALS (F5) — AI drafts, operator approves
+        // ============================================================
+        async function loadProposals() {
+            var box = $('proposalsRows');
+            try {
+                var data = await apiFetch('/api/playbooks/proposals?status=pending');
+                var rows = (data && data.proposals) || [];
+                if (!rows.length) {
+                    box.innerHTML = '<div class="no-data">No pending proposals</div>';
+                    return;
+                }
+                box.innerHTML = '';
+                rows.forEach(function(p) {
+                    var div = document.createElement('div');
+                    div.style.cssText = 'border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:8px;font-size:0.8rem';
+                    var cur = p.current
+                        ? escapeHtml(JSON.stringify(p.current, null, 1))
+                        : '(brak wpisu — nowy)';
+                    var prop = escapeHtml(JSON.stringify(p.proposed, null, 1));
+                    div.innerHTML =
+                        '<div style="font-weight:600;margin-bottom:4px">' +
+                            escapeHtml(p.currency + ' ' + p.event_name) +
+                            ' <span style="color:var(--text-muted);font-weight:400">(' +
+                            escapeHtml((p.created_at || '').substring(0, 16)) + ')</span></div>' +
+                        '<div style="color:var(--text-muted)">OBECNY:</div>' +
+                        '<pre style="white-space:pre-wrap;margin:2px 0 6px">' + cur + '</pre>' +
+                        '<div style="color:var(--accent-green)">PROPONOWANY:</div>' +
+                        '<pre style="white-space:pre-wrap;margin:2px 0 6px">' + prop + '</pre>' +
+                        (p.rationale ? '<div style="color:var(--text-muted);margin-bottom:6px">Dlaczego: ' +
+                            escapeHtml(p.rationale) + '</div>' : '');
+                    var actions = document.createElement('div');
+                    ['approve', 'reject'].forEach(function(action) {
+                        var btn = document.createElement('button');
+                        btn.className = 'btn ' + (action === 'approve' ? 'btn-primary' : 'btn-secondary');
+                        btn.textContent = action === 'approve' ? 'Approve (zapisz do playbooka)' : 'Reject';
+                        btn.style.marginRight = '6px';
+                        btn.addEventListener('click', async function() {
+                            btn.disabled = true;
+                            try {
+                                var resp = await fetch(BASE_URL + '/api/playbooks/proposals/decide', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ id: p.id, action: action })
+                                });
+                                var body = await resp.json();
+                                if (resp.ok) {
+                                    showToast('Proposal ' + action + 'd: ' + p.event_name);
+                                } else {
+                                    showToast('Failed: ' + (body.message || resp.status), false);
+                                }
+                            } catch(e) { showToast('Failed: ' + e.message, false); }
+                            loadProposals();
+                        });
+                        actions.appendChild(btn);
+                    });
+                    div.appendChild(actions);
+                    box.appendChild(div);
+                });
+            } catch(e) {
+                box.innerHTML = '<div class="no-data">Server offline</div>';
+            }
+        }
+
+        async function distillPlaybook() {
+            var name = ($('distillEventName').value || '').trim();
+            var currency = $('distillCurrency').value;
+            if (!name) { showToast('Podaj nazwę eventu', false); return; }
+            var btn = $('btnDistill');
+            btn.disabled = true; btn.textContent = 'Generating… (do ~60s)';
+            try {
+                var resp = await fetch(BASE_URL + '/api/playbooks/distill', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ event_name: name, currency: currency })
+                });
+                var body = await resp.json();
+                if (resp.ok) {
+                    showToast('Proposal drafted — review below');
+                    loadProposals();
+                } else {
+                    showToast('Distill failed: ' + (body.message || resp.status), false);
+                }
+            } catch(e) { showToast('Distill failed: ' + e.message, false); }
+            btn.disabled = false; btn.textContent = 'Generate proposal';
         }
 
         function resetConfig() {
@@ -2446,6 +2555,7 @@
                 } catch(e) { /* offline */ }
                 loadRiskConfig();
                 loadRegimes();
+                loadProposals();
             })();
         }
 

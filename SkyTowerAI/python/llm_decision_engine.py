@@ -203,7 +203,7 @@ confidence — do NOT inflate it just because a direction is required."""
         self.decision_log = decision_log or DecisionHistory()
         # Closed trades (realized P/L) — feeds RECENT TRADE OUTCOMES
         from config import (TRADE_HISTORY_FILE, EVENT_PLAYBOOKS_FILE,
-                            LEARNED_STATS_FILE)
+                            LEARNED_STATS_FILE, REFLECTIONS_FILE)
         self.trade_history_file = trade_history_file or TRADE_HISTORY_FILE
         # Curated event playbooks (optional knowledge file)
         self.playbooks_file = EVENT_PLAYBOOKS_FILE
@@ -215,6 +215,9 @@ confidence — do NOT inflate it just because a direction is required."""
         self._learned_mtime = None
         self._regime_provider = regime_provider
         self._paths_provider = paths_provider
+        # Post-trade reflections (F5) — mtime-cached JSONL reader
+        from reflections import ReflectionStore
+        self.reflection_store = ReflectionStore(REFLECTIONS_FILE)
 
         # Initialize LLM client
         self._init_llm_client()
@@ -401,6 +404,23 @@ confidence — do NOT inflate it just because a direction is required."""
             logger.warning(f"Calibration line build failed: {e}")
         source_status["calibration"] = "ok" if calibration_line else "no_data"
 
+        # Episodic memory (F5): the few most similar prior releases of this
+        # event, each with setup -> surprise -> path -> own past call
+        episodes = None
+        try:
+            episodes = self._episodes_section(event, currency, suggested)
+        except Exception as e:
+            logger.warning(f"Episode retrieval failed: {e}")
+        source_status["episodes"] = "ok" if episodes else "no_data"
+
+        # Post-trade reflections (F5): quarantined n=1 anecdotes
+        reflections = None
+        try:
+            reflections = self._reflections_section(event.event_name, currency)
+        except Exception as e:
+            logger.warning(f"Reflections lookup failed: {e}")
+        source_status["reflections"] = "ok" if reflections else "no_data"
+
         return {
             "event": {
                 "name": event.event_name,
@@ -422,6 +442,8 @@ confidence — do NOT inflate it just because a direction is required."""
             "learned_stats": learned_stats,
             "learned_recap": learned_recap,
             "calibration_line": calibration_line,
+            "episodes": episodes,
+            "reflections": reflections,
             "_source_status": source_status,
         }
 
@@ -867,6 +889,33 @@ confidence — do NOT inflate it just because a direction is required."""
         decisions = self.decision_log.get_recent(300)
         return prompt_line(build_summary(decisions, paths))
 
+    def _episodes_section(self, event, currency: str,
+                          pair: str) -> Optional[str]:
+        """SIMILAR PAST EPISODES body: the few most similar prior releases
+        (episodic memory) — needs the live recorder via paths_provider."""
+        if self._paths_provider is None:
+            return None
+        paths = self._paths_provider()
+        if not paths:
+            return None
+        from episode_retrieval import find_similar_episodes, render_episodes
+        episodes = find_similar_episodes(
+            paths, event.event_name, currency, pair,
+            self._current_regime((currency or '').upper()),
+            forecast=getattr(event, 'forecast', None),
+            previous=getattr(event, 'previous', None))
+        if not episodes:
+            return None
+        return render_episodes(episodes, self.decision_log.get_recent(300),
+                               self._load_recent_trades(200))
+
+    def _reflections_section(self, event_name: str,
+                             currency: str) -> Optional[str]:
+        """POST-TRADE REFLECTIONS body — quarantined n=1 anecdotes."""
+        from reflections import render_for_prompt
+        rows = self.reflection_store.get_matching(event_name, currency)
+        return render_for_prompt(rows)
+
     def _trade_outcomes_section(self, currency: str) -> Optional[str]:
         """RECENT TRADE OUTCOMES prompt block: last few closed trades of this
         currency with realized P/L and close reason, plus an aggregate line."""
@@ -953,6 +1002,21 @@ confidence — do NOT inflate it just because a direction is required."""
         calibration_block = ""
         if data_context.get('calibration_line'):
             calibration_block = f"\n{data_context['calibration_line']}\n"
+        # Episodic memory (F5): individual similar releases, explicitly
+        # subordinated to the aggregate statistics
+        episodes_block = ""
+        if data_context.get('episodes'):
+            episodes_block = (f"\nSIMILAR PAST EPISODES (the most similar prior releases of "
+                              f"this event — individual examples; the aggregate LEARNED EVENT "
+                              f"STATISTICS outrank any single one):\n"
+                              f"{data_context['episodes']}\n")
+        # Post-trade reflections (F5): QUARANTINED n=1 journal anecdotes
+        reflections_block = ""
+        if data_context.get('reflections'):
+            reflections_block = (f"\nPOST-TRADE REFLECTIONS (your own journal notes from single "
+                                 f"past trades — QUARANTINED n=1 anecdotes, NOT rules; measured "
+                                 f"statistics outrank them):\n"
+                                 f"{data_context['reflections']}\n")
 
         prompt = f"""Analyze this upcoming economic event and make a trading decision:
 
@@ -977,13 +1041,13 @@ IMPORTANT: read each pair's stated '{data_context['event']['currency']}-strength
 
 HISTORICAL REACTIONS TO THIS EVENT:
 {data_context.get('reaction_history') or "No history yet (the system is building this dataset)"}
-{learned_block}{playbook_block}
+{learned_block}{episodes_block}{playbook_block}
 YOUR TRACK RECORD ({data_context['event']['currency']} events):
 {data_context.get('track_record') or "No prior decisions for this currency yet"}
 
 RECENT TRADE OUTCOMES ({data_context['event']['currency']}, realized P/L):
 {data_context.get('trade_outcomes') or "No completed trades for this currency yet"}
-
+{reflections_block}
 SUGGESTED PAIR: {data_context['suggested_pair']}
 {calibration_block}{recap_block}
 Work through the ANALYSIS CHECKLIST against this data, then provide your trading

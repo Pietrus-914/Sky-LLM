@@ -362,6 +362,20 @@ EVENT_PLAYBOOKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 LEARNED_STATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                   'knowledge', 'learned_stats.json')
 
+# Post-trade reflections (F5): quarantined n=1 journal entries written by
+# the exit-tier model after each closed NON-forced trade; injected into the
+# entry prompt only under an explicit "anecdotes, not rules" header.
+# SKYTOWER_REFLECTIONS=0 disables generation (the section simply dries up).
+REFLECTIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                'logs', 'trade_reflections.jsonl')
+REFLECTIONS_ENABLED = _env_bool("SKYTOWER_REFLECTIONS", True)
+
+# Playbook distillation proposals (F5): machine-drafted playbook updates
+# awaiting the operator's approve/reject on the dashboard. NEVER
+# auto-applied — approval writes into knowledge/event_playbooks.json.
+PLAYBOOK_PROPOSALS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       'logs', 'playbook_proposals.jsonl')
+
 # Monetary-policy regime per currency: "hiking" / "cutting" / "hold".
 # SEED ONLY — from here on the RegimeTracker (regime_tracker.py) maintains the
 # live value automatically: every recorded rate decision updates it (hike/cut
