@@ -436,6 +436,21 @@ def _apply_runtime_overrides():
 _apply_runtime_overrides()
 
 # =============================================================================
+# ENSEMBLE (F4): K-call self-consistency at entry
+# =============================================================================
+# K >= 2 makes the entry engine fire K PARALLEL LLM calls per decision:
+# unanimity (all valid votes BUY or all SELL) = trade, any split = SKIP.
+# Verbal LLM confidence is systematically overconfident — vote agreement is
+# the calibrated gate. COST: K x the entry-model price per analyzed event.
+# Default 1 = classic single call. Wall-clock stays ~one call (parallel).
+# In FORCE_DECISION demo mode the majority direction wins instead (SKIP is
+# not available there) and agreement scales the reported confidence.
+ENSEMBLE_K = _env_int("SKYTOWER_ENSEMBLE_K", 1)
+if not 1 <= ENSEMBLE_K <= 5:
+    print(f"WARNING: SKYTOWER_ENSEMBLE_K={ENSEMBLE_K} out of range 1-5 — using 1")
+    ENSEMBLE_K = 1
+
+# =============================================================================
 # TEST MODE: FORCE DECISION (never SKIP)
 # =============================================================================
 # When enabled, the entry decision engine must always pick BUY or SELL —

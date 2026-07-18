@@ -18,7 +18,9 @@ from sentiment_analyzer import SentimentAggregator
 from event_reaction_history import EventReactionHistory, normalize_event_name
 from decision_history import DecisionHistory
 from market_context import normalize_pair
-from config import LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS, HIGH_IMPACT_EVENTS, OPENROUTER_API_KEY, FORCE_DECISION
+from config import (LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS,
+                    HIGH_IMPACT_EVENTS, OPENROUTER_API_KEY, FORCE_DECISION,
+                    ENSEMBLE_K)
 
 
 @dataclass
@@ -45,6 +47,9 @@ class TradingDecision:
     # Raw LLM reply text — persisted to logs/decision_context/ for post-hoc
     # audit ("what did the model actually say"), empty for rule-based decisions
     raw_response: str = ""
+    # Ensemble metadata (F4, SKYTOWER_ENSEMBLE_K >= 2): {"k", "valid",
+    # "votes": [{"direction", "confidence"}, ...]}; None for single-call
+    ensemble: Dict = None
 
     def to_dict(self):
         d = asdict(self)
@@ -909,8 +914,10 @@ confidence — do NOT inflate it just because a direction is required."""
             return "DETERIORATION"
         return "UNCHANGED"
 
-    def _llm_decision(self, event: EconomicEvent, data_context: Dict) -> TradingDecision:
-        """Use LLM to make trading decision"""
+    def _entry_prompt(self, data_context: Dict) -> str:
+        """Assemble the full entry-decision user prompt. Shared by the
+        single-call path and the K-call ensemble (identical prompt per
+        voter — self-consistency comes from sampling, not prompt variants)."""
         # Optional curated-knowledge section — only included when a playbook
         # entry exists for this event/currency (token budget). Framed as
         # observed frequencies, NOT instructions — the model must weigh them
@@ -981,6 +988,16 @@ SUGGESTED PAIR: {data_context['suggested_pair']}
 {calibration_block}{recap_block}
 Work through the ANALYSIS CHECKLIST against this data, then provide your trading
 decision in JSON format."""
+        return prompt
+
+    def _llm_decision(self, event: EconomicEvent, data_context: Dict) -> TradingDecision:
+        """Use LLM to make trading decision"""
+        prompt = self._entry_prompt(data_context)
+
+        # Self-consistency ensemble (F4): K parallel votes, unanimity gates
+        # the trade. Single-call classic path below stays byte-identical.
+        if ENSEMBLE_K >= 2:
+            return self._ensemble_decision(event, data_context, prompt)
 
         try:
             logger.info(f"Calling LLM ({self.provider}/{self.model}) for trading decision...")
@@ -1046,6 +1063,169 @@ decision in JSON format."""
 
         except Exception as e:
             logger.error(f"LLM decision error: {e}")
+            return self._rule_based_decision(event, data_context)
+
+    def _ensemble_decision(self, event: EconomicEvent, data_context: Dict,
+                           prompt: str) -> TradingDecision:
+        """K-call self-consistency (F4): fire K parallel identical calls and
+        gate the trade on vote agreement instead of verbal confidence.
+
+        Normal mode: ALL valid votes BUY (or all SELL) with at least 2 valid
+        votes = trade; any split, SKIP votes, or a lone survivor = SKIP.
+        FORCE_DECISION demo: SKIP is unavailable — the majority direction
+        wins and agreement scales the reported confidence.
+        Numeric fields of a traded decision are per-voter clamped medians;
+        all raw replies go to the decision-context dump."""
+        from concurrent.futures import ThreadPoolExecutor
+        k = ENSEMBLE_K
+        logger.info(f"Ensemble entry: {k} parallel LLM calls "
+                    f"({self.provider}/{self.model})...")
+
+        def one_call(i):
+            try:
+                text = self._chat(prompt)
+                return text, self._parse_llm_response(text)
+            except Exception as e:
+                logger.warning(f"Ensemble call {i + 1}/{k} failed: {e}")
+                return "", {"_parse_failed": True}
+
+        try:
+            with ThreadPoolExecutor(max_workers=k) as pool:
+                results = list(pool.map(one_call, range(k)))
+        except Exception as e:
+            logger.error(f"Ensemble execution failed: {e}")
+            return self._rule_based_decision(event, data_context)
+
+        votes, raws = [], []
+        for text, parsed in results:
+            raws.append(text or "(call failed)")
+            if parsed.get('_parse_failed'):
+                continue
+            votes.append({
+                "direction": self._normalize_direction(parsed.get('direction')),
+                "confidence": self._num(parsed.get('confidence'), 0.0, 0.0, 1.0),
+                "parsed": parsed,
+            })
+        raw_joined = "\n\n=== ENSEMBLE CALL BOUNDARY ===\n\n".join(raws)
+        if not votes:
+            logger.warning("Ensemble: no parseable vote — rule-based fallback")
+            return self._rule_based_decision(event, data_context)
+
+        dirs = [v["direction"] for v in votes]
+        counts = {d: dirs.count(d) for d in sorted(set(dirs))}
+        meta = {"k": k, "valid": len(votes),
+                "votes": [{"direction": v["direction"],
+                           "confidence": round(v["confidence"], 2)}
+                          for v in votes]}
+
+        def _median(vals):
+            vals = sorted(vals)
+            mid = len(vals) // 2
+            return vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2
+
+        def _median_pips(vals):
+            """Median honoring the 0 = "not set, EA fallback" SENTINEL: 0 is
+            not a magnitude, and averaging it with real proposals would
+            invent a tighter stop than ANY voter wanted (e.g. [0, 40] ->
+            20 -> clamped 25 on a news release). Zeros win on ties —
+            conservative, the EA has its own fallback logic."""
+            real = [v for v in vals if v > 0]
+            if len(vals) - len(real) >= len(real):
+                return 0.0
+            return _median(real)
+
+        def build(direction, confidence, votes_for, reasoning):
+            """TradingDecision from the agreeing voters' medians (SL/TP via
+            sentinel-aware median), re-clamped to the same contract ranges
+            as the single-call path before reaching the EA."""
+            src = votes_for or votes
+            sl = _median_pips([self._num(v["parsed"].get('stop_loss_pips'), 0)
+                               for v in src])
+            tp = _median_pips([self._num(v["parsed"].get('take_profit_pips'), 0)
+                               for v in src])
+            return TradingDecision(
+                event=event.event_name,
+                currency=event.currency,
+                pair=data_context['suggested_pair'],
+                direction=direction,
+                confidence=round(min(max(confidence, 0.0), 1.0), 2),
+                lot_percent=int(_median([self._num(v["parsed"].get('lot_percent'),
+                                                   70, 0, 85) for v in src])),
+                entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
+                exit_minutes_after=int(_median([self._num(v["parsed"].get('exit_minutes'),
+                                                          10, 5, 15) for v in src])),
+                stop_loss_percent=_median([self._num(v["parsed"].get('stop_loss_percent'),
+                                                     40, 0, 100) for v in src]),
+                stop_loss_pips=sl if sl <= 0 else min(max(sl, 25.0), 80.0),
+                take_profit_pips=tp if tp <= 0 else min(max(tp, 30.0), 120.0),
+                reasoning=reasoning,
+                data_summary=data_context,
+                timestamp=utcnow(),
+                forced=FORCE_DECISION,
+                raw_response=raw_joined,
+                ensemble=meta,
+            )
+
+        def representative_reasoning(votes_for):
+            """The reasoning of the median-confidence agreeing voter — one
+            honest sample instead of a mashup of K essays. `or`-fallback:
+            a JSON null reasoning KEY EXISTS, so .get's default alone would
+            return None and crash the string concat below."""
+            ranked = sorted(votes_for, key=lambda v: v["confidence"])
+            text = ranked[len(ranked) // 2]["parsed"].get('reasoning')
+            return str(text) if text else 'LLM decision'
+
+        # Aggregation must NEVER kill the event's decision — any surprise in
+        # the vote data degrades to the rule engine, mirroring the
+        # single-call path's outer try
+        try:
+            if FORCE_DECISION:
+                buysell = [v for v in votes if v["direction"] in ('BUY', 'SELL')]
+                n_buy = sum(1 for v in buysell if v["direction"] == 'BUY')
+                n_sell = len(buysell) - n_buy
+                if buysell and n_buy != n_sell:
+                    top = 'BUY' if n_buy > n_sell else 'SELL'
+                    votes_for = [v for v in buysell if v["direction"] == top]
+                    agreement = len(votes_for) / len(votes)
+                    confidence = (sum(v["confidence"] for v in votes_for)
+                                  / len(votes_for)) * agreement
+                    reasoning = (f"ENSEMBLE (force mode) votes {counts} -> "
+                                 f"majority {top}, agreement {agreement:.2f}. "
+                                 + representative_reasoning(votes_for))
+                    logger.info(f"Ensemble force-mode majority: {counts} -> {top}")
+                    return build(top, confidence, votes_for, reasoning)
+                # All-SKIP or a dead BUY/SELL tie: same resolver as the
+                # single-call force path (rule scores, not alphabet)
+                direction, note = self._forced_direction(data_context)
+                what = ("tie" if buysell
+                        else f"all {len(votes)} votes SKIP")
+                reasoning = (f"ENSEMBLE (force mode): {what} ({counts}); {note}")
+                return build(direction, min(v["confidence"] for v in votes),
+                             votes, reasoning)
+
+            unanimous = (len(votes) >= 2 and len(counts) == 1
+                         and dirs[0] in ('BUY', 'SELL'))
+            if unanimous:
+                confidence = _median([v["confidence"] for v in votes])
+                reasoning = (f"ENSEMBLE {len(votes)}/{k} unanimous {dirs[0]} "
+                             f"(agreement gate passed). "
+                             + representative_reasoning(votes))
+                logger.info(f"Ensemble unanimous: {len(votes)}/{k} {dirs[0]}")
+                return build(dirs[0], confidence, votes, reasoning)
+
+            # Split, SKIP votes, or a single surviving vote — the agreement
+            # gate failed; the disagreement itself is the signal
+            if len(votes) == 1:
+                why = f"only 1/{k} calls returned a valid vote — no consensus possible"
+            elif len(counts) == 1:
+                why = f"all {len(votes)} votes SKIP"
+            else:
+                why = f"votes split {counts} — no unanimity"
+            logger.info(f"Ensemble SKIP: {why}")
+            return build('SKIP', _median([v["confidence"] for v in votes]),
+                         votes, f"ENSEMBLE SKIP: {why}.")
+        except Exception as e:
+            logger.error(f"Ensemble aggregation error: {e}")
             return self._rule_based_decision(event, data_context)
 
     @staticmethod

@@ -73,6 +73,11 @@ class DecisionHistory:
             "event_datetime": None,
             "data_sources": data_sources_status or {},
         }
+        # Ensemble vote breakdown (F4, K>=2 only) — how unanimous was the
+        # committee; absent for classic single-call rows to keep them slim
+        ensemble = getattr(decision, 'ensemble', None)
+        if ensemble:
+            entry["ensemble"] = ensemble
 
         # Extract event datetime and data source info from data_summary
         data_summary = getattr(decision, 'data_summary', None)
