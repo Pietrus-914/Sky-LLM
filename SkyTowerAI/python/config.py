@@ -49,16 +49,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")  # Free tier available
 
 # =============================================================================
-# MT5 CONFIGURATION - Purple Trading
-# =============================================================================
-MT5_CONFIG = {
-    "login": int(os.getenv("MT5_LOGIN", 0)),
-    "password": os.getenv("MT5_PASSWORD", ""),
-    "server": os.getenv("MT5_SERVER", "PurpleTrading-MT5"),
-    "path": os.getenv("MT5_PATH", r"C:\Program Files\Purple Trading MT5\terminal64.exe")
-}
-
-# =============================================================================
 # TRADING PARAMETERS (based on SkyTower-FX strategy)
 # =============================================================================
 TRADING_CONFIG = {
@@ -173,15 +163,6 @@ NON_DATA_EVENT_MARKERS = [
     "projections",
 ]
 
-# Events suitable for LITE version (hedging both directions)
-LITE_EVENTS = {
-    "AUD": ["GDP", "CPI"],
-    "CAD": ["Interest Rate Decision", "Cash Rate"],
-    "NZD": ["CPI", "Official Cash Rate", "Employment Change"],
-    "SEK": ["Interest Rate Decision"],
-    "USD": ["Interest Rate Decision", "Non-Farm Payrolls"],
-}
-
 # =============================================================================
 # SPREAD & LIQUIDITY CONFIGURATION
 # =============================================================================
@@ -206,16 +187,6 @@ SPREAD_LOT_REDUCTION = {
     "high": {"threshold": 10, "multiplier": 0.6},    # -40% lota
     "extreme": {"threshold": 15, "multiplier": 0.0}, # Nie wchodź
 }
-
-# Godziny niskiej płynności (UTC) - unikaj tradowania
-LOW_LIQUIDITY_HOURS = {
-    "asian_gap": (21, 23),      # Przerwa między sesjami
-    "weekend_gap": (21, 22),    # Niedziela wieczór
-    "holiday_all_day": True,    # Święta
-}
-
-# Pary do unikania przy niskiej płynności
-AVOID_LOW_LIQUIDITY_PAIRS = ["AUDNZD", "NZDCAD", "GBPNZD", "EURNZD"]
 
 # =============================================================================
 # ZONE ANALYSIS CONFIGURATION (Smart Money Concepts)
@@ -261,24 +232,6 @@ EXIT_CONFIG = {
     # Safety settings
     "trail_after_tp1": True,             # Enable trailing stop after TP1
     "trail_distance_pips": 10,           # Trailing stop distance
-}
-
-# =============================================================================
-# DATA SOURCES (FREE)
-# =============================================================================
-DATA_SOURCES = {
-    # Economic Calendar
-    "investing_calendar": "https://www.investing.com/economic-calendar/",
-    "myfxbook_calendar": "https://www.myfxbook.com/forex-economic-calendar",
-    "finnhub_calendar": "https://finnhub.io/api/v1/calendar/economic",
-
-    # COT Data (CFTC)
-    "cftc_cot": "https://publicreporting.cftc.gov/",
-
-    # Sentiment Data
-    "myfxbook_sentiment": "https://www.myfxbook.com/community/outlook",
-    "fxssi_sentiment": "https://fxssi.com/tools/current-ratio",
-    "dukascopy_sentiment": "https://www.dukascopy.com/swiss/english/marketwatch/sentiment/",
 }
 
 # =============================================================================
@@ -472,14 +425,3 @@ if not 1 <= ENSEMBLE_K <= 5:
 # Intended ONLY for the demo-account data-collection phase. Set explicitly in
 # docker-compose.yml, not in .env, so it stays visible and deliberate.
 FORCE_DECISION = _env_bool("SKYTOWER_FORCE_DECISION", False)
-
-# =============================================================================
-# LOGGING
-# =============================================================================
-LOG_CONFIG = {
-    "level": "INFO",
-    "format": "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-    "rotation": "1 day",
-    "retention": "30 days",
-    "path": "logs/skytower.log",
-}

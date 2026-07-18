@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict
 from enum import Enum
 from loguru import logger
-import math
 
 
 class ZoneType(Enum):
@@ -80,10 +79,6 @@ class Zone:
     def size_pips(self) -> float:
         """Zone size in pips (assumes 4/5 digit broker)"""
         return (self.price_high - self.price_low) * 10000
-
-    def contains_price(self, price: float) -> bool:
-        """Check if price is within zone"""
-        return self.price_low <= price <= self.price_high
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API response"""

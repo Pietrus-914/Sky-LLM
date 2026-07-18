@@ -6,11 +6,11 @@ Integrates with zone_analyzer.py to provide actionable trade targets.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, List, Tuple
 from enum import Enum
 from loguru import logger
 
-from zone_analyzer import ZoneAnalysisResult, Zone, ZoneType, ZoneStrength
+from zone_analyzer import ZoneAnalysisResult, Zone, ZoneType
 
 
 class ExitStrategy(Enum):
@@ -410,26 +410,6 @@ class TargetCalculator:
                 return False, "SELL SL must be above entry"
 
         return True, "Targets validated"
-
-
-def calculate_trade_targets(
-    zone_analysis: ZoneAnalysisResult,
-    direction: str,
-    config: dict = None
-) -> TradeTargets:
-    """
-    Convenience function to calculate trade targets.
-
-    Args:
-        zone_analysis: Result from zone analyzer
-        direction: "BUY" or "SELL"
-        config: Calculator configuration
-
-    Returns:
-        TradeTargets
-    """
-    calculator = TargetCalculator(config)
-    return calculator.calculate(zone_analysis, direction)
 
 
 # For testing

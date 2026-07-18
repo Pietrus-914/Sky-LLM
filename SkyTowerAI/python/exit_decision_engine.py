@@ -4,7 +4,6 @@ Uses LLM to make strategic position management decisions.
 Operates on USD values for instrument-independent analysis.
 """
 import json
-from datetime import datetime
 from timeutil import utcnow
 from typing import Optional
 from loguru import logger

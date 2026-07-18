@@ -45,15 +45,8 @@ input int      InpEntrySecondsBefore = 15;       // Entry seconds before event
 input int      InpExitMinutesAfter = 10;         // Exit minutes after event (fallback)
 
 input group "=== Smart Exit Settings ==="
-input ENUM_EXIT_STRATEGY InpExitStrategy = EXIT_HYBRID;  // Exit Strategy
 input bool     InpUseZoneTargets = true;         // Use Zone-Based Targets
-input bool     InpPartialCloseTP1 = true;        // Partial Close at TP1
-input int      InpTP1ClosePercent = 50;          // TP1 Close Percentage
-input bool     InpMoveSLToBreakeven = true;      // Move SL to Break-Even after TP1
-input bool     InpTrailAfterTP1 = true;          // Enable Trailing Stop after TP1
-input double   InpTrailDistancePips = 10.0;      // Trailing Stop Distance (pips)
 input int      InpMaxHoldMinutes = 30;           // Maximum Position Hold Time (minutes)
-input int      InpFallbackExitMinutes = 15;      // Fallback Exit Time (minutes)
 
 input group "=== Zone Indicator Settings ==="
 input bool     InpUseZoneIndicator = true;       // Use SkyTower_Zones Indicator
@@ -199,14 +192,7 @@ int OnInit()
    g_smartExit.Init(
       InpServerHost,
       InpServerPort,
-      InpExitStrategy,
-      InpFallbackExitMinutes,
-      InpMaxHoldMinutes,
-      InpUseZoneTargets,
-      InpPartialCloseTP1,
-      InpMoveSLToBreakeven,
-      InpTrailAfterTP1,
-      InpTrailDistancePips
+      InpUseZoneTargets
    );
 
    //--- Initialize Zone Indicator
@@ -246,12 +232,9 @@ int OnInit()
    Print("Risk budget + daily trade limit are server-controlled (dashboard)");
    Print("Min Confidence: ", InpMinConfidence);
    Print("Trade Mode: ", EnumToString(InpDefaultMode));
-   Print("Exit Strategy: ", EnumToString(InpExitStrategy));
    Print("Zone Targets: ", InpUseZoneTargets ? "Enabled" : "Disabled");
    Print("Zone Indicator: ", InpUseZoneIndicator ? "Enabled" : "Disabled");
    Print("Zone Bias for Direction: ", InpUseZoneBiasForDirection ? "Enabled" : "Disabled");
-   Print("Partial TP1: ", InpPartialCloseTP1 ? "Enabled" : "Disabled");
-   Print("Trailing Stop: ", InpTrailAfterTP1 ? "Enabled" : "Disabled");
    Print("Visual Panel: ", InpShowPanel ? "Enabled" : "Disabled");
    Print("==============================================");
 
@@ -1695,48 +1678,6 @@ void NotifyPositionClosed(double closePrice, double profit, string reason,
 }
 
 //+------------------------------------------------------------------+
-//| Move SL to break-even                                              |
-//+------------------------------------------------------------------+
-void MoveSLToBreakeven(string symbol)
-{
-   if(!PositionSelectByTicket(g_currentTicket))
-      return;
-
-   double entry_price = PositionGetDouble(POSITION_PRICE_OPEN);
-   double current_sl = PositionGetDouble(POSITION_SL);
-   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-
-   //--- Add small buffer (1 pip) to ensure we don't get stopped out at exact entry
-   double buffer = point * 10;  // 1 pip for 5-digit broker
-
-   double new_sl;
-   if(g_eventDirection == "BUY")
-   {
-      new_sl = entry_price + buffer;
-      if(new_sl > current_sl)
-      {
-         if(ModifyPositionSL(g_currentTicket, new_sl))
-         {
-            g_slMovedToBE = true;
-            Print("SL moved to break-even: ", new_sl);
-         }
-      }
-   }
-   else // SELL
-   {
-      new_sl = entry_price - buffer;
-      if(new_sl < current_sl || current_sl == 0)
-      {
-         if(ModifyPositionSL(g_currentTicket, new_sl))
-         {
-            g_slMovedToBE = true;
-            Print("SL moved to break-even: ", new_sl);
-         }
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
 //| Modify position stop loss                                          |
 //+------------------------------------------------------------------+
 bool ModifyPositionSL(ulong ticket, double new_sl)
@@ -2003,22 +1944,6 @@ int GetBrokerTimezoneOffset()
    // TimeGMT() = UTC time
    // Offset = broker - UTC
    return (int)(TimeCurrent() - TimeGMT());
-}
-
-//+------------------------------------------------------------------+
-//| Convert UTC datetime to broker server datetime                     |
-//+------------------------------------------------------------------+
-datetime UTCToBrokerTime(datetime utcTime)
-{
-   return utcTime + GetBrokerTimezoneOffset();
-}
-
-//+------------------------------------------------------------------+
-//| Convert broker server datetime to UTC datetime                     |
-//+------------------------------------------------------------------+
-datetime BrokerTimeToUTC(datetime brokerTime)
-{
-   return brokerTime - GetBrokerTimezoneOffset();
 }
 
 //+------------------------------------------------------------------+

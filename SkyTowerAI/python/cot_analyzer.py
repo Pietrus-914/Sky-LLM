@@ -5,7 +5,7 @@ Fetches and analyzes CFTC COT reports for institutional positioning
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 from dataclasses import dataclass
 from loguru import logger
 import io
@@ -362,26 +362,6 @@ class COTAnalyzer:
             "confidence": min(max(confidence, 0.0), 1.0),
             "reasoning": "; ".join(reasons) if reasons else "No strong signals"
         }
-
-    def get_multi_currency_analysis(self, currencies: list = None) -> Dict:
-        """
-        Analyze multiple currencies
-
-        Args:
-            currencies: List of currency codes
-
-        Returns:
-            Dict with analysis for each currency
-        """
-        if currencies is None:
-            currencies = ["CAD", "AUD", "NZD", "USD", "GBP"]
-
-        results = {}
-        for currency in currencies:
-            results[currency] = self.analyze_currency(currency)
-
-        return results
-
 
 # =============================================================================
 # TESTING

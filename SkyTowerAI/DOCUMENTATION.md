@@ -605,17 +605,17 @@ PO WEJŚCIU:
 
 ### Parametry EA (Smart Exit)
 
+> **Aktualizacja 18.07.2026:** inputy InpExitStrategy, InpPartialCloseTP1,
+> InpTP1ClosePercent, InpMoveSLToBreakeven, InpTrailAfterTP1,
+> InpTrailDistancePips i InpFallbackExitMinutes zostały USUNIĘTE — metody,
+> które je czytały, nigdy nie były wywoływane (martwe przełączniki).
+> Zarządzanie wyjściem należy do serwera (komendy MODIFY_SL / PARTIAL_CLOSE /
+> CLOSE zwracane na /api/position/report). Poniższy opis faz jest historyczny.
+
 | Parametr | Domyślna | Opis |
 |----------|----------|------|
-| InpExitStrategy | HYBRID | Strategia wyjścia |
-| InpUseZoneTargets | true | Używaj celów ze stref |
-| InpPartialCloseTP1 | true | Częściowe zamknięcie na TP1 |
-| InpTP1ClosePercent | 50 | % do zamknięcia na TP1 |
-| InpMoveSLToBreakeven | true | Przesuń SL na break-even po TP1 |
-| InpTrailAfterTP1 | true | Trailing stop po TP1 |
-| InpTrailDistancePips | 10 | Dystans trailing stop |
-| InpMaxHoldMinutes | 30 | Max czas trzymania pozycji |
-| InpFallbackExitMinutes | 15 | Fallback exit jeśli brak TP |
+| InpUseZoneTargets | true | Pobieraj cele ze stref (/api/targets przy otwarciu) |
+| InpMaxHoldMinutes | 30 | Twardy limit czasu po stronie EA — jedyny EA-owy guardrail wyjścia |
 
 ### Strategie wyjścia
 

@@ -1298,9 +1298,7 @@
                         <tr><td><b>InpUseStopLoss</b></td><td>Zawsze włączone — SL to podstawa wyliczenia lota.</td><td>true</td></tr>
                         <tr><td><b>InpEntrySecondsBefore</b></td><td>Wejście X sekund przed publikacją.</td><td>15</td></tr>
                         <tr><td><b>InpMaxHoldMinutes</b></td><td>Maksymalny czas trzymania pozycji — po nim zamknięcie bezwarunkowe.</td><td>30</td></tr>
-                        <tr><td><b>InpPartialCloseTP1 / InpTP1ClosePercent</b></td><td>Na TP1 zamyka część pozycji (domyślnie 50%) i realizuje zysk.</td><td>true / 50</td></tr>
-                        <tr><td><b>InpMoveSLToBreakeven</b></td><td>Po TP1 przesuwa SL na cenę wejścia — reszta pozycji jedzie "za darmo".</td><td>true</td></tr>
-                        <tr><td><b>InpTrailAfterTP1 / InpTrailDistancePips</b></td><td>Trailing stop po TP1 — goni cenę w odległości X pipsów.</td><td>true / 10</td></tr>
+                        <tr><td colspan="3" style="color:var(--text-muted)"><b>Zarządzanie wyjściem = SERWER.</b> Inputy InpExitStrategy / InpPartialCloseTP1 / InpTP1ClosePercent / InpMoveSLToBreakeven / InpTrailAfterTP1 / InpTrailDistancePips / InpFallbackExitMinutes USUNIĘTO 18.07.2026 — kod EA nigdy ich nie wykonywał (martwe przełączniki obiecujące działanie, którego nie było). Częściowe zamknięcia, przesunięcie SL i wyjście prowadzi silnik wyjścia na serwerze przez komendy MODIFY_SL / PARTIAL_CLOSE / CLOSE w odpowiedzi na /api/position/report. Po stronie EA zostaje tylko twardy limit czasu (InpMaxHoldMinutes) i awaryjny spread.</td></tr>
                         <tr><td><b>InpEmergencySpreadPips</b></td><td>Awaryjne zamknięcie otwartej pozycji, gdy spread przekroczy X pipsów.</td><td>15</td></tr>
                         <tr><td><b>InpPushMarketData / InpReportReactions</b></td><td>Wysyłka świec do serwera (kontekst dla LLM) + raportowanie reakcji po evencie (baza wiedzy). Nie wyłączać.</td><td>true / true</td></tr>
                     </tbody>

@@ -21,7 +21,7 @@ from cot_analyzer import COTAnalyzer
 from sentiment_analyzer import SentimentAggregator
 from llm_decision_engine import LLMDecisionEngine, TradingDecision
 from zone_analyzer import ZoneAnalyzer, PriceBar, analyze_from_ohlc_data
-from target_calculator import TargetCalculator, calculate_trade_targets
+from target_calculator import TargetCalculator
 from position_manager import PositionManager
 from exit_decision_engine import ExitDecisionEngine
 from decision_history import DecisionHistory
@@ -55,8 +55,6 @@ analyzed_events = {}  # {"event_key": datetime_analyzed}
 # Structure: { "event_key": { "pair": {...data...}, "pair2": {...} }, ... }
 registered_pairs = {}
 pair_lock = threading.Lock()
-# Tracks which pair was selected for each event
-selected_pairs = {}  # { "event_key": "GBPJPY" }
 executed_trades = set()  # Tracks executed event_keys to prevent duplicates
 
 # Per-pair market data pushed by the EA (works in single-instance mode,
@@ -436,40 +434,6 @@ def refresh_decision():
                 })
     except Exception as e:
         logger.error(f"Error refreshing decision: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
-@app.route('/api/analyze', methods=['POST'])
-def analyze_custom_event():
-    """
-    Analyze a specific event
-    Request body should contain event details
-    """
-    ensure_services()
-    try:
-        data = request.json
-        if not data:
-            return jsonify({"status": "error", "message": "No data provided"}), 400
-
-        # Create event from request data
-        from calendar_fetcher import EconomicEvent
-        event = EconomicEvent(
-            datetime_utc=datetime.fromisoformat(data.get('datetime')),
-            currency=data.get('currency', ''),
-            event_name=data.get('event_name', ''),
-            impact=data.get('impact', 'HIGH'),
-            forecast=data.get('forecast'),
-            previous=data.get('previous'),
-        )
-
-        decision = decision_engine.analyze_event(event)
-
-        return jsonify({
-            "status": "ok",
-            "decision": decision.to_dict()
-        })
-    except Exception as e:
-        logger.error(f"Error analyzing event: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1302,22 +1266,6 @@ def _backfill_reaction_actuals():
         logger.debug(f"Reaction backfill error: {e}")
 
 
-@app.route('/api/registered-pairs', methods=['GET'])
-def get_registered_pairs():
-    """Get all registered pairs for current/upcoming events"""
-    with pair_lock:
-        return jsonify({
-            "status": "ok",
-            "events": {
-                key: {
-                    "pairs": list(pairs.keys()),
-                    "count": len(pairs)
-                }
-                for key, pairs in registered_pairs.items()
-            }
-        })
-
-
 # Global storage for zone data from all EA instances
 zone_reports = {}  # pair -> zone_data
 zone_reports_lock = threading.Lock()
@@ -1375,134 +1323,6 @@ def report_zone():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route('/api/zone-reports', methods=['GET'])
-def get_zone_reports():
-    """Get all reported zone data from EA instances"""
-    with zone_reports_lock:
-        return jsonify({
-            "status": "ok",
-            "pairs": dict(zone_reports),
-            "count": len(zone_reports)
-        })
-
-
-@app.route('/api/select-best-pair', methods=['POST'])
-def select_best_pair():
-    """
-    Trigger LLM analysis to select the best pair for an event.
-    Called when all pairs are registered or before event time.
-
-    Request body:
-    {
-        "event_key": "GBP_20260123_1200",
-        "event_name": "Retail Sales m/m",
-        "forecast": "0.0%",
-        "previous": "-0.1%"
-    }
-    """
-    global selected_pairs, next_decision
-    ensure_services()
-
-    try:
-        data = request.json
-        event_key = data.get('event_key', '')
-
-        if not event_key:
-            return jsonify({"status": "error", "message": "event_key required"}), 400
-
-        with pair_lock:
-            if event_key not in registered_pairs:
-                return jsonify({
-                    "status": "error",
-                    "message": f"No pairs registered for {event_key}"
-                }), 400
-
-            pairs_data = registered_pairs[event_key].copy()
-
-        # Merge zone_reports data into pairs_data
-        # This allows EAs to report zone data separately via /api/report-zone
-        with zone_reports_lock:
-            for pair, pair_info in pairs_data.items():
-                if pair in zone_reports:
-                    zone_data = zone_reports[pair]
-                    # Update zones dict with reported zone data
-                    if not pair_info.get('zones') or not pair_info['zones'].get('direction_bias'):
-                        pair_info['zones'] = {
-                            'direction_bias': zone_data.get('direction_bias', 'neutral'),
-                            'bias_strength': zone_data.get('bias_strength', 0),
-                            'nearest_resistance': zone_data.get('nearest_resistance', 0),
-                            'nearest_support': zone_data.get('nearest_support', 0),
-                        }
-                    # Also update spread_points if reported
-                    if zone_data.get('spread_points', 0) > 0:
-                        pair_info['spread_points'] = zone_data['spread_points']
-                    logger.info(f"Merged zone data for {pair}: bias={zone_data.get('direction_bias')}, spread={zone_data.get('spread_points')}")
-
-        if len(pairs_data) == 0:
-            return jsonify({
-                "status": "error",
-                "message": "No pairs available for analysis"
-            }), 400
-
-        logger.info(f"Selecting best pair from {len(pairs_data)} candidates: {list(pairs_data.keys())}")
-
-        # Parse event time from event_key (format: CURRENCY_YYYYMMDD_HHMM)
-        event_time_str = data.get('event_time')
-        if not event_time_str:
-            # Try to parse from event_key (event_key contains UTC time)
-            parts = event_key.split('_')
-            if len(parts) >= 3:
-                try:
-                    event_time_str = datetime.strptime(f"{parts[1]}_{parts[2]}", "%Y%m%d_%H%M").isoformat()
-                except:
-                    event_time_str = utcnow().isoformat()
-            else:
-                event_time_str = utcnow().isoformat()
-
-        # Build multi-pair prompt for LLM
-        event_info = {
-            "event_name": data.get('event_name', 'Unknown Event'),
-            "currency": event_key.split('_')[0],
-            "forecast": data.get('forecast', ''),
-            "previous": data.get('previous', ''),
-            "event_time": event_time_str
-        }
-
-        # Use decision engine with multi-pair context
-        decision = decision_engine.get_best_pair_recommendation(
-            event_info=event_info,
-            pairs_data=pairs_data
-        )
-
-        if decision:
-            # Use both locks together to ensure atomic state update
-            with decision_lock:
-                with pair_lock:
-                    selected_pairs[event_key] = decision.pair
-                next_decision = decision
-
-            logger.info(f"Best pair selected: {decision.pair} with {decision.confidence:.0%} confidence")
-
-            return jsonify({
-                "status": "ok",
-                "selected_pair": decision.pair,
-                "direction": decision.direction,
-                "confidence": decision.confidence,
-                "reasoning": decision.reasoning,
-                "all_pairs_analyzed": list(pairs_data.keys())
-            })
-        else:
-            return jsonify({
-                "status": "ok",
-                "selected_pair": None,
-                "message": "LLM recommends SKIP for all pairs"
-            })
-
-    except Exception as e:
-        logger.error(f"Error selecting best pair: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
 # Tracks which decision was already logged as served (log once, not per poll)
 _signal_served_log_key = None
 # Snapshot of the decision most recently SERVED to an EA (signal:true).
@@ -1521,7 +1341,7 @@ def get_mt5_signal():
         pair: Optional - if provided, only returns signal if this pair was selected
               This enables multi-instance mode where only the best pair gets the trade
     """
-    global next_decision, selected_pairs, executed_trades
+    global next_decision, executed_trades
     ensure_services()
 
     try:
@@ -1697,8 +1517,6 @@ def trade_executed():
             with pair_lock:
                 if event_key_to_cleanup in registered_pairs:
                     del registered_pairs[event_key_to_cleanup]
-                if event_key_to_cleanup in selected_pairs:
-                    del selected_pairs[event_key_to_cleanup]
 
         return jsonify({"status": "ok", "message": "Trade recorded"})
     except Exception as e:
@@ -1783,8 +1601,6 @@ def position_opened():
             with pair_lock:
                 if event_key_to_cleanup in registered_pairs:
                     del registered_pairs[event_key_to_cleanup]
-                if event_key_to_cleanup in selected_pairs:
-                    del selected_pairs[event_key_to_cleanup]
 
         logger.info(f"Position opened: {data.get('direction')} {data.get('symbol')} "
                      f"@ {data.get('entry_price')} | ticket={data.get('ticket')}")
@@ -2046,7 +1862,7 @@ def clear_test_signal():
 
 def cleanup_stale_registrations():
     """Remove stale pair registrations older than 1 hour"""
-    global registered_pairs, selected_pairs, executed_trades
+    global registered_pairs, executed_trades
 
     # Drop market data from EAs that stopped pushing (dead charts) — the age
     # gate in _build_market_context_for_event ignores them anyway, this just
@@ -2075,8 +1891,6 @@ def cleanup_stale_registrations():
 
         for key in stale_keys:
             del registered_pairs[key]
-            if key in selected_pairs:
-                del selected_pairs[key]
             logger.info(f"Cleaned up stale registration: {key}")
 
     # Also clean up old executed_trades (older than 24 hours)

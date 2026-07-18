@@ -9,8 +9,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 import requests
 import time
-from datetime import datetime, timedelta
-from loguru import logger
+from datetime import datetime
 
 # Configuration
 SERVER_URL = "http://127.0.0.1:5555"

@@ -100,8 +100,20 @@ START.bat wznawia. Po każdej zmianie w kodzie `python/` — restart okna serwer
 
 ## Po zmianach w EA (rekompilacja + wgranie)
 
+**UWAGA — metaeditor64 to aplikacja GUI: uruchomiona przez `&` NIE blokuje
+konsoli.** Stary log zostaje wtedy na dysku i czytasz wynik POPRZEDNIEJ
+kompilacji („0 errors" z zeszłego tygodnia). Zawsze: skasuj log, użyj
+`Start-Process -Wait`, potem SPRAWDŹ datę/rozmiar `.ex5`.
+
 ```powershell
-& "C:\Program Files\Purple Trading MT5 Terminal\metaeditor64.exe" /compile:"C:\Users\pietr\Documents\Sky tower\SkyTowerAI\mt5\SkyTowerAI_EA.mq5" /log
+$me  = "C:\Program Files\Purple Trading MT5 Terminal\metaeditor64.exe"
+$src = "C:\Users\pietr\Documents\Sky tower\SkyTowerAI\mt5\SkyTowerAI_EA.mq5"
+$log = "C:\Users\pietr\Documents\Sky tower\SkyTowerAI\mt5\SkyTowerAI_EA.log"
+if (Test-Path $log) { Remove-Item $log -Force }
+Start-Process -FilePath $me -ArgumentList "/compile:`"$src`"","/log:`"$log`"" -Wait
+Get-Content $log -Encoding Unicode | Select-String "Result"     # 0 errors, 0 warnings
+Get-Item ($src -replace '\.mq5$','.ex5') | Select-Object Name, Length, LastWriteTime  # data MUSI być dzisiejsza!
+
 Copy-Item "C:\Users\pietr\Documents\Sky tower\SkyTowerAI\mt5\SkyTowerAI_EA.ex5" "C:\Users\pietr\AppData\Roaming\MetaQuotes\Terminal\F225742ADC2EE896672C03839B31B81B\MQL5\Experts\" -Force
 ```
 Potem w MT5: prawym na wykres → Expert Advisors → usuń i podepnij ponownie
@@ -203,8 +215,15 @@ tylko serwer Python).
 6. EA: użyj przeniesionych `.ex5` (pkt. A2) albo skompiluj ze źródeł z repo
    (MetaEditor instaluje się razem z MT5; dostosuj ścieżkę instalacji):
    ```powershell
-   & "C:\Program Files\Purple Trading MT5 Terminal\metaeditor64.exe" /compile:"<repo>\SkyTowerAI\mt5\SkyTowerAI_EA.mq5" /log
-   & "C:\Program Files\Purple Trading MT5 Terminal\metaeditor64.exe" /compile:"<repo>\SkyTowerAI\mt5\SkyTower_Zones.mq5" /log
+   # patrz sekcja "Po zmianach w EA" — Start-Process -Wait + kasowanie logu,
+   # inaczej odczytasz wynik POPRZEDNIEJ kompilacji
+   $me = "C:\Program Files\Purple Trading MT5 Terminal\metaeditor64.exe"
+   foreach ($f in "SkyTowerAI_EA","SkyTower_Zones") {
+     $src = "<repo>\SkyTowerAI\mt5\$f.mq5"; $log = "<repo>\SkyTowerAI\mt5\$f.log"
+     if (Test-Path $log) { Remove-Item $log -Force }
+     Start-Process -FilePath $me -ArgumentList "/compile:`"$src`"","/log:`"$log`"" -Wait
+     Get-Content $log -Encoding Unicode | Select-String "Result"
+   }
    ```
    Potem w MT5: File → **Open Data Folder** (ścieżka datafolderu będzie INNA
    niż na starym komputerze!) → skopiuj `SkyTowerAI_EA.ex5` do `MQL5\Experts\`,

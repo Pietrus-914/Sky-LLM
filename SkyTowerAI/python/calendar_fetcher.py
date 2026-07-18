@@ -6,7 +6,7 @@ import os
 import requests
 from datetime import datetime, timedelta
 from timeutil import utcnow
-from typing import List, Dict, Optional
+from typing import List, Optional
 import pandas as pd
 import json
 import time
@@ -45,11 +45,6 @@ class EconomicEvent:
         d = asdict(self)
         d['datetime_utc'] = self.datetime_utc.isoformat()
         return d
-
-    @property
-    def is_high_impact(self) -> bool:
-        return self.impact.upper() == "HIGH"
-
 
 class TradingEconomicsCalendar:
     """
