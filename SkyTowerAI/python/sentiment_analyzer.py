@@ -6,7 +6,7 @@ Uses as contrarian indicator (per SkyTower strategy)
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Dict, Optional
 from dataclasses import dataclass
 from loguru import logger
 import re

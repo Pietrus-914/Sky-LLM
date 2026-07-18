@@ -21,7 +21,7 @@ from cot_analyzer import COTAnalyzer
 from sentiment_analyzer import SentimentAggregator
 from llm_decision_engine import LLMDecisionEngine, TradingDecision
 from zone_analyzer import ZoneAnalyzer, PriceBar, analyze_from_ohlc_data
-from target_calculator import TargetCalculator, calculate_trade_targets
+from target_calculator import TargetCalculator
 from position_manager import PositionManager
 from exit_decision_engine import ExitDecisionEngine
 from decision_history import DecisionHistory
@@ -55,8 +55,6 @@ analyzed_events = {}  # {"event_key": datetime_analyzed}
 # Structure: { "event_key": { "pair": {...data...}, "pair2": {...} }, ... }
 registered_pairs = {}
 pair_lock = threading.Lock()
-# Tracks which pair was selected for each event
-selected_pairs = {}  # { "event_key": "GBPJPY" }
 executed_trades = set()  # Tracks executed event_keys to prevent duplicates
 
 # Per-pair market data pushed by the EA (works in single-instance mode,
@@ -76,18 +74,27 @@ def init_services():
     # the engine's TRACK RECORD section reads the same instance the server
     # records into (a private copy never sees in-session decisions)
     decision_history = DecisionHistory()
+    # Regime tracking: fed automatically by recorded rate decisions; the
+    # config map only SEEDS a fresh state (observed decisions outrank it).
+    # Created BEFORE the engine — the LEARNED EVENT STATISTICS prompt section
+    # selects its per-regime bucket through this provider.
+    from config import CURRENCY_REGIMES
+    regime_tracker = RegimeTracker(seed=CURRENCY_REGIMES)
     decision_engine = LLMDecisionEngine(decision_log=decision_history,
-                                        trade_history_file=TRADE_HISTORY_FILE)
+                                        trade_history_file=TRADE_HISTORY_FILE,
+                                        regime_provider=regime_tracker.get,
+                                        # Deferred: path_recorder is created a
+                                        # few lines below; the lambda resolves
+                                        # the module global at call time
+                                        paths_provider=lambda: (
+                                            path_recorder.get_recent(2000)
+                                            if path_recorder else []))
     calendar = CalendarAggregator()
     zone_analyzer = ZoneAnalyzer(ZONE_CONFIG)
     target_calculator = TargetCalculator(ZONE_CONFIG)
     exit_engine = ExitDecisionEngine()
     position_manager = PositionManager(exit_engine=exit_engine,
                                        history_file=TRADE_HISTORY_FILE)
-    # Regime tracking: fed automatically by recorded rate decisions; the
-    # config map only SEEDS a fresh state (observed decisions outrank it)
-    from config import CURRENCY_REGIMES
-    regime_tracker = RegimeTracker(seed=CURRENCY_REGIMES)
     # Post-event price paths for ALL monitored events (traded or not) —
     # measured server-side from EA-pushed M1, the system's learning substrate
     path_recorder = EventPathRecorder(regime_provider=regime_tracker.get)
@@ -427,40 +434,6 @@ def refresh_decision():
                 })
     except Exception as e:
         logger.error(f"Error refreshing decision: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
-@app.route('/api/analyze', methods=['POST'])
-def analyze_custom_event():
-    """
-    Analyze a specific event
-    Request body should contain event details
-    """
-    ensure_services()
-    try:
-        data = request.json
-        if not data:
-            return jsonify({"status": "error", "message": "No data provided"}), 400
-
-        # Create event from request data
-        from calendar_fetcher import EconomicEvent
-        event = EconomicEvent(
-            datetime_utc=datetime.fromisoformat(data.get('datetime')),
-            currency=data.get('currency', ''),
-            event_name=data.get('event_name', ''),
-            impact=data.get('impact', 'HIGH'),
-            forecast=data.get('forecast'),
-            previous=data.get('previous'),
-        )
-
-        decision = decision_engine.analyze_event(event)
-
-        return jsonify({
-            "status": "ok",
-            "decision": decision.to_dict()
-        })
-    except Exception as e:
-        logger.error(f"Error analyzing event: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1080,6 +1053,126 @@ def get_event_reactions():
     return jsonify({"status": "ok", "count": len(reactions), "reactions": reactions})
 
 
+_playbook_proposals = None   # lazy PlaybookProposals store (F5)
+_playbook_proposals_lock = threading.Lock()
+
+
+def _proposals_store():
+    # Lock: two first-callers racing here would get two store instances,
+    # and decide()'s per-instance lock could then double-apply a proposal
+    global _playbook_proposals
+    with _playbook_proposals_lock:
+        if _playbook_proposals is None:
+            from config import PLAYBOOK_PROPOSALS_FILE
+            from playbook_distiller import PlaybookProposals
+            _playbook_proposals = PlaybookProposals(PLAYBOOK_PROPOSALS_FILE)
+        return _playbook_proposals
+
+
+@app.route('/api/playbooks/distill', methods=['POST'])
+def api_playbooks_distill():
+    """Draft a playbook update for one event from the MEASURED statistics
+    (F5). Synchronous LLM call (~10-30s) — triggered manually from the
+    dashboard, never automatically. The result is a PENDING proposal; the
+    operator approves/rejects it separately."""
+    ensure_services()
+    try:
+        data = request.json or {}
+        event_name = str(data.get('event_name') or '').strip()
+        currency = str(data.get('currency') or '').strip().upper()
+        if not event_name or len(currency) != 3:
+            return jsonify({"status": "error",
+                            "message": "event_name and 3-letter currency required"}), 400
+
+        from llm_util import make_chat_fn
+        chat_fn = make_chat_fn(max_tokens=600, timeout=60.0)
+        if chat_fn is None:
+            return jsonify({"status": "error",
+                            "message": "LLM unavailable (no API key)"}), 503
+
+        from playbook_distiller import (generate_proposal, find_playbook_key)
+        from event_reaction_history import normalize_event_name
+        stats = decision_engine._load_learned_stats()
+        events = stats.get('events', {})
+        key_stats = f"{currency}|{normalize_event_name(event_name)}"
+        learned = events.get(key_stats)
+        if learned is None:
+            # Bundle members (e.g. Core CPI m/m) carry their stats under the
+            # dominant release — same alias fallback the entry prompt uses
+            alias = (stats.get('bundle_alias') or {}).get(key_stats)
+            learned = events.get((alias or {}).get('to'))
+        playbooks = decision_engine._load_playbooks()
+        key = find_playbook_key(playbooks, event_name)
+        current = playbooks.get(key) if isinstance(playbooks.get(key), dict) else None
+
+        proposal = generate_proposal(chat_fn, event_name, currency,
+                                     learned, current, key)
+        if proposal is None:
+            return jsonify({"status": "error",
+                            "message": "model returned no usable proposal"}), 502
+        if not _proposals_store().add(proposal):
+            return jsonify({"status": "error",
+                            "message": "proposal could not be persisted"}), 500
+        logger.info(f"Playbook proposal drafted: {currency} {event_name} "
+                    f"({proposal['id'][:8]})")
+        return jsonify({"status": "ok", "proposal": proposal})
+    except Exception as e:
+        logger.error(f"Error distilling playbook: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/playbooks/proposals', methods=['GET'])
+def api_playbooks_proposals():
+    """Distillation proposals, newest first (?status=pending)."""
+    try:
+        status = request.args.get('status') or None
+        return jsonify({"status": "ok",
+                        "proposals": _proposals_store().list(status=status)})
+    except Exception as e:
+        logger.error(f"Error listing playbook proposals: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/playbooks/proposals/decide', methods=['POST'])
+def api_playbooks_decide():
+    """Operator gate (F5): approve applies the entry to
+    knowledge/event_playbooks.json (hot-reloaded by the engine); reject
+    only marks the proposal. Body: {id, action: approve|reject}."""
+    try:
+        data = request.json or {}
+        from config import EVENT_PLAYBOOKS_FILE
+        result = _proposals_store().decide(str(data.get('id') or ''),
+                                           str(data.get('action') or ''),
+                                           EVENT_PLAYBOOKS_FILE)
+        if not result.get('ok'):
+            return jsonify({"status": "error",
+                            "message": result.get('error')}), 400
+        logger.info(f"Playbook proposal {data.get('action')}d: "
+                    f"{result['proposal'].get('currency')} "
+                    f"{result['proposal'].get('event_name')}")
+        return jsonify({"status": "ok", "proposal": result['proposal']})
+    except Exception as e:
+        logger.error(f"Error deciding playbook proposal: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/calibration', methods=['GET'])
+def api_calibration():
+    """Calibration ledger (F4): past decisions incl. SKIPs scored against
+    the measured post-event paths — Brier, hit rate vs stated confidence,
+    reliability buckets, skip outcomes. Dashboard card + audit."""
+    ensure_services()
+    try:
+        from calibration import build_summary
+        decisions = decision_history.get_recent(300) if decision_history else []
+        paths = path_recorder.get_recent(2000) if path_recorder else []
+        return jsonify({"status": "ok",
+                        "calibration": build_summary(decisions, paths)})
+    except Exception as e:
+        logger.error(f"Error building calibration summary: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route('/api/event-paths', methods=['GET'])
 def get_event_paths():
     """Recorded post-event price paths (server-measured, ALL monitored
@@ -1173,22 +1266,6 @@ def _backfill_reaction_actuals():
         logger.debug(f"Reaction backfill error: {e}")
 
 
-@app.route('/api/registered-pairs', methods=['GET'])
-def get_registered_pairs():
-    """Get all registered pairs for current/upcoming events"""
-    with pair_lock:
-        return jsonify({
-            "status": "ok",
-            "events": {
-                key: {
-                    "pairs": list(pairs.keys()),
-                    "count": len(pairs)
-                }
-                for key, pairs in registered_pairs.items()
-            }
-        })
-
-
 # Global storage for zone data from all EA instances
 zone_reports = {}  # pair -> zone_data
 zone_reports_lock = threading.Lock()
@@ -1246,134 +1323,6 @@ def report_zone():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@app.route('/api/zone-reports', methods=['GET'])
-def get_zone_reports():
-    """Get all reported zone data from EA instances"""
-    with zone_reports_lock:
-        return jsonify({
-            "status": "ok",
-            "pairs": dict(zone_reports),
-            "count": len(zone_reports)
-        })
-
-
-@app.route('/api/select-best-pair', methods=['POST'])
-def select_best_pair():
-    """
-    Trigger LLM analysis to select the best pair for an event.
-    Called when all pairs are registered or before event time.
-
-    Request body:
-    {
-        "event_key": "GBP_20260123_1200",
-        "event_name": "Retail Sales m/m",
-        "forecast": "0.0%",
-        "previous": "-0.1%"
-    }
-    """
-    global selected_pairs, next_decision
-    ensure_services()
-
-    try:
-        data = request.json
-        event_key = data.get('event_key', '')
-
-        if not event_key:
-            return jsonify({"status": "error", "message": "event_key required"}), 400
-
-        with pair_lock:
-            if event_key not in registered_pairs:
-                return jsonify({
-                    "status": "error",
-                    "message": f"No pairs registered for {event_key}"
-                }), 400
-
-            pairs_data = registered_pairs[event_key].copy()
-
-        # Merge zone_reports data into pairs_data
-        # This allows EAs to report zone data separately via /api/report-zone
-        with zone_reports_lock:
-            for pair, pair_info in pairs_data.items():
-                if pair in zone_reports:
-                    zone_data = zone_reports[pair]
-                    # Update zones dict with reported zone data
-                    if not pair_info.get('zones') or not pair_info['zones'].get('direction_bias'):
-                        pair_info['zones'] = {
-                            'direction_bias': zone_data.get('direction_bias', 'neutral'),
-                            'bias_strength': zone_data.get('bias_strength', 0),
-                            'nearest_resistance': zone_data.get('nearest_resistance', 0),
-                            'nearest_support': zone_data.get('nearest_support', 0),
-                        }
-                    # Also update spread_points if reported
-                    if zone_data.get('spread_points', 0) > 0:
-                        pair_info['spread_points'] = zone_data['spread_points']
-                    logger.info(f"Merged zone data for {pair}: bias={zone_data.get('direction_bias')}, spread={zone_data.get('spread_points')}")
-
-        if len(pairs_data) == 0:
-            return jsonify({
-                "status": "error",
-                "message": "No pairs available for analysis"
-            }), 400
-
-        logger.info(f"Selecting best pair from {len(pairs_data)} candidates: {list(pairs_data.keys())}")
-
-        # Parse event time from event_key (format: CURRENCY_YYYYMMDD_HHMM)
-        event_time_str = data.get('event_time')
-        if not event_time_str:
-            # Try to parse from event_key (event_key contains UTC time)
-            parts = event_key.split('_')
-            if len(parts) >= 3:
-                try:
-                    event_time_str = datetime.strptime(f"{parts[1]}_{parts[2]}", "%Y%m%d_%H%M").isoformat()
-                except:
-                    event_time_str = utcnow().isoformat()
-            else:
-                event_time_str = utcnow().isoformat()
-
-        # Build multi-pair prompt for LLM
-        event_info = {
-            "event_name": data.get('event_name', 'Unknown Event'),
-            "currency": event_key.split('_')[0],
-            "forecast": data.get('forecast', ''),
-            "previous": data.get('previous', ''),
-            "event_time": event_time_str
-        }
-
-        # Use decision engine with multi-pair context
-        decision = decision_engine.get_best_pair_recommendation(
-            event_info=event_info,
-            pairs_data=pairs_data
-        )
-
-        if decision:
-            # Use both locks together to ensure atomic state update
-            with decision_lock:
-                with pair_lock:
-                    selected_pairs[event_key] = decision.pair
-                next_decision = decision
-
-            logger.info(f"Best pair selected: {decision.pair} with {decision.confidence:.0%} confidence")
-
-            return jsonify({
-                "status": "ok",
-                "selected_pair": decision.pair,
-                "direction": decision.direction,
-                "confidence": decision.confidence,
-                "reasoning": decision.reasoning,
-                "all_pairs_analyzed": list(pairs_data.keys())
-            })
-        else:
-            return jsonify({
-                "status": "ok",
-                "selected_pair": None,
-                "message": "LLM recommends SKIP for all pairs"
-            })
-
-    except Exception as e:
-        logger.error(f"Error selecting best pair: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
 # Tracks which decision was already logged as served (log once, not per poll)
 _signal_served_log_key = None
 # Snapshot of the decision most recently SERVED to an EA (signal:true).
@@ -1392,7 +1341,7 @@ def get_mt5_signal():
         pair: Optional - if provided, only returns signal if this pair was selected
               This enables multi-instance mode where only the best pair gets the trade
     """
-    global next_decision, selected_pairs, executed_trades
+    global next_decision, executed_trades
     ensure_services()
 
     try:
@@ -1568,8 +1517,6 @@ def trade_executed():
             with pair_lock:
                 if event_key_to_cleanup in registered_pairs:
                     del registered_pairs[event_key_to_cleanup]
-                if event_key_to_cleanup in selected_pairs:
-                    del selected_pairs[event_key_to_cleanup]
 
         return jsonify({"status": "ok", "message": "Trade recorded"})
     except Exception as e:
@@ -1654,8 +1601,6 @@ def position_opened():
             with pair_lock:
                 if event_key_to_cleanup in registered_pairs:
                     del registered_pairs[event_key_to_cleanup]
-                if event_key_to_cleanup in selected_pairs:
-                    del selected_pairs[event_key_to_cleanup]
 
         logger.info(f"Position opened: {data.get('direction')} {data.get('symbol')} "
                      f"@ {data.get('entry_price')} | ticket={data.get('ticket')}")
@@ -1739,13 +1684,59 @@ def position_closed():
         if not data:
             return jsonify({"status": "error", "message": "No data provided"}), 400
 
-        position_manager.on_position_closed(data)
+        record = position_manager.on_position_closed(data)
+
+        # Post-trade reflection (F5): background thread — the EA's HTTP
+        # call must return immediately, and a journal failure is never fatal
+        try:
+            _spawn_reflection(record)
+        except Exception as e:
+            logger.debug(f"Reflection spawn failed: {e}")
 
         return jsonify({"status": "ok", "message": "Position close recorded"})
 
     except Exception as e:
         logger.error(f"Error recording position close: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+_reflection_chat_fn = None          # lazily-built aux LLM channel (F5)
+_reflection_chat_ready = False
+
+
+def _spawn_reflection(trade_record):
+    """Fire-and-forget reflection generation for a closed trade."""
+    from config import REFLECTIONS_ENABLED
+    from reflections import trade_eligible
+    if not REFLECTIONS_ENABLED or not trade_eligible(trade_record):
+        return
+
+    def worker():
+        global _reflection_chat_fn, _reflection_chat_ready
+        try:
+            if not _reflection_chat_ready:
+                from llm_util import make_chat_fn
+                _reflection_chat_fn = make_chat_fn()
+                _reflection_chat_ready = True
+            if _reflection_chat_fn is None or decision_engine is None:
+                return
+            # Event currency from the decision row (the symbol's base
+            # currency is wrong for e.g. CAD events on USDCAD)
+            currency = None
+            d_id = trade_record.get('decision_id')
+            if d_id and decision_history is not None:
+                for d in decision_history.get_recent(300):
+                    if d.get('decision_id') == d_id:
+                        currency = d.get('currency')
+                        break
+            from reflections import generate_and_store
+            generate_and_store(_reflection_chat_fn,
+                               decision_engine.reflection_store,
+                               trade_record, currency=currency)
+        except Exception as e:
+            logger.warning(f"Reflection worker failed: {e}")
+
+    threading.Thread(target=worker, name="reflection", daemon=True).start()
 
 
 @app.route('/api/position/status', methods=['GET'])
@@ -1871,7 +1862,7 @@ def clear_test_signal():
 
 def cleanup_stale_registrations():
     """Remove stale pair registrations older than 1 hour"""
-    global registered_pairs, selected_pairs, executed_trades
+    global registered_pairs, executed_trades
 
     # Drop market data from EAs that stopped pushing (dead charts) — the age
     # gate in _build_market_context_for_event ignores them anyway, this just
@@ -1900,8 +1891,6 @@ def cleanup_stale_registrations():
 
         for key in stale_keys:
             del registered_pairs[key]
-            if key in selected_pairs:
-                del selected_pairs[key]
             logger.info(f"Cleaned up stale registration: {key}")
 
     # Also clean up old executed_trades (older than 24 hours)

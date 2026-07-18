@@ -1122,6 +1122,27 @@
                 </div>
             </div>
 
+            <!-- Playbook distillation proposals (F5) -->
+            <div class="config-section">
+                <h3>Playbook proposals (AI-drafted, wymagają Twojej zgody)</h3>
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+                    <input type="text" id="distillEventName" placeholder="Event name (np. CPI m/m)"
+                           style="flex:1;min-width:180px;padding:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px">
+                    <select id="distillCurrency"
+                            style="padding:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:4px">
+                        <option>USD</option><option>NZD</option><option>CAD</option>
+                        <option>AUD</option><option>GBP</option>
+                    </select>
+                    <button class="btn btn-secondary" id="btnDistill">Generate proposal</button>
+                </div>
+                <div id="proposalsRows"><div class="no-data">No pending proposals</div></div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
+                    Model (tier exit) destyluje ZMIERZONE statystyki eventu do wpisu playbooka —
+                    jako częstości z n=, nie nakazy. NIC nie zapisuje się samo: Approve wpisuje
+                    do knowledge/event_playbooks.json (hot-reload), Reject tylko oznacza propozycję.
+                </div>
+            </div>
+
             <!-- Save Button -->
             <div class="config-actions">
                 <button class="btn btn-primary" id="btnSaveConfig">Save Configuration</button>
@@ -1178,6 +1199,14 @@
                     </tbody>
                 </table>
             </div>
+        </div>
+
+        <!-- Calibration ledger (F4): stated confidence vs measured outcomes -->
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">Calibration (stated confidence vs measured 5-min outcome)</span>
+            </div>
+            <div id="calibrationContent" class="no-data">No scored decisions yet</div>
         </div>
     </div>
 
@@ -1269,9 +1298,7 @@
                         <tr><td><b>InpUseStopLoss</b></td><td>Zawsze włączone — SL to podstawa wyliczenia lota.</td><td>true</td></tr>
                         <tr><td><b>InpEntrySecondsBefore</b></td><td>Wejście X sekund przed publikacją.</td><td>15</td></tr>
                         <tr><td><b>InpMaxHoldMinutes</b></td><td>Maksymalny czas trzymania pozycji — po nim zamknięcie bezwarunkowe.</td><td>30</td></tr>
-                        <tr><td><b>InpPartialCloseTP1 / InpTP1ClosePercent</b></td><td>Na TP1 zamyka część pozycji (domyślnie 50%) i realizuje zysk.</td><td>true / 50</td></tr>
-                        <tr><td><b>InpMoveSLToBreakeven</b></td><td>Po TP1 przesuwa SL na cenę wejścia — reszta pozycji jedzie "za darmo".</td><td>true</td></tr>
-                        <tr><td><b>InpTrailAfterTP1 / InpTrailDistancePips</b></td><td>Trailing stop po TP1 — goni cenę w odległości X pipsów.</td><td>true / 10</td></tr>
+                        <tr><td colspan="3" style="color:var(--text-muted)"><b>Zarządzanie wyjściem = SERWER.</b> Inputy InpExitStrategy / InpPartialCloseTP1 / InpTP1ClosePercent / InpMoveSLToBreakeven / InpTrailAfterTP1 / InpTrailDistancePips / InpFallbackExitMinutes USUNIĘTO 18.07.2026 — kod EA nigdy ich nie wykonywał (martwe przełączniki obiecujące działanie, którego nie było). Częściowe zamknięcia, przesunięcie SL i wyjście prowadzi silnik wyjścia na serwerze przez komendy MODIFY_SL / PARTIAL_CLOSE / CLOSE w odpowiedzi na /api/position/report. Po stronie EA zostaje tylko twardy limit czasu (InpMaxHoldMinutes) i awaryjny spread.</td></tr>
                         <tr><td><b>InpEmergencySpreadPips</b></td><td>Awaryjne zamknięcie otwartej pozycji, gdy spread przekroczy X pipsów.</td><td>15</td></tr>
                         <tr><td><b>InpPushMarketData / InpReportReactions</b></td><td>Wysyłka świec do serwera (kontekst dla LLM) + raportowanie reakcji po evencie (baza wiedzy). Nie wyłączać.</td><td>true / true</td></tr>
                     </tbody>
@@ -1910,6 +1937,7 @@
             // Save button
             $('btnSaveConfig').addEventListener('click', saveConfig);
             $('btnResetConfig').addEventListener('click', resetConfig);
+            $('btnDistill').addEventListener('click', distillPlaybook);
 
             // "Trade all events" persists immediately on toggle (not via the
             // bulk Save), so it can't be reset by a Save that races the load.
@@ -2062,6 +2090,93 @@
             }
         }
 
+        // ============================================================
+        // PLAYBOOK PROPOSALS (F5) — AI drafts, operator approves
+        // ============================================================
+        async function loadProposals() {
+            var box = $('proposalsRows');
+            try {
+                var data = await apiFetch('/api/playbooks/proposals?status=pending');
+                var rows = (data && data.proposals) || [];
+                if (!rows.length) {
+                    box.innerHTML = '<div class="no-data">No pending proposals</div>';
+                    return;
+                }
+                box.innerHTML = '';
+                rows.forEach(function(p) {
+                    var div = document.createElement('div');
+                    div.style.cssText = 'border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:8px;font-size:0.8rem';
+                    var cur = p.current
+                        ? escapeHtml(JSON.stringify(p.current, null, 1))
+                        : '(brak wpisu — nowy)';
+                    var prop = escapeHtml(JSON.stringify(p.proposed, null, 1));
+                    div.innerHTML =
+                        '<div style="font-weight:600;margin-bottom:4px">' +
+                            escapeHtml(p.currency + ' ' + p.event_name) +
+                            ' <span style="color:var(--text-muted);font-weight:400">(' +
+                            escapeHtml((p.created_at || '').substring(0, 16)) + ')</span></div>' +
+                        '<div style="color:var(--text-muted)">OBECNY:</div>' +
+                        '<pre style="white-space:pre-wrap;margin:2px 0 6px">' + cur + '</pre>' +
+                        '<div style="color:var(--accent-green)">PROPONOWANY:</div>' +
+                        '<pre style="white-space:pre-wrap;margin:2px 0 6px">' + prop + '</pre>' +
+                        (p.rationale ? '<div style="color:var(--text-muted);margin-bottom:6px">Dlaczego: ' +
+                            escapeHtml(p.rationale) + '</div>' : '');
+                    var actions = document.createElement('div');
+                    ['approve', 'reject'].forEach(function(action) {
+                        var btn = document.createElement('button');
+                        btn.className = 'btn ' + (action === 'approve' ? 'btn-primary' : 'btn-secondary');
+                        btn.textContent = action === 'approve' ? 'Approve (zapisz do playbooka)' : 'Reject';
+                        btn.style.marginRight = '6px';
+                        btn.addEventListener('click', async function() {
+                            btn.disabled = true;
+                            try {
+                                var resp = await fetch(BASE_URL + '/api/playbooks/proposals/decide', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ id: p.id, action: action })
+                                });
+                                var body = await resp.json();
+                                if (resp.ok) {
+                                    showToast('Proposal ' + action + 'd: ' + p.event_name);
+                                } else {
+                                    showToast('Failed: ' + (body.message || resp.status), false);
+                                }
+                            } catch(e) { showToast('Failed: ' + e.message, false); }
+                            loadProposals();
+                        });
+                        actions.appendChild(btn);
+                    });
+                    div.appendChild(actions);
+                    box.appendChild(div);
+                });
+            } catch(e) {
+                box.innerHTML = '<div class="no-data">Server offline</div>';
+            }
+        }
+
+        async function distillPlaybook() {
+            var name = ($('distillEventName').value || '').trim();
+            var currency = $('distillCurrency').value;
+            if (!name) { showToast('Podaj nazwę eventu', false); return; }
+            var btn = $('btnDistill');
+            btn.disabled = true; btn.textContent = 'Generating… (do ~60s)';
+            try {
+                var resp = await fetch(BASE_URL + '/api/playbooks/distill', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ event_name: name, currency: currency })
+                });
+                var body = await resp.json();
+                if (resp.ok) {
+                    showToast('Proposal drafted — review below');
+                    loadProposals();
+                } else {
+                    showToast('Distill failed: ' + (body.message || resp.status), false);
+                }
+            } catch(e) { showToast('Distill failed: ' + e.message, false); }
+            btn.disabled = false; btn.textContent = 'Generate proposal';
+        }
+
         function resetConfig() {
             // Check all Tier 1
             TIER1_EVENTS.forEach(function(name) {
@@ -2168,6 +2283,54 @@
             // Also refresh position management log + persistent history
             refreshAILog();
             refreshDecisionHistory();
+            refreshCalibration();
+        }
+
+        async function refreshCalibration() {
+            try {
+                var data = await apiFetch('/api/calibration');
+                var c = (data && data.calibration) || {};
+                var el = $('calibrationContent');
+                if (!c.n_scored) {
+                    var skipsOnly = (c.skips && c.skips.n) || 0;
+                    el.className = 'no-data';
+                    el.innerHTML = skipsOnly
+                        ? 'No measured directional calls yet (' + skipsOnly + ' SKIPs recorded)'
+                        : 'No scored decisions yet (forced/demo decisions are excluded)';
+                    return;
+                }
+                var gap = Math.round((c.avg_confidence - c.hit_rate) * 100);
+                var verdict = gap >= 5 ? ('<span style="color:var(--accent-red)">overconfident by ' + gap + ' pts</span>')
+                            : gap <= -5 ? ('<span style="color:var(--accent-green)">underconfident by ' + (-gap) + ' pts</span>')
+                            : '<span style="color:var(--accent-green)">well calibrated</span>';
+                var html = '<div style="font-size:0.85rem;line-height:1.7">' +
+                    '<b>' + c.n_scored + '</b> measured directional calls: stated confidence avg <b>' +
+                    Math.round(c.avg_confidence * 100) + '%</b>, hit rate <b>' +
+                    Math.round(c.hit_rate * 100) + '%</b> (Brier ' + c.brier + ') — ' + verdict;
+                if (c.n_flat_excluded) html += ' <span style="color:var(--text-muted)">(+' + c.n_flat_excluded + ' flat &lt;1 pip excluded)</span>';
+                html += '</div>';
+                var rows = '';
+                (c.buckets || []).forEach(function(b) {
+                    rows += '<tr><td>' + escapeHtml(b.label) + '</td><td>' + b.n + '</td><td>' +
+                        (b.n ? Math.round(b.avg_confidence * 100) + '%' : '--') + '</td><td>' +
+                        (b.n ? Math.round(b.hit_rate * 100) + '%' : '--') + '</td></tr>';
+                });
+                if (rows) {
+                    html += '<table style="margin-top:6px"><thead><tr><th>Stated conf</th><th>n</th><th>Avg stated</th><th>Actual hit</th></tr></thead><tbody>' + rows + '</tbody></table>';
+                }
+                if (c.skips && c.skips.n) {
+                    html += '<div style="font-size:0.8rem;color:var(--text-muted);margin-top:6px">SKIPs with measured paths: ' +
+                        c.skips.n + ', median |5-min move| ' + c.skips.median_abs_move_5min + ' pips, big movers (&ge;15 pips): ' +
+                        Math.round((c.skips.big_move_share || 0) * 100) + '%</div>';
+                }
+                var el2 = $('calibrationContent');
+                el2.className = '';
+                el2.innerHTML = html;
+            } catch(e) {
+                var errEl = $('calibrationContent');
+                errEl.className = 'no-data';
+                errEl.innerHTML = 'Failed to load calibration: ' + escapeHtml(e.message);
+            }
         }
 
         async function refreshDecisionHistory() {
@@ -2390,6 +2553,7 @@
                 } catch(e) { /* offline */ }
                 loadRiskConfig();
                 loadRegimes();
+                loadProposals();
             })();
         }
 

@@ -190,14 +190,8 @@ struct SPositionState {
 
 **Klasa CSmartExitManager:**
 ```cpp
-Init(host, port, strategy, ...)           // Inicjalizacja
+Init(host, port, use_zone_targets)        // Inicjalizacja
 OnNewPosition(ticket, symbol, direction, price, lots)  // Nowa pozycja
-OnTick(bid, ask)                          // Update na każdy tick
-ShouldClosePartial(price) -> bool         // Czy zamknąć częściowo?
-ShouldMoveSLToBreakeven(price) -> bool    // Czy przesunąć SL?
-ShouldTrailStop(price, &new_sl) -> bool   // Czy trailing?
-ShouldExitByTime() -> bool                // Czy timeout?
-ShouldExitByTarget(price) -> bool         // Czy TP2?
 GetTargetsFromServer(symbol, direction, &targets)  // Pobierz z API
 ```
 
@@ -206,15 +200,10 @@ GetTargetsFromServer(symbol, direction, &targets)  // Pobierz z API
 **Nowe inputy:**
 ```cpp
 input group "=== Smart Exit Settings ==="
-input ENUM_EXIT_STRATEGY InpExitStrategy = EXIT_HYBRID;
 input bool     InpUseZoneTargets = true;
-input bool     InpPartialCloseTP1 = true;
-input int      InpTP1ClosePercent = 50;
-input bool     InpMoveSLToBreakeven = true;
-input bool     InpTrailAfterTP1 = true;
-input double   InpTrailDistancePips = 10.0;
 input int      InpMaxHoldMinutes = 30;
-input int      InpFallbackExitMinutes = 15;
+// pozostałe inputy Smart Exit usunięte 18.07.2026 — czytały je wyłącznie
+// metody, których nigdy nie wywoływano; wyjściem steruje serwer
 ```
 
 **Globalne zmienne dodane:**

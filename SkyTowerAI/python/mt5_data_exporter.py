@@ -12,8 +12,8 @@ Provides:
 import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Tuple
+from datetime import datetime
+from typing import Optional, Dict
 from loguru import logger
 from scipy.stats import pearsonr
 
@@ -101,35 +101,6 @@ class MT5DataExporter:
         logger.info(f"Fetched {len(df)} bars for {symbol}")
         return df
 
-    def get_ohlcv_range(self, symbol: str, timeframe: int,
-                        start: datetime, end: datetime) -> Optional[pd.DataFrame]:
-        """
-        Fetch OHLCV data for specific date range
-
-        Args:
-            symbol: e.g., "NZDUSD"
-            timeframe: MT5 timeframe constant
-            start: start datetime
-            end: end datetime
-
-        Returns:
-            pandas DataFrame
-        """
-        if not self.connected:
-            logger.error("Not connected to MT5")
-            return None
-
-        rates = mt5.copy_rates_range(symbol, timeframe, start, end)
-
-        if rates is None:
-            logger.error(f"Failed to get rates for {symbol}: {mt5.last_error()}")
-            return None
-
-        df = pd.DataFrame(rates)
-        df['time'] = pd.to_datetime(df['time'], unit='s')
-
-        return df
-
     def get_current_price(self, symbol: str) -> Optional[Dict]:
         """
         Get current bid/ask prices
@@ -179,59 +150,6 @@ class MT5DataExporter:
 
         values = mt5.copy_buffer(handle, 0, 0, bars)
         return np.array(values) if values is not None else None
-
-    def get_sma(self, symbol: str, timeframe: int, period: int = 20,
-                bars: int = 5000) -> Optional[np.ndarray]:
-        """
-        Fetch SMA values from MT5 built-in indicator
-
-        Args:
-            symbol: e.g., "NZDUSD"
-            timeframe: MT5 timeframe constant
-            period: SMA period (default 20)
-            bars: number of values to fetch
-
-        Returns:
-            numpy array of SMA values
-        """
-        if not self.connected:
-            return None
-
-        handle = mt5.iMA(symbol, timeframe, period, 0, mt5.MODE_SMA, mt5.PRICE_CLOSE)
-
-        if handle == mt5.INVALID_HANDLE:
-            logger.error(f"Failed to create SMA handle for {symbol}")
-            return None
-
-        values = mt5.copy_buffer(handle, 0, 0, bars)
-        return np.array(values) if values is not None else None
-
-    def get_atr(self, symbol: str, timeframe: int, period: int = 14,
-                bars: int = 5000) -> Optional[np.ndarray]:
-        """
-        Fetch ATR values from MT5 built-in indicator
-
-        Args:
-            symbol: e.g., "NZDUSD"
-            timeframe: MT5 timeframe constant
-            period: ATR period (default 14)
-            bars: number of values to fetch
-
-        Returns:
-            numpy array of ATR values
-        """
-        if not self.connected:
-            return None
-
-        handle = mt5.iATR(symbol, timeframe, period)
-
-        if handle == mt5.INVALID_HANDLE:
-            logger.error(f"Failed to create ATR handle for {symbol}")
-            return None
-
-        values = mt5.copy_buffer(handle, 0, 0, bars)
-        return np.array(values) if values is not None else None
-
 
 class IndicatorValidator:
     """
@@ -288,21 +206,6 @@ class IndicatorValidator:
             "samples": len(mt5_clean),
             "threshold": self.threshold
         }
-
-    def validate_rsi(self, close: np.ndarray, period: int, mt5_rsi: np.ndarray) -> Dict:
-        """
-        Validate Python RSI against MT5 RSI
-
-        Args:
-            close: close prices array
-            period: RSI period
-            mt5_rsi: RSI values from MT5
-
-        Returns:
-            validation result dict
-        """
-        python_rsi = self._calculate_rsi(close, period)
-        return self.validate(mt5_rsi, python_rsi)
 
     def _calculate_rsi(self, close: np.ndarray, period: int = 14) -> np.ndarray:
         """

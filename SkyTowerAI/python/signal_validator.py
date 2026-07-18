@@ -10,11 +10,9 @@ Provides:
 """
 
 import MetaTrader5 as mt5
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List
-from dataclasses import dataclass, asdict
+from typing import Optional, Dict
+from dataclasses import dataclass
 from loguru import logger
 import json
 import sqlite3
@@ -297,119 +295,6 @@ class SignalValidator:
             conn.close()
         except Exception as e:
             logger.error(f"Failed to store validation: {e}")
-
-    def monitor_spread(self, symbol: str, duration_seconds: int = 60,
-                       interval_ms: int = 500) -> List[Dict]:
-        """
-        Monitor spread for a period
-
-        Args:
-            symbol: Trading symbol
-            duration_seconds: How long to monitor
-            interval_ms: Check interval in milliseconds
-
-        Returns:
-            List of spread readings
-        """
-        if not self.connected:
-            if not self.connect():
-                return []
-
-        readings = []
-        start_time = datetime.now()
-        end_time = start_time + timedelta(seconds=duration_seconds)
-
-        symbol_info = mt5.symbol_info(symbol)
-        if symbol_info is None:
-            return []
-
-        point = symbol_info.point
-
-        while datetime.now() < end_time:
-            tick = mt5.symbol_info_tick(symbol)
-            if tick:
-                spread_pips = (tick.ask - tick.bid) / point / 10
-                readings.append({
-                    "time": datetime.now().isoformat(),
-                    "bid": tick.bid,
-                    "ask": tick.ask,
-                    "spread_pips": spread_pips
-                })
-
-            import time
-            time.sleep(interval_ms / 1000)
-
-        return readings
-
-    def record_trade_result(self, ticket: int, symbol: str, direction: str,
-                            entry_price: float, spread_at_entry: float,
-                            event_name: str, confidence: float):
-        """
-        Record a trade for later analysis
-
-        Args:
-            ticket: MT5 order ticket
-            symbol: Trading symbol
-            direction: BUY or SELL
-            entry_price: Entry price
-            spread_at_entry: Spread at entry time
-            event_name: Name of the event
-            confidence: Signal confidence
-        """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            INSERT INTO trade_results
-            (ticket, symbol, direction, entry_price, entry_time, spread_at_entry,
-             event_name, confidence)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            ticket,
-            symbol,
-            direction,
-            entry_price,
-            datetime.now().isoformat(),
-            spread_at_entry,
-            event_name,
-            confidence
-        ))
-
-        conn.commit()
-        conn.close()
-
-    def update_trade_result(self, ticket: int, exit_price: float, profit: float):
-        """
-        Update trade with exit information
-
-        Args:
-            ticket: MT5 order ticket
-            exit_price: Exit price
-            profit: Trade profit
-        """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        # Get entry price to calculate pips
-        cursor.execute("SELECT entry_price, direction FROM trade_results WHERE ticket = ?", (ticket,))
-        row = cursor.fetchone()
-
-        pips = 0
-        if row:
-            entry_price, direction = row
-            diff = exit_price - entry_price
-            if direction == "SELL":
-                diff = -diff
-            pips = diff * 10000  # Convert to pips (for 4-digit pairs)
-
-        cursor.execute("""
-            UPDATE trade_results
-            SET exit_price = ?, exit_time = ?, profit = ?, pips = ?
-            WHERE ticket = ?
-        """, (exit_price, datetime.now().isoformat(), profit, pips, ticket))
-
-        conn.commit()
-        conn.close()
 
     def get_statistics(self, days: int = 30) -> Dict:
         """

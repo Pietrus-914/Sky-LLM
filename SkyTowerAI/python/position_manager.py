@@ -7,7 +7,7 @@ import json
 import os
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from timeutil import utcnow
 from typing import Dict, Optional, List
 from dataclasses import dataclass, field, asdict
@@ -301,7 +301,9 @@ class PositionManager:
                 "opened_at": "",
                 "closed_at": utcnow().isoformat(),
                 "decisions_count": 0,
-                "decision_id": "",
+                # EA echo (F2): keeps lineage even for an orphaned close,
+                # where the opened-time binding died with the old process
+                "decision_id": str(data.get("decision_id") or ""),
                 "forced": False,
                 "entry_price": 0.0,
                 "close_price": data.get("close_price", 0.0),
@@ -326,7 +328,9 @@ class PositionManager:
                     "event_name": self.position.event_name,
                     "opened_at": self.position.open_time.isoformat(),
                     "decisions_count": len(self.position.ai_decisions),
-                    "decision_id": self.position.decision_id,
+                    # Tracked binding first (set at open), EA echo as backup
+                    "decision_id": (self.position.decision_id
+                                    or str(data.get("decision_id") or "")),
                     "forced": self.position.forced,
                     "entry_price": self.position.entry_price,
                     "sl": self.position.sl,
@@ -357,6 +361,9 @@ class PositionManager:
 
         # Disk write outside the lock — see _write_history_line
         self._write_history_line(record)
+        # Returned so the server can hand the closed trade to post-trade
+        # consumers (F5 reflections) without re-reading the JSONL
+        return record
 
     def update_position(self, data: Dict) -> Dict:
         """

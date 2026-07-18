@@ -176,56 +176,30 @@ private:
    int               m_timeout_ms;
 
    // Exit settings (from EA inputs)
-   ENUM_EXIT_STRATEGY m_exit_strategy;
-   int               m_fallback_exit_minutes;
-   int               m_max_hold_minutes;
    bool              m_use_zone_targets;
-   bool              m_partial_close_at_tp1;
-   bool              m_move_sl_to_be;
-   bool              m_trail_after_tp1;
-   double            m_trail_distance_pips;
 
    // Current position state
    SPositionState    m_position;
 
    // Helper methods
-   bool              SendOHLCToServer(string symbol, string direction, STradeTargets &targets);
-   string            BuildOHLCJson(string symbol, int bars_count);
    bool              ParseTargetsResponse(string json, STradeTargets &targets);
    double            PipsToPrice(double pips, string symbol);
-   double            PriceToPips(double price_diff, string symbol);
 
 public:
                      CSmartExitManager();
                     ~CSmartExitManager();
 
    // Initialization
-   void              Init(string host, int port,
-                         ENUM_EXIT_STRATEGY strategy,
-                         int fallback_minutes,
-                         int max_hold_minutes,
-                         bool use_zone_targets,
-                         bool partial_close,
-                         bool move_sl_to_be,
-                         bool trail_after_tp1,
-                         double trail_pips);
+   void              Init(string host, int port, bool use_zone_targets);
 
    // Position management
    bool              OnNewPosition(ulong ticket, string symbol, string direction,
                                   double entry_price, double lots);
-   bool              OnTick(double bid, double ask);
    bool              OnPositionClosed();
 
    // Zone/Target retrieval
    bool              GetTargetsFromServer(string symbol, string direction, STradeTargets &targets);
-   bool              GetZoneAnalysisFromServer(string symbol, SZoneAnalysis &analysis);
 
-   // Exit logic
-   bool              ShouldClosePartial(double current_price);
-   bool              ShouldMoveSLToBreakeven(double current_price);
-   bool              ShouldTrailStop(double current_price, double &new_sl);
-   bool              ShouldExitByTime();
-   bool              ShouldExitByTarget(double current_price);
 
    // Getters
    STradeTargets     GetCurrentTargets() { return m_position.targets; }
@@ -243,14 +217,7 @@ CSmartExitManager::CSmartExitManager()
    m_server_port = 5555;
    m_timeout_ms = 5000;
 
-   m_exit_strategy = EXIT_HYBRID;
-   m_fallback_exit_minutes = 15;
-   m_max_hold_minutes = 30;
    m_use_zone_targets = true;
-   m_partial_close_at_tp1 = true;
-   m_move_sl_to_be = true;
-   m_trail_after_tp1 = true;
-   m_trail_distance_pips = 10;
 
    m_position.Clear();
 }
@@ -265,29 +232,15 @@ CSmartExitManager::~CSmartExitManager()
 //+------------------------------------------------------------------+
 //| Initialize with settings                                          |
 //+------------------------------------------------------------------+
-void CSmartExitManager::Init(string host, int port,
-                             ENUM_EXIT_STRATEGY strategy,
-                             int fallback_minutes,
-                             int max_hold_minutes,
-                             bool use_zone_targets,
-                             bool partial_close,
-                             bool move_sl_to_be,
-                             bool trail_after_tp1,
-                             double trail_pips)
+void CSmartExitManager::Init(string host, int port, bool use_zone_targets)
 {
    m_server_host = host;
    m_server_port = port;
-   m_exit_strategy = strategy;
-   m_fallback_exit_minutes = fallback_minutes;
-   m_max_hold_minutes = max_hold_minutes;
    m_use_zone_targets = use_zone_targets;
-   m_partial_close_at_tp1 = partial_close;
-   m_move_sl_to_be = move_sl_to_be;
-   m_trail_after_tp1 = trail_after_tp1;
-   m_trail_distance_pips = trail_pips;
 
-   Print("SmartExitManager initialized: strategy=", EnumToString(strategy),
-         ", fallback=", fallback_minutes, "min, max_hold=", max_hold_minutes, "min");
+   Print("SmartExitManager initialized: zone targets=",
+         m_use_zone_targets ? "on" : "off",
+         " (exit management is server-owned: MODIFY_SL / CLOSE commands)");
 }
 
 //+------------------------------------------------------------------+
@@ -353,25 +306,6 @@ bool CSmartExitManager::OnNewPosition(ulong ticket, string symbol, string direct
 }
 
 //+------------------------------------------------------------------+
-//| Called on each tick to update position state                      |
-//+------------------------------------------------------------------+
-bool CSmartExitManager::OnTick(double bid, double ask)
-{
-   if(m_position.ticket == 0)
-      return false;
-
-   double current_price = (m_position.direction == "BUY") ? bid : ask;
-
-   // Update high/low tracking
-   if(current_price > m_position.highest_price)
-      m_position.highest_price = current_price;
-   if(current_price < m_position.lowest_price)
-      m_position.lowest_price = current_price;
-
-   return true;
-}
-
-//+------------------------------------------------------------------+
 //| Called when position is closed                                    |
 //+------------------------------------------------------------------+
 bool CSmartExitManager::OnPositionClosed()
@@ -420,42 +354,6 @@ bool CSmartExitManager::GetTargetsFromServer(string symbol, string direction, ST
 
    string result = CharArrayToString(result_data, 0, WHOLE_ARRAY, CP_UTF8);
    return ParseTargetsResponse(result, targets);
-}
-
-//+------------------------------------------------------------------+
-//| Build OHLC JSON from chart data                                   |
-//+------------------------------------------------------------------+
-string CSmartExitManager::BuildOHLCJson(string symbol, int bars_count)
-{
-   MqlRates rates[];
-   ArraySetAsSeries(rates, true);
-
-   int copied = CopyRates(symbol, PERIOD_M1, 0, bars_count, rates);
-   if(copied < 10)
-   {
-      Print("Failed to copy rates: ", copied);
-      return "";
-   }
-
-   string json = "[";
-
-   for(int i = copied - 1; i >= 0; i--)  // Oldest first
-   {
-      if(i < copied - 1)
-         json += ",";
-
-      json += "{";
-      json += "\"time\":" + IntegerToString((long)rates[i].time) + ",";
-      json += "\"open\":" + DoubleToString(rates[i].open, 5) + ",";
-      json += "\"high\":" + DoubleToString(rates[i].high, 5) + ",";
-      json += "\"low\":" + DoubleToString(rates[i].low, 5) + ",";
-      json += "\"close\":" + DoubleToString(rates[i].close, 5) + ",";
-      json += "\"volume\":" + IntegerToString(rates[i].tick_volume);
-      json += "}";
-   }
-
-   json += "]";
-   return json;
 }
 
 //+------------------------------------------------------------------+
@@ -518,128 +416,6 @@ bool CSmartExitManager::ParseTargetsResponse(string json, STradeTargets &targets
 }
 
 //+------------------------------------------------------------------+
-//| Check if should close partial position                            |
-//+------------------------------------------------------------------+
-bool CSmartExitManager::ShouldClosePartial(double current_price)
-{
-   if(!m_partial_close_at_tp1 || m_position.tp1_hit)
-      return false;
-
-   if(m_position.direction == "BUY")
-   {
-      if(current_price >= m_position.targets.tp1)
-      {
-         m_position.tp1_hit = true;
-         return true;
-      }
-   }
-   else // SELL
-   {
-      if(current_price <= m_position.targets.tp1)
-      {
-         m_position.tp1_hit = true;
-         return true;
-      }
-   }
-
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Check if should move SL to break-even                             |
-//+------------------------------------------------------------------+
-bool CSmartExitManager::ShouldMoveSLToBreakeven(double current_price)
-{
-   if(!m_move_sl_to_be || m_position.sl_moved_to_be || !m_position.tp1_hit)
-      return false;
-
-   // Already past TP1, move SL to break-even
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Check if should trail stop                                        |
-//+------------------------------------------------------------------+
-bool CSmartExitManager::ShouldTrailStop(double current_price, double &new_sl)
-{
-   if(!m_trail_after_tp1 || !m_position.tp1_hit)
-      return false;
-
-   double trail_distance = PipsToPrice(m_trail_distance_pips, m_position.symbol);
-
-   if(m_position.direction == "BUY")
-   {
-      double potential_sl = m_position.highest_price - trail_distance;
-      if(potential_sl > m_position.targets.sl)
-      {
-         new_sl = potential_sl;
-         return true;
-      }
-   }
-   else // SELL
-   {
-      double potential_sl = m_position.lowest_price + trail_distance;
-      if(potential_sl < m_position.targets.sl)
-      {
-         new_sl = potential_sl;
-         return true;
-      }
-   }
-
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Check if should exit by time (fallback/max hold)                  |
-//+------------------------------------------------------------------+
-bool CSmartExitManager::ShouldExitByTime()
-{
-   int minutes_open = (int)((TimeCurrent() - m_position.open_time) / 60);
-
-   // Max hold time exceeded
-   if(minutes_open >= m_max_hold_minutes)
-      return true;
-
-   // Hybrid mode: fallback exit if no TP1 hit and time exceeded
-   if(m_exit_strategy == EXIT_HYBRID && !m_position.tp1_hit)
-   {
-      if(minutes_open >= m_fallback_exit_minutes)
-         return true;
-   }
-
-   // Time-based mode: always exit after fallback time
-   if(m_exit_strategy == EXIT_TIME_BASED)
-   {
-      if(minutes_open >= m_fallback_exit_minutes)
-         return true;
-   }
-
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Check if should exit by reaching TP2                              |
-//+------------------------------------------------------------------+
-bool CSmartExitManager::ShouldExitByTarget(double current_price)
-{
-   if(m_exit_strategy == EXIT_TIME_BASED)
-      return false;
-
-   if(m_position.direction == "BUY")
-   {
-      if(current_price >= m_position.targets.tp2)
-         return true;
-   }
-   else // SELL
-   {
-      if(current_price <= m_position.targets.tp2)
-         return true;
-   }
-
-   return false;
-}
-
-//+------------------------------------------------------------------+
 //| Convert pips to price                                             |
 //+------------------------------------------------------------------+
 double CSmartExitManager::PipsToPrice(double pips, string symbol)
@@ -653,17 +429,4 @@ double CSmartExitManager::PipsToPrice(double pips, string symbol)
       return pips * point;
 }
 
-//+------------------------------------------------------------------+
-//| Convert price difference to pips                                  |
-//+------------------------------------------------------------------+
-double CSmartExitManager::PriceToPips(double price_diff, string symbol)
-{
-   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-
-   if(digits == 3 || digits == 5)
-      return MathAbs(price_diff) / (point * 10);
-   else
-      return MathAbs(price_diff) / point;
-}
 //+------------------------------------------------------------------+

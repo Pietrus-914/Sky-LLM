@@ -1,7 +1,10 @@
 # SkyTower-AI — Plan uruchomienia krok po kroku
 
-Stan na 08.07.2026: 180 testów zielonych, EA skompilowany (0 err/0 warn),
-dry-run E2E przeszedł. Tryb testowy FORCE_DECISION aktywny — **tylko konto DEMO**.
+Stan na 18.07.2026: 379 testów zielonych, EA skompilowany (0 err/0 warn),
+learning loop F0-F4 wdrożony (rejestrator ścieżek, learned stats w prompcie,
+echo decision_id przez EA, ledger kalibracji, opcjonalny ensemble K).
+Tryb testowy FORCE_DECISION aktywny — **tylko konto DEMO**.
+**Tryb podstawowy: NATYWNY Python (START.bat). Docker = wariant zapasowy.**
 
 ## NAJPROŚCIEJ (po jednorazowej instalacji): kliknij START.bat
 
@@ -10,43 +13,39 @@ jednym kliknięciem; można klikać wielokrotnie, nie zdubluje procesów.
 Docker NIE jest potrzebny — serwer działa natywnie w Pythonie.
 Wymagania jednorazowe: Python 3.10+ w PATH, plik `python\.env`
 (OPENROUTER_API_KEY + SKYTOWER_FORCE_DECISION=true), MT5 skonfigurowany
-(allowlist WebRequest, EA na wykresach — KROK 3 poniżej).
+(allowlist WebRequest, EA na wykresach — KROK 2 poniżej).
 Autostart po restarcie komputera: uruchom raz `install_autostart.ps1`.
 
 ## Pliki, które biorą udział w uruchomieniu
 
 | Rola | Ścieżka |
 |------|---------|
-| Serwer (Docker) | `C:\Users\pietr\Documents\Sky tower\SkyTowerAI\docker-compose.yml` |
+| Serwer (natywnie) | `START.bat` / `start_server.bat` (Docker legacy: `docker-compose.yml`) |
 | Klucz API | `C:\Users\pietr\Documents\Sky tower\SkyTowerAI\python\.env` (OPENROUTER_API_KEY) |
 | EA — źródło | `C:\Users\pietr\Documents\Sky tower\SkyTowerAI\mt5\SkyTowerAI_EA.mq5` |
 | EA — skompilowany | `...\mt5\SkyTowerAI_EA.ex5` → **już wgrany** do `%APPDATA%\MetaQuotes\Terminal\F225742ADC2EE896672C03839B31B81B\MQL5\Experts\` |
 | Wskaźnik stref | `...\mt5\SkyTower_Zones.ex5` → **już wgrany** do `...\MQL5\Indicators\` |
-| Logi/decyzje (host) | `C:\Users\pietr\Documents\Sky tower\SkyTowerAI\python\logs\` (decision_history.jsonl, event_reactions.jsonl, server.log) |
+| Logi/decyzje (host) | `C:\Users\pietr\Documents\Sky tower\SkyTowerAI\python\logs\` (decision_history.jsonl, event_reactions.jsonl, event_paths.jsonl, trade_history.jsonl, currency_regimes.json, decision_context/, server.log) |
 
-## KROK 1 — Docker Desktop (jednorazowo)
+## KROK 1 — Start serwera (natywnie, tryb podstawowy)
 
-1. Uruchom Docker Desktop.
-2. Settings → General → zaznacz **"Start Docker Desktop when you sign in"**
-   (największe ryzyko operacyjne to Docker nieżyjący w momencie eventu).
-
-## KROK 2 — Start serwera
-
-```powershell
-cd "C:\Users\pietr\Documents\Sky tower\SkyTowerAI"
-docker compose up -d --build
-```
+Kliknij `START.bat` (albo `start_server.bat` dla samego serwera).
 
 Weryfikacja:
 ```powershell
 curl http://127.0.0.1:5555/health          # -> {"status":"ok",...}
-docker compose logs --tail 20              # -> banner "FORCE_DECISION TEST MODE IS ACTIVE"
+Get-Content python\logs\server.log -Tail 20  # -> banner "FORCE_DECISION TEST MODE IS ACTIVE"
+```
+Dashboard: http://127.0.0.1:5555/  Autostart po restarcie: `install_autostart.ps1`.
+
+### Wariant zapasowy: Docker (LEGACY — od 10.07.2026 nieużywany)
+
+```powershell
+cd "C:\Users\pietr\Documents\Sky tower\SkyTowerAI"
+docker compose up -d --build   # wymaga Docker Desktop z autostartem
 ```
 
-Serwer sam wstaje po restarcie komputera (`restart: unless-stopped`),
-o ile Docker Desktop działa. Dashboard: http://127.0.0.1:5555/
-
-## KROK 3 — MT5 (Purple Trading, konto DEMO)
+## KROK 2 — MT5 (Purple Trading, konto DEMO)
 
 1. Uruchom terminal: `C:\Program Files\Purple Trading MT5 Terminal\terminal64.exe`
    i zaloguj na konto **demo**.
@@ -64,60 +63,88 @@ o ile Docker Desktop działa. Dashboard: http://127.0.0.1:5555/
 6. W zakładce Experts (Toolbox) sprawdź log EA: powinno być połączenie z serwerem
    bez błędu 4014 (jeśli jest 4014 → wróć do punktu 2).
 
-## KROK 4 — Weryfikacja obiegu danych (po ~2 minutach)
+## KROK 3 — Weryfikacja obiegu danych (po ~2 minutach)
 
 ```powershell
-docker compose logs --since 3m | Select-String "Market data received"
+Get-Content python\logs\server.log -Tail 200 | Select-String "Market data received"
 ```
 Powinny pojawiać się wpisy dla każdej pary co ~60 s. To znaczy: EA → serwer działa.
 
-## KROK 5 (opcjonalnie) — Próba generalna z fałszywym eventem
+## KROK 4 (opcjonalnie) — Próba generalna z fałszywym eventem
 
 Pełny cykl (analiza → sygnał → wejście 15 s przed → zarządzanie → wyjście)
 bez czekania na realny kalendarz. Na koncie demo z podpiętym EA (USDCAD):
 
-```powershell
-cd "C:\Users\pietr\Documents\Sky tower\SkyTowerAI"
-docker compose down
-docker run --rm -d --name skytower-dryrun -p 127.0.0.1:5555:5555 `
-  --env-file python/.env -e SKYTOWER_HOST=0.0.0.0 -e TZ=UTC `
-  -e SKYTOWER_FORCE_DECISION=true -e SKYTOWER_FAKE_EVENT_IN_SECONDS=240 `
-  skytowerai-skytower
-```
-Obserwuj: log kontenera (`docker logs -f skytower-dryrun`) + zakładkę Experts w MT5.
-EA powinien otworzyć pozycję ~15 s przed "eventem" i sam ją zamknąć.
-Reakcje z fake eventów są oznaczane `test:true` i nie zaśmiecają historii.
+1. Dopisz w `python\.env` linię: `SKYTOWER_FAKE_EVENT_IN_SECONDS=240`
+2. Zrestartuj serwer (zamknij okno i kliknij START.bat).
+3. Obserwuj `python\logs\server.log` + zakładkę Experts w MT5.
+   EA powinien otworzyć pozycję ~15 s przed "eventem" i sam ją zamknąć.
+   Reakcje z fake eventów są oznaczane `test:true` i nie zaśmiecają historii.
+4. **Po próbie USUŃ tę linię z .env** i zrestartuj serwer ponownie.
 
-Po próbie wróć do normalnego trybu:
-```powershell
-docker stop skytower-dryrun
-docker compose up -d
-```
-
-## KROK 6 — Eksploatacja (codziennie 2 minuty)
+## KROK 5 — Eksploatacja (codziennie 2 minuty)
 
 - Dashboard: http://127.0.0.1:5555/ (eventy, decyzje, logi)
 - Zdrowie źródeł danych: `curl http://127.0.0.1:5555/api/datasources/status`
 - Decyzje: `python\logs\decision_history.jsonl` (pole `forced` odróżnia wymuszone)
 - Reakcje na eventy: `curl http://127.0.0.1:5555/api/event-reactions`
-- Błędy: `docker compose logs --since 24h | Select-String -Pattern "ERROR"`
+- Błędy: `Get-Content python\logs\server.log -Tail 2000 | Select-String "ERROR|WARNING"`
+- Kalibracja decyzji: karta Calibration (tab AI) albo `curl http://127.0.0.1:5555/api/calibration`
+- Reżimy walut: karta Currency Regimes albo `curl http://127.0.0.1:5555/api/regimes`
 
 ## Zatrzymanie / restart
 
-```powershell
-docker compose stop      # zatrzymaj (EA przestanie dostawać sygnały = nie handluje)
-docker compose start     # wznów
-docker compose up -d --build   # po każdej zmianie w kodzie python/
-```
+Natywnie: zamknij okno serwera (EA przestanie dostawać sygnały = nie handluje);
+START.bat wznawia. Po każdej zmianie w kodzie `python/` — restart okna serwera.
+(Docker legacy: `docker compose stop/start`, `up -d --build` po zmianach.)
 
 ## Po zmianach w EA (rekompilacja + wgranie)
 
+**UWAGA — metaeditor64 to aplikacja GUI: uruchomiona przez `&` NIE blokuje
+konsoli.** Stary log zostaje wtedy na dysku i czytasz wynik POPRZEDNIEJ
+kompilacji („0 errors" z zeszłego tygodnia). Zawsze: skasuj log, użyj
+`Start-Process -Wait`, potem SPRAWDŹ datę/rozmiar `.ex5`.
+
 ```powershell
-& "C:\Program Files\Purple Trading MT5 Terminal\metaeditor64.exe" /compile:"C:\Users\pietr\Documents\Sky tower\SkyTowerAI\mt5\SkyTowerAI_EA.mq5" /log
+$me  = "C:\Program Files\Purple Trading MT5 Terminal\metaeditor64.exe"
+$src = "C:\Users\pietr\Documents\Sky tower\SkyTowerAI\mt5\SkyTowerAI_EA.mq5"
+$log = "C:\Users\pietr\Documents\Sky tower\SkyTowerAI\mt5\SkyTowerAI_EA.log"
+if (Test-Path $log) { Remove-Item $log -Force }
+Start-Process -FilePath $me -ArgumentList "/compile:`"$src`"","/log:`"$log`"" -Wait
+Get-Content $log -Encoding Unicode | Select-String "Result"     # 0 errors, 0 warnings
+Get-Item ($src -replace '\.mq5$','.ex5') | Select-Object Name, Length, LastWriteTime  # data MUSI być dzisiejsza!
+
 Copy-Item "C:\Users\pietr\Documents\Sky tower\SkyTowerAI\mt5\SkyTowerAI_EA.ex5" "C:\Users\pietr\AppData\Roaming\MetaQuotes\Terminal\F225742ADC2EE896672C03839B31B81B\MQL5\Experts\" -Force
 ```
 Potem w MT5: prawym na wykres → Expert Advisors → usuń i podepnij ponownie
 (albo restart terminala).
+
+**Uwaga (F2, 17.07.2026):** EA echo'uje `decision_id` w raportach — na maszynie
+24/7 trzeba wgrać ZREKOMPILOWANY `.ex5` (stary EA działa, ale bez pełnego
+spięcia decyzja→trade→reakcja przy restarcie serwera w trakcie pozycji).
+
+## Learning loop (F0-F4) — operacje
+
+System sam zbiera dane do nauki; nic nie trzeba klikać. Co gdzie jest:
+
+- **Ścieżki cenowe WSZYSTKICH eventów** (traded/skipped): `python\logs\event_paths.jsonl`,
+  podgląd `GET /api/event-paths?limit=50`. Mierzone serwerowo z M1 pushowanych przez EA.
+- **Reżimy walut (auto)**: `GET/POST /api/regimes` + karta na dashboardzie
+  (override ręczny działa do następnej decyzji banku). EUR/JPY/CHF bez wykresów = tylko seed/manual.
+- **Wiedza w prompcie**: `python\knowledge\event_playbooks.json` (kuratorska, edytowalna)
+  + `python\knowledge\learned_stats.json` (MASZYNOWA — nie edytować ręcznie!).
+  Regeneracja statystyk (np. po miesiącach live danych):
+  ```powershell
+  cd "C:\Users\pietr\Documents\Sky tower\SkyTowerAI\python"
+  python tools/build_learned_stats.py    # NIE pipe'ować przez head! Hot-reload bez restartu.
+  ```
+- **Kalibracja decyzji**: `GET /api/calibration` + karta Calibration (tab AI);
+  linia w prompcie pojawia się automatycznie od n>=50 zmierzonych decyzji (bez forced).
+- **Ensemble K (opcjonalny)**: `SKYTOWER_ENSEMBLE_K=3` w `python\.env` + restart.
+  K równoległych calli LLM na decyzję: jednomyślność = trade, rozjazd = SKIP.
+  KOSZT: K x cena modelu wejściowego per event. Default 1 (wyłączony).
+- **Lineage**: decision_id spina decyzję → sygnał → trade → reakcję
+  (pełny kontekst decyzji: `python\logs\decision_context\<id>.json`, cap 2000 plików).
 
 ## Migracja na komputer 24/7 — wariant BEZ DOCKERA (słabszy sprzęt)
 
@@ -141,7 +168,7 @@ lżejszy (bez WSL2) i zalecany na słabszych maszynach.
    (restarty zapisują się w `python\logs\watchdog.log`).
 5. Weryfikacja: `curl http://127.0.0.1:5555/health` + w oknie serwera banner
    FORCE_DECISION.
-6. MT5: jak w KROKU 3 głównej instrukcji (allowlist WebRequest
+6. MT5: jak w KROKU 2 głównej instrukcji (allowlist WebRequest
    `http://127.0.0.1:5555`, Algo Trading ON, 4 wykresy + EA). Skompilowane
    `.ex5` przenieś ręcznie albo skompiluj na miejscu (sekcja B6 niżej).
 7. **Autostart + zasilanie** — uruchom raz (prawym → Run with PowerShell):
@@ -188,8 +215,15 @@ tylko serwer Python).
 6. EA: użyj przeniesionych `.ex5` (pkt. A2) albo skompiluj ze źródeł z repo
    (MetaEditor instaluje się razem z MT5; dostosuj ścieżkę instalacji):
    ```powershell
-   & "C:\Program Files\Purple Trading MT5 Terminal\metaeditor64.exe" /compile:"<repo>\SkyTowerAI\mt5\SkyTowerAI_EA.mq5" /log
-   & "C:\Program Files\Purple Trading MT5 Terminal\metaeditor64.exe" /compile:"<repo>\SkyTowerAI\mt5\SkyTower_Zones.mq5" /log
+   # patrz sekcja "Po zmianach w EA" — Start-Process -Wait + kasowanie logu,
+   # inaczej odczytasz wynik POPRZEDNIEJ kompilacji
+   $me = "C:\Program Files\Purple Trading MT5 Terminal\metaeditor64.exe"
+   foreach ($f in "SkyTowerAI_EA","SkyTower_Zones") {
+     $src = "<repo>\SkyTowerAI\mt5\$f.mq5"; $log = "<repo>\SkyTowerAI\mt5\$f.log"
+     if (Test-Path $log) { Remove-Item $log -Force }
+     Start-Process -FilePath $me -ArgumentList "/compile:`"$src`"","/log:`"$log`"" -Wait
+     Get-Content $log -Encoding Unicode | Select-String "Result"
+   }
    ```
    Potem w MT5: File → **Open Data Folder** (ścieżka datafolderu będzie INNA
    niż na starym komputerze!) → skopiuj `SkyTowerAI_EA.ex5` do `MQL5\Experts\`,

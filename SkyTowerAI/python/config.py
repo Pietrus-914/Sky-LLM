@@ -49,16 +49,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")  # Free tier available
 
 # =============================================================================
-# MT5 CONFIGURATION - Purple Trading
-# =============================================================================
-MT5_CONFIG = {
-    "login": int(os.getenv("MT5_LOGIN", 0)),
-    "password": os.getenv("MT5_PASSWORD", ""),
-    "server": os.getenv("MT5_SERVER", "PurpleTrading-MT5"),
-    "path": os.getenv("MT5_PATH", r"C:\Program Files\Purple Trading MT5\terminal64.exe")
-}
-
-# =============================================================================
 # TRADING PARAMETERS (based on SkyTower-FX strategy)
 # =============================================================================
 TRADING_CONFIG = {
@@ -173,15 +163,6 @@ NON_DATA_EVENT_MARKERS = [
     "projections",
 ]
 
-# Events suitable for LITE version (hedging both directions)
-LITE_EVENTS = {
-    "AUD": ["GDP", "CPI"],
-    "CAD": ["Interest Rate Decision", "Cash Rate"],
-    "NZD": ["CPI", "Official Cash Rate", "Employment Change"],
-    "SEK": ["Interest Rate Decision"],
-    "USD": ["Interest Rate Decision", "Non-Farm Payrolls"],
-}
-
 # =============================================================================
 # SPREAD & LIQUIDITY CONFIGURATION
 # =============================================================================
@@ -206,16 +187,6 @@ SPREAD_LOT_REDUCTION = {
     "high": {"threshold": 10, "multiplier": 0.6},    # -40% lota
     "extreme": {"threshold": 15, "multiplier": 0.0}, # Nie wchodź
 }
-
-# Godziny niskiej płynności (UTC) - unikaj tradowania
-LOW_LIQUIDITY_HOURS = {
-    "asian_gap": (21, 23),      # Przerwa między sesjami
-    "weekend_gap": (21, 22),    # Niedziela wieczór
-    "holiday_all_day": True,    # Święta
-}
-
-# Pary do unikania przy niskiej płynności
-AVOID_LOW_LIQUIDITY_PAIRS = ["AUDNZD", "NZDCAD", "GBPNZD", "EURNZD"]
 
 # =============================================================================
 # ZONE ANALYSIS CONFIGURATION (Smart Money Concepts)
@@ -264,33 +235,21 @@ EXIT_CONFIG = {
 }
 
 # =============================================================================
-# DATA SOURCES (FREE)
-# =============================================================================
-DATA_SOURCES = {
-    # Economic Calendar
-    "investing_calendar": "https://www.investing.com/economic-calendar/",
-    "myfxbook_calendar": "https://www.myfxbook.com/forex-economic-calendar",
-    "finnhub_calendar": "https://finnhub.io/api/v1/calendar/economic",
-
-    # COT Data (CFTC)
-    "cftc_cot": "https://publicreporting.cftc.gov/",
-
-    # Sentiment Data
-    "myfxbook_sentiment": "https://www.myfxbook.com/community/outlook",
-    "fxssi_sentiment": "https://fxssi.com/tools/current-ratio",
-    "dukascopy_sentiment": "https://www.dukascopy.com/swiss/english/marketwatch/sentiment/",
-}
-
-# =============================================================================
 # LLM CONFIGURATION
 # =============================================================================
 LLM_CONFIG = {
     "provider": "openrouter",  # "openrouter", "anthropic", "openai", "rule-based"
-    "model": "anthropic/claude-opus-4",  # Best for critical financial decisions
-    # Alternative models (via OpenRouter):
-    # "anthropic/claude-sonnet-4" - faster, cheaper, still very good
-    # "deepseek/deepseek-r1-0528" - excellent reasoning, very cheap
-    # "openai/gpt-4.1" - fast, large context
+    # Entry-decision model. Default verified against the live OpenRouter
+    # catalog 2026-07-18: claude-opus-4.8 ($5/$25 per M) is BOTH newer and
+    # 3x cheaper than the previous default claude-opus-4 ($15/$75, legacy
+    # pricing). Override per machine without code edits:
+    #   SKYTOWER_ENTRY_MODEL=anthropic/claude-fable-5   (top model, $10/$50;
+    #       with K=3 ensemble ~= $0.40/traded event all-in)
+    # Measured token profile: ~3k in / ~0.7k out per entry call.
+    # A/B candidates offline first: tools/replay_decisions.py --variant.
+    "model": os.getenv("SKYTOWER_ENTRY_MODEL",
+                       "anthropic/claude-opus-4.8").strip()
+             or "anthropic/claude-opus-4.8",
     "max_tokens": 1500,  # room for the ANALYSIS CHECKLIST reasoning
     "temperature": 0.3,  # Lower = more consistent decisions
 }
@@ -317,8 +276,14 @@ POSITION_MANAGEMENT_CONFIG = {
     "max_daily_loss_usd": _env_float("SKYTOWER_MAX_DAILY_LOSS_USD", 300.0),  # stop for the day past this
     "max_daily_trades": _env_int("SKYTOWER_MAX_DAILY_TRADES", 5),            # max trades per day
 
-    # LLM model for exit decisions (can be cheaper/faster than entry model)
-    "exit_llm_model": "anthropic/claude-sonnet-4",
+    # LLM model for exit decisions — called every ~30s while a position is
+    # open (20-60x per trade), so the cheaper tier matters here. Default
+    # verified 2026-07-18: sonnet-5 ($2/$10) is newer AND cheaper than the
+    # previous sonnet-4 ($3/$15). Also used by the aux channel (reflections,
+    # playbook distillation) via llm_util.
+    "exit_llm_model": os.getenv("SKYTOWER_EXIT_MODEL",
+                                "anthropic/claude-sonnet-5").strip()
+                      or "anthropic/claude-sonnet-5",
 }
 
 # =============================================================================
@@ -352,6 +317,29 @@ TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # 24/7 deploy must ship this file; it is still hot-reloaded on edit (mtime).
 EVENT_PLAYBOOKS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     'knowledge', 'event_playbooks.json')
+
+# Machine-built frequency statistics (tools/build_learned_stats.py aggregates
+# knowledge/historical_paths.jsonl.gz + logs/event_paths.jsonl) injected into
+# the entry prompt as LEARNED EVENT STATISTICS. Generated file — NEVER edit by
+# hand and never mix with the curated playbook above; regenerate offline with
+# the tool. Hot-reloaded by mtime like the playbook. Missing file = section
+# absent (prompt degrades gracefully).
+LEARNED_STATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  'knowledge', 'learned_stats.json')
+
+# Post-trade reflections (F5): quarantined n=1 journal entries written by
+# the exit-tier model after each closed NON-forced trade; injected into the
+# entry prompt only under an explicit "anecdotes, not rules" header.
+# SKYTOWER_REFLECTIONS=0 disables generation (the section simply dries up).
+REFLECTIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                'logs', 'trade_reflections.jsonl')
+REFLECTIONS_ENABLED = _env_bool("SKYTOWER_REFLECTIONS", True)
+
+# Playbook distillation proposals (F5): machine-drafted playbook updates
+# awaiting the operator's approve/reject on the dashboard. NEVER
+# auto-applied — approval writes into knowledge/event_playbooks.json.
+PLAYBOOK_PROPOSALS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       'logs', 'playbook_proposals.jsonl')
 
 # Monetary-policy regime per currency: "hiking" / "cutting" / "hold".
 # SEED ONLY — from here on the RegimeTracker (regime_tracker.py) maintains the
@@ -427,6 +415,21 @@ def _apply_runtime_overrides():
 _apply_runtime_overrides()
 
 # =============================================================================
+# ENSEMBLE (F4): K-call self-consistency at entry
+# =============================================================================
+# K >= 2 makes the entry engine fire K PARALLEL LLM calls per decision:
+# unanimity (all valid votes BUY or all SELL) = trade, any split = SKIP.
+# Verbal LLM confidence is systematically overconfident — vote agreement is
+# the calibrated gate. COST: K x the entry-model price per analyzed event.
+# Default 1 = classic single call. Wall-clock stays ~one call (parallel).
+# In FORCE_DECISION demo mode the majority direction wins instead (SKIP is
+# not available there) and agreement scales the reported confidence.
+ENSEMBLE_K = _env_int("SKYTOWER_ENSEMBLE_K", 1)
+if not 1 <= ENSEMBLE_K <= 5:
+    print(f"WARNING: SKYTOWER_ENSEMBLE_K={ENSEMBLE_K} out of range 1-5 — using 1")
+    ENSEMBLE_K = 1
+
+# =============================================================================
 # TEST MODE: FORCE DECISION (never SKIP)
 # =============================================================================
 # When enabled, the entry decision engine must always pick BUY or SELL —
@@ -434,14 +437,3 @@ _apply_runtime_overrides()
 # Intended ONLY for the demo-account data-collection phase. Set explicitly in
 # docker-compose.yml, not in .env, so it stays visible and deliberate.
 FORCE_DECISION = _env_bool("SKYTOWER_FORCE_DECISION", False)
-
-# =============================================================================
-# LOGGING
-# =============================================================================
-LOG_CONFIG = {
-    "level": "INFO",
-    "format": "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-    "rotation": "1 day",
-    "retention": "30 days",
-    "path": "logs/skytower.log",
-}

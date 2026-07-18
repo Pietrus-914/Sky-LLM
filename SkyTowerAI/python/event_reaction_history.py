@@ -191,6 +191,10 @@ class EventReactionHistory:
             "currency": (reaction.get('currency') or '').upper(),
             "event_time": reaction.get('event_time', ''),
             "pair": pair,
+            # EA echo (F2): joins this reaction to the exact decision that
+            # armed it — empty from an old EA build (join falls back to
+            # event name + minute matching)
+            "decision_id": str(reaction.get('decision_id') or ''),
             "forecast": reaction.get('forecast'),
             "previous": reaction.get('previous'),
             "actual": reaction.get('actual'),

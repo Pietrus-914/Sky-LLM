@@ -188,3 +188,94 @@ class TestPositionEndpoints:
         assert data['daily_pnl_usd'] == 50.0
         assert data['daily_trades'] == 1
         assert data['closed_trades_today'] == 1
+
+
+# ============================================================================
+# TestDecisionIdEcho (F2): the EA echoes decision_id in its reports
+# ============================================================================
+
+class TestDecisionIdEcho:
+    def _last_closed(self):
+        import server
+        return server.position_manager.closed_trades[-1]
+
+    def test_orphaned_close_keeps_echoed_id(self, client):
+        """Server restarted mid-trade (no tracked position): the EA echo is
+        the only surviving lineage and must land in the trade record."""
+        resp = close_position(client, decision_id="echo-abc123")
+        assert resp.get_json()['status'] == 'ok'
+        rec = self._last_closed()
+        assert rec['decision_id'] == "echo-abc123"
+        assert rec['event_name'] == "(position lost in restart)"
+
+    def test_tracked_close_prefers_open_binding(self, client):
+        """The opened-time binding wins; a (theoretical) divergent echo at
+        close must not relabel the trade."""
+        import server
+        open_position(client)
+        server.position_manager.position.decision_id = "bound-at-open"
+        resp = close_position(client, decision_id="echo-at-close")
+        assert resp.get_json()['status'] == 'ok'
+        assert self._last_closed()['decision_id'] == "bound-at-open"
+
+    def test_tracked_close_falls_back_to_echo(self, client):
+        """Tracked position without a binding (old server at open time):
+        the close echo fills the gap."""
+        import server
+        open_position(client)
+        server.position_manager.position.decision_id = ""
+        close_position(client, decision_id="echo-fills-gap")
+        assert self._last_closed()['decision_id'] == "echo-fills-gap"
+
+    def test_close_without_echo_still_works(self, client):
+        """Old EA build sends no decision_id — everything degrades to ''."""
+        close_position(client)
+        assert self._last_closed()['decision_id'] == ""
+
+
+# ============================================================================
+# TestCalibrationEndpoint (F4)
+# ============================================================================
+
+class TestCalibrationEndpoint:
+    def test_calibration_summary_served(self, client):
+        import server
+        from unittest.mock import Mock
+        orig_dh, orig_pr = server.decision_history, server.path_recorder
+        try:
+            server.decision_history = Mock()
+            server.decision_history.get_recent.return_value = [{
+                "timestamp": "2026-07-15T13:28:00Z", "decision_id": "d1",
+                "event_name": "CPI m/m", "currency": "USD", "pair": "USDCAD",
+                "direction": "BUY", "confidence": 0.7, "forced": False,
+                "event_datetime": "2026-07-15T13:30:00",
+            }]
+            server.path_recorder = Mock()
+            server.path_recorder.get_recent.return_value = [{
+                "test": False, "currency": "USD",
+                "event_name": "CPI m/m", "event_name_normalized": "cpi m/m",
+                "event_time": "2026-07-15T13:30:00", "pair": "USDCAD",
+                "move_5min_pips": 18.0,
+            }]
+            resp = client.get('/api/calibration')
+            data = resp.get_json()
+            assert data['status'] == 'ok'
+            assert data['calibration']['n_scored'] == 1
+            assert data['calibration']['hit_rate'] == 1.0
+        finally:
+            server.decision_history = orig_dh
+            server.path_recorder = orig_pr
+
+    def test_calibration_tolerates_missing_services(self, client):
+        import server
+        orig_dh, orig_pr = server.decision_history, server.path_recorder
+        try:
+            server.decision_history = None
+            server.path_recorder = None
+            resp = client.get('/api/calibration')
+            data = resp.get_json()
+            assert data['status'] == 'ok'
+            assert data['calibration']['n_scored'] == 0
+        finally:
+            server.decision_history = orig_dh
+            server.path_recorder = orig_pr
