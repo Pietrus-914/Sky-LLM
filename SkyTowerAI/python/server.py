@@ -1121,6 +1121,62 @@ def api_playbooks_distill():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route('/api/playbooks/distill-batch', methods=['POST'])
+def api_playbooks_distill_batch():
+    """One click drafts playbook proposals for EVERY tradeable event with a
+    meaty measured sample (F5, operator request): candidates are gated in
+    playbook_distiller.select_batch_candidates (n>=10 releases, tradeable
+    name, no pending proposal, 14-day cooldown, cap 10/click). Calls run in
+    parallel; every draft still lands as PENDING — the Approve gate is
+    untouched. Manual trigger only, never scheduled."""
+    ensure_services()
+    try:
+        from llm_util import make_chat_fn
+        chat_fn = make_chat_fn(max_tokens=600, timeout=60.0)
+        if chat_fn is None:
+            return jsonify({"status": "error",
+                            "message": "LLM unavailable (no API key)"}), 503
+
+        from playbook_distiller import (select_batch_candidates,
+                                        generate_proposal)
+        from config import HIGH_IMPACT_EVENTS
+        store = _proposals_store()
+        learned = decision_engine._load_learned_stats().get('events', {})
+        playbooks = decision_engine._load_playbooks()
+        candidates, skipped = select_batch_candidates(
+            learned, playbooks, store.list(limit=500), HIGH_IMPACT_EVENTS,
+            utcnow().isoformat())
+        if not candidates:
+            return jsonify({"status": "ok", "generated": [],
+                            "skipped": skipped,
+                            "message": "no candidates with fresh data"})
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        def draft(c):
+            return c, generate_proposal(chat_fn, c["event_name"],
+                                        c["currency"], c["learned"],
+                                        (playbooks.get(c["playbook_key"])
+                                         if isinstance(playbooks.get(c["playbook_key"]), dict)
+                                         else None),
+                                        c["playbook_key"])
+
+        generated, failed = [], 0
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for c, proposal in pool.map(draft, candidates):
+                if proposal is not None and store.add(proposal):
+                    generated.append(f"{c['currency']} {c['event_name']}")
+                else:
+                    failed += 1
+        logger.info(f"Batch distillation: {len(generated)} drafted, "
+                    f"{failed} failed, skipped={skipped}")
+        return jsonify({"status": "ok", "generated": generated,
+                        "failed": failed, "skipped": skipped})
+    except Exception as e:
+        logger.error(f"Error in batch distillation: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route('/api/playbooks/proposals', methods=['GET'])
 def api_playbooks_proposals():
     """Distillation proposals, newest first (?status=pending)."""

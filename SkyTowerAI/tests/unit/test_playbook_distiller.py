@@ -194,3 +194,107 @@ class TestEndpoints:
                       json={"event_name": "", "currency": "USD"}).status_code == 400
         assert c.post('/api/playbooks/distill',
                       json={"event_name": "CPI", "currency": "DOLLAR"}).status_code == 400
+
+
+def learned_entry(name="CPI m/m", currency="USD", n=63):
+    return {"event_name": name, "currency": currency, "n_releases": n,
+            "pairs": {"USDCAD": {"n": n}}}
+
+
+class TestBatchCandidates:
+    from playbook_distiller import select_batch_candidates as _sel
+
+    def _run(self, events, proposals=None, playbooks=None,
+             wanted=("CPI", "Non-Farm"), **kw):
+        from playbook_distiller import select_batch_candidates
+        return select_batch_candidates(events, playbooks or {},
+                                       proposals or [], list(wanted),
+                                       "2026-07-18T12:00:00", **kw)
+
+    def test_thin_and_untradeable_filtered(self):
+        events = {
+            "USD|cpi m/m": learned_entry(n=63),
+            "USD|crude oil inventories": learned_entry(
+                name="Crude Oil Inventories", n=286),
+            "NZD|cpi q/q": learned_entry(name="CPI q/q", currency="NZD", n=5),
+        }
+        cands, skipped = self._run(events)
+        assert [c["event_name"] for c in cands] == ["CPI m/m"]
+        assert skipped["not_tradeable"] == 1 and skipped["thin"] == 1
+
+    def test_pending_and_cooldown_skips(self):
+        events = {"USD|cpi m/m": learned_entry(),
+                  "USD|non-farm employment change": learned_entry(
+                      name="Non-Farm Employment Change")}
+        proposals = [
+            {"currency": "USD", "event_name": "CPI m/m", "status": "pending",
+             "created_at": "2026-06-01T00:00:00Z"},
+            {"currency": "USD", "event_name": "Non-Farm Employment Change",
+             "status": "rejected", "created_at": "2026-07-10T00:00:00Z"},
+        ]
+        cands, skipped = self._run(events, proposals=proposals)
+        assert cands == []
+        assert skipped["pending"] == 1 and skipped["cooldown"] == 1
+
+    def test_old_decision_does_not_block(self):
+        events = {"USD|cpi m/m": learned_entry()}
+        proposals = [{"currency": "USD", "event_name": "CPI m/m",
+                      "status": "approved",
+                      "created_at": "2026-06-01T00:00:00Z"}]  # > 14 dni
+        cands, _ = self._run(events, proposals=proposals)
+        assert len(cands) == 1
+
+    def test_cap_and_biggest_samples_first(self):
+        events = {f"USD|cpi {i}": learned_entry(name=f"CPI {i}", n=10 + i)
+                  for i in range(5)}
+        cands, skipped = self._run(events, max_batch=2)
+        assert len(cands) == 2
+        assert cands[0]["learned"]["n_releases"] == 14   # największe n najpierw
+        assert skipped["capped"] == 3
+
+    def test_playbook_key_resolved(self):
+        events = {"USD|cpi m/m": learned_entry()}
+        cands, _ = self._run(events, playbooks={"CPI m/m (USD)": {}})
+        assert cands[0]["playbook_key"] == "CPI m/m (USD)"
+
+
+class TestBatchEndpoint:
+    @pytest.fixture
+    def client(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        import server
+        from server import app
+        app.config['TESTING'] = True
+        orig = (server._playbook_proposals, server.decision_engine,
+                server.calendar)
+        server._playbook_proposals = PlaybookProposals(
+            str(tmp_path / "props.jsonl"))
+        server.decision_engine = SimpleNamespace(
+            _load_learned_stats=lambda: {"events": {
+                "USD|cpi m/m": learned_entry(),
+                "CAD|employment change": learned_entry(
+                    name="Employment Change", currency="CAD", n=24),
+            }},
+            _load_playbooks=lambda: {})
+        if server.calendar is None:
+            server.calendar = MagicMock()
+        monkeypatch.setattr("llm_util.make_chat_fn",
+                            lambda **kw: (lambda s, u: good_reply()))
+        with app.test_client() as c:
+            yield c
+        (server._playbook_proposals, server.decision_engine,
+         server.calendar) = orig
+
+    def test_batch_generates_then_dedupes(self, client):
+        resp = client.post('/api/playbooks/distill-batch', json={})
+        body = resp.get_json()
+        assert body["status"] == "ok"
+        assert sorted(body["generated"]) == ["CAD Employment Change",
+                                             "USD Cpi m/m"] or \
+               len(body["generated"]) == 2
+        # drugi klik: wszystko wisi jako pending -> nic nowego
+        resp2 = client.post('/api/playbooks/distill-batch', json={})
+        body2 = resp2.get_json()
+        assert body2["generated"] == []
+        assert body2["skipped"]["pending"] == 2

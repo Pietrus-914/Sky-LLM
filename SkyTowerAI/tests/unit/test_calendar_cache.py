@@ -25,7 +25,8 @@ def make_event(source="forexfactory", hours_ahead=2, name="CPI m/m",
 
 
 class TestFFLastGoodCache:
-    def test_fetch_failure_serves_cached_events(self, tmp_path, monkeypatch):
+    def test_fetch_failure_serves_cached_events(self, tmp_path, monkeypatch,
+                                                real_calendar_fetch):
         monkeypatch.setattr(ForexFactoryCalendar, "CACHE_FILE", str(tmp_path / "ff.json"))
         ff = ForexFactoryCalendar()
         ff._last_good = [make_event()]
@@ -34,13 +35,15 @@ class TestFFLastGoodCache:
         assert len(events) == 1
         assert events[0].event_name == "CPI m/m"
 
-    def test_fetch_failure_without_cache_returns_empty(self, tmp_path, monkeypatch):
+    def test_fetch_failure_without_cache_returns_empty(self, tmp_path, monkeypatch,
+                                                       real_calendar_fetch):
         monkeypatch.setattr(ForexFactoryCalendar, "CACHE_FILE", str(tmp_path / "ff.json"))
         ff = ForexFactoryCalendar()
         with patch("calendar_fetcher.requests.get", side_effect=Exception("429")):
             assert ff.fetch_events() == []
 
-    def test_disk_cache_round_trip(self, tmp_path, monkeypatch):
+    def test_disk_cache_round_trip(self, tmp_path, monkeypatch,
+                                   real_calendar_fetch):
         monkeypatch.setattr(ForexFactoryCalendar, "CACHE_FILE", str(tmp_path / "ff.json"))
         ff1 = ForexFactoryCalendar()
         ff1._save_disk_cache([make_event(name="Non-Farm Payrolls")])

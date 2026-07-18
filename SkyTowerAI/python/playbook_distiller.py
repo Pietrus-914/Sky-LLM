@@ -28,6 +28,66 @@ from event_reaction_history import (normalize_event_name,
 MAX_FIELD_CHARS = 450
 _ENTRY_FIELDS = ("pattern", "typical_behavior", "notes")
 
+# Batch selection gates (dashboard "Generate ALL" button)
+BATCH_MIN_RELEASES = 10       # thinner samples make weak playbook entries
+BATCH_MAX = 10                # per click — keeps the LLM spend visible
+BATCH_COOLDOWN_DAYS = 14      # don't re-draft what was just decided
+
+
+def select_batch_candidates(learned_events: Dict, playbooks: Dict,
+                            proposals: List[Dict], tradeable_names: List[str],
+                            now_iso: str, max_batch: int = BATCH_MAX,
+                            min_releases: int = BATCH_MIN_RELEASES,
+                            cooldown_days: int = BATCH_COOLDOWN_DAYS):
+    """Which events deserve a machine-drafted playbook update right now.
+
+    Gates: enough measured releases; the event name matches the tradeable
+    whitelist (junk like weekly oil inventories has stats too — the model
+    never trades it); no proposal already PENDING; no proposal created
+    within the cooldown (a fresh reject must not re-spawn instantly).
+    Returns (candidates, skipped_counter) — pure, unit-testable."""
+    from datetime import datetime, timedelta
+    cutoff = ((datetime.fromisoformat(now_iso.replace('Z', ''))
+               - timedelta(days=cooldown_days)).isoformat())
+
+    recent = {}
+    for p in proposals or []:
+        key = (p.get('currency', ''), normalize_event_name(p.get('event_name') or ''))
+        if p.get('status') == 'pending':
+            recent[key] = 'pending'
+        elif (p.get('created_at') or '') >= cutoff:
+            recent.setdefault(key, 'cooldown')
+
+    wanted = [w.lower() for w in tradeable_names or []]
+    candidates, skipped = [], {"thin": 0, "not_tradeable": 0,
+                               "pending": 0, "cooldown": 0, "capped": 0}
+    for key in sorted(learned_events or {},
+                      key=lambda k: -(learned_events[k].get('n_releases') or 0)):
+        entry = learned_events[key]
+        display = entry.get('event_name') or key.split('|', 1)[-1]
+        currency = entry.get('currency') or key.split('|', 1)[0]
+        if (entry.get('n_releases') or 0) < min_releases:
+            skipped["thin"] += 1
+            continue
+        if not any(w in display.lower() for w in wanted):
+            skipped["not_tradeable"] += 1
+            continue
+        state = recent.get((currency, normalize_event_name(display)))
+        if state:
+            skipped[state] += 1
+            continue
+        if len(candidates) >= max_batch:
+            skipped["capped"] += 1
+            continue
+        candidates.append({
+            "event_name": display,
+            "currency": currency,
+            "learned": entry,
+            "playbook_key": find_playbook_key(playbooks, display),
+        })
+    return candidates, skipped
+
+
 DISTILL_SYSTEM = """You distill MEASURED trading statistics into a compact
 playbook entry for one economic event. The entry will be shown to a trading
 model before future releases of this event.
