@@ -155,3 +155,36 @@ class TestSpreadLotReduction:
         multiplier = SPREAD_LOT_REDUCTION["high"]["multiplier"]
         assert threshold == 10
         assert multiplier == 0.6
+
+
+class TestModelEnvOverrides:
+    """Entry/exit models are env-overridable per machine (no code edits)."""
+
+    def _fresh_config(self, env):
+        import subprocess, sys, os, json
+        code = (
+            "import json, config; "
+            "print(json.dumps({'entry': config.LLM_CONFIG['model'], "
+            "'exit': config.POSITION_MANAGEMENT_CONFIG['exit_llm_model']}))")
+        full_env = {**os.environ, **env}
+        out = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True, check=True,
+            cwd=os.path.join(os.path.dirname(__file__), '..', '..', 'python'),
+            env=full_env)
+        return json.loads(out.stdout.strip().splitlines()[-1])
+
+    def test_defaults_are_current_models(self):
+        cfg = self._fresh_config({"SKYTOWER_ENTRY_MODEL": "",
+                                  "SKYTOWER_EXIT_MODEL": ""})
+        assert cfg["entry"] == "anthropic/claude-opus-4.8"
+        assert cfg["exit"] == "anthropic/claude-sonnet-5"
+
+    def test_env_overrides_win(self):
+        # Sentinel slugs: a value that could legitimately sit in the
+        # operator's .env would make this pass even if the pass-through broke
+        cfg = self._fresh_config({
+            "SKYTOWER_ENTRY_MODEL": "test/sentinel-entry-model",
+            "SKYTOWER_EXIT_MODEL": "test/sentinel-exit-model"})
+        assert cfg["entry"] == "test/sentinel-entry-model"
+        assert cfg["exit"] == "test/sentinel-exit-model"

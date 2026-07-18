@@ -239,11 +239,17 @@ EXIT_CONFIG = {
 # =============================================================================
 LLM_CONFIG = {
     "provider": "openrouter",  # "openrouter", "anthropic", "openai", "rule-based"
-    "model": "anthropic/claude-opus-4",  # Best for critical financial decisions
-    # Alternative models (via OpenRouter):
-    # "anthropic/claude-sonnet-4" - faster, cheaper, still very good
-    # "deepseek/deepseek-r1-0528" - excellent reasoning, very cheap
-    # "openai/gpt-4.1" - fast, large context
+    # Entry-decision model. Default verified against the live OpenRouter
+    # catalog 2026-07-18: claude-opus-4.8 ($5/$25 per M) is BOTH newer and
+    # 3x cheaper than the previous default claude-opus-4 ($15/$75, legacy
+    # pricing). Override per machine without code edits:
+    #   SKYTOWER_ENTRY_MODEL=anthropic/claude-fable-5   (top model, $10/$50;
+    #       with K=3 ensemble ~= $0.40/traded event all-in)
+    # Measured token profile: ~3k in / ~0.7k out per entry call.
+    # A/B candidates offline first: tools/replay_decisions.py --variant.
+    "model": os.getenv("SKYTOWER_ENTRY_MODEL",
+                       "anthropic/claude-opus-4.8").strip()
+             or "anthropic/claude-opus-4.8",
     "max_tokens": 1500,  # room for the ANALYSIS CHECKLIST reasoning
     "temperature": 0.3,  # Lower = more consistent decisions
 }
@@ -270,8 +276,14 @@ POSITION_MANAGEMENT_CONFIG = {
     "max_daily_loss_usd": _env_float("SKYTOWER_MAX_DAILY_LOSS_USD", 300.0),  # stop for the day past this
     "max_daily_trades": _env_int("SKYTOWER_MAX_DAILY_TRADES", 5),            # max trades per day
 
-    # LLM model for exit decisions (can be cheaper/faster than entry model)
-    "exit_llm_model": "anthropic/claude-sonnet-4",
+    # LLM model for exit decisions — called every ~30s while a position is
+    # open (20-60x per trade), so the cheaper tier matters here. Default
+    # verified 2026-07-18: sonnet-5 ($2/$10) is newer AND cheaper than the
+    # previous sonnet-4 ($3/$15). Also used by the aux channel (reflections,
+    # playbook distillation) via llm_util.
+    "exit_llm_model": os.getenv("SKYTOWER_EXIT_MODEL",
+                                "anthropic/claude-sonnet-5").strip()
+                      or "anthropic/claude-sonnet-5",
 }
 
 # =============================================================================

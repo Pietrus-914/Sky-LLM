@@ -277,7 +277,9 @@ class TestPromptIntegration:
 
 
 class TestServerSpawn:
-    def test_reflection_spawn_appends_record(self, tmp_path):
+    def test_reflection_spawn_appends_record(self, tmp_path, monkeypatch):
+        import config
+        monkeypatch.setattr(config, "REFLECTIONS_ENABLED", True)
         import server
         orig = (server._reflection_chat_fn, server._reflection_chat_ready,
                 server.decision_engine, server.decision_history)
@@ -306,7 +308,9 @@ class TestServerSpawn:
             (server._reflection_chat_fn, server._reflection_chat_ready,
              server.decision_engine, server.decision_history) = orig
 
-    def test_forced_trade_not_spawned(self, tmp_path):
+    def test_forced_trade_not_spawned(self, tmp_path, monkeypatch):
+        import config
+        monkeypatch.setattr(config, "REFLECTIONS_ENABLED", True)
         import server
         orig = (server._reflection_chat_fn, server._reflection_chat_ready,
                 server.decision_engine)
