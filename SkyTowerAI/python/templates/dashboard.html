@@ -1776,6 +1776,22 @@
                     var posDir = String(pos.direction || '').toUpperCase();
                     var dirClass = (posDir === 'BUY' || posDir === 'SELL') ? posDir.toLowerCase() : '';
                     var profitVal = pos.profit_usd || 0;
+                    var realizedVal = pos.realized_usd || 0;
+                    // After a partial close the floating P/L only covers the
+                    // remaining lots — show the realized leg + whole-trade total
+                    var realizedRows = '';
+                    if (Math.abs(realizedVal) > 0.005) {
+                        var totalVal = profitVal + realizedVal;
+                        realizedRows =
+                            '<div class="position-row">' +
+                                '<span class="key">Realized (partial)</span>' +
+                                '<span class="val ' + pnlClass(realizedVal) + '">' + formatUSD(realizedVal) + '</span>' +
+                            '</div>' +
+                            '<div class="position-row">' +
+                                '<span class="key">Total trade P/L</span>' +
+                                '<span class="val ' + pnlClass(totalVal) + '">' + formatUSD(totalVal) + '</span>' +
+                            '</div>';
+                    }
                     var durationSec = 0;
                     if (pos.open_time) {
                         durationSec = (Date.now() - new Date(pos.open_time).getTime()) / 1000;
@@ -1802,6 +1818,7 @@
                             '<span class="key">Profit/Loss</span>' +
                             '<span class="val ' + pnlClass(profitVal) + '">' + formatUSD(profitVal) + '</span>' +
                         '</div>' +
+                        realizedRows +
                         '<div class="position-row">' +
                             '<span class="key">Max Profit</span>' +
                             '<span class="val data-mono positive">' + formatUSD(pos.max_profit_usd || 0) + '</span>' +

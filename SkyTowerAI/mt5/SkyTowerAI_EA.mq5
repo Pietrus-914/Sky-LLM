@@ -1319,9 +1319,11 @@ void ManageOpenPositions()
       // loss-limit check on every SL hit.
       double realized, histClosePrice;
       string closeDetail;
+      bool complete = false;
       ulong posId = (g_currentPositionId > 0) ? g_currentPositionId : g_currentTicket;
+      bool hasDeals = GetRealizedPnL(posId, realized, histClosePrice, closeDetail, complete);
 
-      if(GetRealizedPnL(posId, realized, histClosePrice, closeDetail))
+      if(hasDeals && complete)
       {
          Print("Position ", g_currentTicket, " closed externally (", closeDetail,
                ") - realized P/L: $", DoubleToString(realized, 2));
@@ -1331,9 +1333,23 @@ void ManageOpenPositions()
       }
       else if(g_closeRetryCount < 3)
       {
-         // Deal history can lag a tick or two — retry before falling back
+         // Deal history can lag a tick or two (and after a PARTIAL_CLOSE it
+         // stays "incomplete" until the final leg books) — retry first
          g_closeRetryCount++;
          return;
+      }
+      else if(hasDeals)
+      {
+         // Final leg never booked in time: realized legs so far + last
+         // floating P/L of the remaining lots beats floating alone
+         double estimate = realized + g_lastKnownProfit;
+         Print("WARNING: deal history incomplete for position ", posId,
+               " - estimated P/L: $", DoubleToString(estimate, 2),
+               " (booked $", DoubleToString(realized, 2), " + floating $",
+               DoubleToString(g_lastKnownProfit, 2), ")");
+         NotifyPositionClosed(histClosePrice, estimate,
+                              "Position closed externally (history incomplete; booked + last floating)",
+                              "floating");
       }
       else
       {
@@ -1609,19 +1625,25 @@ void NotifyPositionOpened()
 //| Sums DEAL_PROFIT + DEAL_SWAP + DEAL_COMMISSION over ALL deals of   |
 //| the position (includes earlier partial closes, final swap and      |
 //| commission — unlike the floating POSITION_PROFIT read pre-close).  |
-//| Returns false when the history is not queryable yet (no OUT deal), |
-//| so the caller can retry or fall back to the last floating profit.  |
+//| Returns false when the history is not queryable yet (no OUT deal). |
+//| 'complete' turns true only once the OUT volume balances the IN     |
+//| volume: right after a close the final deal can lag the history by  |
+//| a moment, and after an earlier PARTIAL_CLOSE an OUT deal already   |
+//| exists — summing at that instant silently drops the final leg      |
+//| (2026-07-22 GBPUSD: $88.20 reported instead of $178.80).           |
 //+------------------------------------------------------------------+
-bool GetRealizedPnL(ulong positionId, double &realized, double &closePrice, string &closeDetail)
+bool GetRealizedPnL(ulong positionId, double &realized, double &closePrice, string &closeDetail, bool &complete)
 {
    realized = 0.0;
    closePrice = 0.0;
    closeDetail = "closed externally";
+   complete = false;
 
    if(positionId == 0 || !HistorySelectByPosition((long)positionId))
       return false;
 
    bool hasOutDeal = false;
+   double inVolume = 0.0, outVolume = 0.0;
    int total = HistoryDealsTotal();
    for(int i = 0; i < total; i++)
    {
@@ -1634,9 +1656,13 @@ bool GetRealizedPnL(ulong positionId, double &realized, double &closePrice, stri
                 + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
 
       ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(entry == DEAL_ENTRY_IN)
+         inVolume += HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
       if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_OUT_BY)
       {
+         outVolume += HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
          hasOutDeal = true;
+         // Deals iterate oldest->newest, so this ends on the FINAL close
          closePrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
          ENUM_DEAL_REASON dreason = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
          if(dreason == DEAL_REASON_SL)      closeDetail = "SL hit";
@@ -1646,6 +1672,7 @@ bool GetRealizedPnL(ulong positionId, double &realized, double &closePrice, stri
       }
    }
 
+   complete = hasOutDeal && (outVolume >= inVolume - 0.0001);
    return hasOutDeal;
 }
 
@@ -1722,21 +1749,37 @@ void ClosePosition(string reason)
 
       // Prefer the REALIZED P/L from the deal history over the floating
       // profit read pre-close (includes closing slippage, swap, commission
-      // and any earlier partial-close portion). Bounded wait for history.
+      // and any earlier partial-close portion). Bounded wait until the
+      // history is COMPLETE — after a partial close an OUT deal already
+      // exists, so "any OUT deal" is not proof the final leg was booked.
       ulong posId = (g_currentPositionId > 0) ? g_currentPositionId : g_currentTicket;
       string profitSource = "floating";
-      for(int i = 0; i < 5; i++)
+      double floatingBeforeClose = profit;   // remaining-lots P/L read pre-close
+      double realized = 0.0, histPrice = 0.0;
+      string detail;
+      bool complete = false, hasDeals = false;
+      for(int i = 0; i < 10 && !complete; i++)
       {
-         double realized, histPrice;
-         string detail;
-         if(GetRealizedPnL(posId, realized, histPrice, detail))
-         {
-            profit = realized;
-            closePrice = histPrice;
-            profitSource = "history";
-            break;
-         }
-         Sleep(100);
+         hasDeals = GetRealizedPnL(posId, realized, histPrice, detail, complete);
+         if(!complete)
+            Sleep(200);
+      }
+      if(complete)
+      {
+         profit = realized;
+         closePrice = histPrice;
+         profitSource = "history";
+      }
+      else if(hasDeals)
+      {
+         // Final leg still missing from history: realized legs booked so far
+         // (entry costs + partial closes) + the floating P/L of the leg just
+         // closed is far closer than the floating value alone, which would
+         // drop the partial-close portion entirely.
+         profit = realized + floatingBeforeClose;
+         Print("WARNING: deal history incomplete after close - estimated P/L $",
+               DoubleToString(profit, 2), " (booked $", DoubleToString(realized, 2),
+               " + floating $", DoubleToString(floatingBeforeClose, 2), ")");
       }
 
       // Notify server about close

@@ -25,7 +25,7 @@ POSITION MANAGEMENT PRINCIPLES:
 3. Partial close (50%) when approaching strong resistance/support zones or after significant profit
 4. Trail SL to lock in profits: as profit grows, SL should protect a meaningful portion
 5. News impact typically peaks within 5-10 minutes after release, then momentum fades
-6. If profit declined >40% from its peak, consider closing to protect remaining gains
+6. If TOTAL trade profit (floating + realized) declined >40% from its peak, consider closing to protect remaining gains. After a partial close the FLOATING P/L drops by the closed fraction by construction - that is NOT lost momentum; always judge the decline on the TOTAL.
 7. Max hold is 30 minutes - after that market returns to normal spread/volatility
 8. Use zone data: if price is approaching a liquidity pool, FVG, or order block - that's a natural take-profit area
 9. Zone bias: positive = bullish pressure (good for BUY), negative = bearish pressure (good for SELL)
@@ -134,8 +134,10 @@ class ExitDecisionEngine:
 - Current price: {pos.current_price}
 - Lots: {pos.remaining_lots} (original: {pos.lots})
 - Stop Loss: {pos.sl}
-- Profit/Loss: ${pos.profit_usd:.2f}
-- Peak profit: ${pos.max_profit_usd:.2f}
+- Profit/Loss (floating, remaining lots only): ${pos.profit_usd:.2f}
+- Realized by partial closes: ${pos.realized_usd:.2f}
+- TOTAL trade P/L: ${pos.profit_usd + pos.realized_usd:.2f}
+- Peak TOTAL profit: ${pos.max_profit_usd:.2f}
 - Max drawdown: ${pos.max_drawdown_usd:.2f}
 - Time open: {minutes_open:.1f} minutes
 - Tick value: ${pos.tick_value:.2f} per tick

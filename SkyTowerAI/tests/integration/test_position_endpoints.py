@@ -279,3 +279,85 @@ class TestCalibrationEndpoint:
         finally:
             server.decision_history = orig_dh
             server.path_recorder = orig_pr
+
+
+# ============================================================================
+# TestNoReanalysisAfterTradeOpen
+# ============================================================================
+
+def _make_fake_decision(evt_dt):
+    """Minimal TradingDecision stand-in for the open/executed handlers."""
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        event="CPI y/y",
+        decision_id="dup-test-1",
+        reasoning="test reasoning",
+        forced=False,
+        direction="BUY",
+        data_summary={"event": {"datetime": evt_dt.isoformat(),
+                                "currency": "GBP"}},
+    )
+
+
+class TestNoReanalysisAfterTradeOpen:
+    """Opening a trade clears next_decision while the event can still be
+    seconds ahead — the event must be marked analyzed or the updater pays
+    for a SECOND full LLM analysis (2026-07-22: 2x 3-call ensemble)."""
+
+    def _setup_decision(self, server):
+        from datetime import timedelta
+        from timeutil import utcnow
+        evt_dt = (utcnow() + timedelta(seconds=60)).replace(microsecond=0)
+        decision = _make_fake_decision(evt_dt)
+        with server.decision_lock:
+            server.next_decision = decision
+            server._last_served_signal = None
+        server.analyzed_events.clear()
+        # Event object as the updater's calendar scan would see it
+        from types import SimpleNamespace
+        fake_event = SimpleNamespace(datetime_utc=evt_dt,
+                                     event_name="CPI y/y", currency="GBP")
+        return decision, fake_event
+
+    @staticmethod
+    def _teardown(server):
+        with server.decision_lock:
+            server.next_decision = None
+        server.analyzed_events.clear()
+
+    def test_position_opened_marks_event_analyzed(self, client):
+        import server
+        decision, fake_event = self._setup_decision(server)
+        try:
+            resp = open_position(client, symbol="GBPUSD")
+            assert resp.status_code == 200
+            # The updater's scan predicate must now skip this event
+            assert server._is_event_analyzed(fake_event) is True
+            with server.decision_lock:
+                assert server.next_decision is None
+        finally:
+            self._teardown(server)
+
+    def test_trade_executed_fallback_marks_event_analyzed(self, client):
+        import server
+        decision, fake_event = self._setup_decision(server)
+        try:
+            resp = client.post('/api/trade-executed', json={"pair": "GBPUSD"})
+            assert resp.status_code == 200
+            assert server._is_event_analyzed(fake_event) is True
+            with server.decision_lock:
+                assert server.next_decision is None
+        finally:
+            self._teardown(server)
+
+    def test_key_derivations_agree(self, client):
+        """_analyzed_event_key (event object) and
+        _analyzed_event_key_from_decision (decision dict) must produce the
+        SAME key, otherwise the dedup marker silently misses."""
+        import server
+        decision, fake_event = self._setup_decision(server)
+        try:
+            assert (server._analyzed_event_key(fake_event)
+                    == server._analyzed_event_key_from_decision(decision))
+        finally:
+            self._teardown(server)
