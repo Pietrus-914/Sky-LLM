@@ -491,3 +491,88 @@ class TestTradeHistoryPersistence:
             status = pm.get_status()
         assert status["max_daily_trades"] == 9
         assert status["max_daily_loss_usd"] == 555.0
+
+
+# ============================================================================
+# TestPartialCloseAccounting
+# ============================================================================
+
+class TestPartialCloseAccounting:
+    """A partial close realizes profit — it must not read as a profit
+    collapse. Regression for 2026-07-22 GBPUSD: AI partial-closed 50% at the
+    $201.60 peak, the guardrail compared the remaining half's floating $96
+    against the full-position peak and force-closed the runner 26s later
+    ("Safety: profit dropped 52% from peak")."""
+
+    def test_partial_close_credits_realized_and_holds(self, pm):
+        pm.on_position_opened(make_position_data(lots=2.4))
+        pm.update_position(make_report_data(remaining_lots=2.4, profit_usd=200.0))
+        # EA executed PARTIAL_CLOSE 50%: floating halves, realized ~half of $200
+        result = pm.update_position(make_report_data(remaining_lots=1.2, profit_usd=96.0))
+        assert pm.position is not None
+        assert pm.position.realized_usd == pytest.approx(100.0)
+        assert pm.position.partial_closed is True
+        # Whole trade: $96 floating + $100 realized vs $200 peak = -2%, NOT -52%
+        assert result["command"]["action"] == "HOLD"
+
+    def test_peak_tracks_whole_trade_across_partial(self, pm):
+        pm.on_position_opened(make_position_data(lots=2.4))
+        pm.update_position(make_report_data(remaining_lots=2.4, profit_usd=200.0))
+        pm.update_position(make_report_data(remaining_lots=1.2, profit_usd=96.0))
+        assert pm.position.max_profit_usd == pytest.approx(200.0)
+        # Runner keeps going: total = 100 realized + 130 floating = 230
+        pm.update_position(make_report_data(remaining_lots=1.2, profit_usd=130.0))
+        assert pm.position.max_profit_usd == pytest.approx(230.0)
+
+    def test_protection_still_fires_on_real_collapse_after_partial(self, pm):
+        pm.on_position_opened(make_position_data(lots=2.4))
+        pm.update_position(make_report_data(remaining_lots=2.4, profit_usd=200.0))
+        pm.update_position(make_report_data(remaining_lots=1.2, profit_usd=96.0))
+        # Genuine reversal: floating -> $0, total 100 vs peak 200 = -50%
+        result = pm.update_position(make_report_data(remaining_lots=1.2, profit_usd=0.0))
+        assert result["has_command"] is True
+        assert result["command"]["action"] == "CLOSE"
+        assert "profit dropped" in result["command"]["reason"].lower()
+
+    def test_protection_unchanged_without_partial(self, pm_with_position):
+        """No partial close -> exact old floating-only behaviour."""
+        pm_with_position.update_position(make_report_data(profit_usd=80.0))
+        result = pm_with_position.update_position(make_report_data(profit_usd=30.0))
+        assert result["command"]["action"] == "CLOSE"
+        assert "profit dropped" in result["command"]["reason"].lower()
+
+    def test_max_loss_counts_realized_loss_from_partial(self, pm):
+        """Partial close at a loss books a NEGATIVE realized leg that the
+        floating-only check silently forgot."""
+        pm.on_position_opened(make_position_data(lots=2.4))
+        pm.update_position(make_report_data(remaining_lots=2.4, profit_usd=-40.0))
+        # Half closed at -$40 floating -> -$20 realized, remaining floats -$30
+        pm.update_position(make_report_data(remaining_lots=1.2, profit_usd=-30.0))
+        assert pm.position.realized_usd == pytest.approx(-20.0)
+        # Floating -90 alone is above the -$100 limit, but the whole trade
+        # is at -110 -> must close
+        result = pm.update_position(make_report_data(remaining_lots=1.2, profit_usd=-90.0))
+        assert result["has_command"] is True
+        assert result["command"]["action"] == "CLOSE"
+        assert "max loss" in result["command"]["reason"].lower()
+
+    def test_manual_partial_in_mt5_also_credited(self, pm):
+        """Volume drop without an AI PARTIAL_CLOSE command (user clicked in
+        the terminal) must be credited the same way."""
+        pm.on_position_opened(make_position_data(lots=1.0))
+        pm.update_position(make_report_data(remaining_lots=1.0, profit_usd=60.0))
+        pm.update_position(make_report_data(remaining_lots=0.25, profit_usd=15.0))
+        assert pm.position.realized_usd == pytest.approx(45.0)
+        assert pm.position.partial_closed is True
+
+    def test_close_record_includes_realized(self, pm):
+        pm.on_position_opened(make_position_data(lots=2.4))
+        pm.update_position(make_report_data(remaining_lots=2.4, profit_usd=200.0))
+        pm.update_position(make_report_data(remaining_lots=1.2, profit_usd=96.0))
+        record = pm.on_position_closed({"ticket": 12345, "profit": 178.80,
+                                        "reason": "AI: momentum gone",
+                                        "profit_source": "history"})
+        assert record["realized_usd"] == pytest.approx(100.0)
+        assert record["profit_usd"] == pytest.approx(178.80)
+        assert record["max_profit_usd"] == pytest.approx(200.0)
+        assert pm.daily_pnl_usd == pytest.approx(178.80)

@@ -53,6 +53,11 @@ class OpenPosition:
     ai_decisions: List[Dict] = field(default_factory=list)
     partial_closed: bool = False
     sl_moved_to_be: bool = False
+    # P/L already realized by partial closes (estimated from the floating
+    # P/L at the moment the EA report shows the volume drop). profit_usd
+    # only covers the still-open lots, so guardrails, peak tracking and the
+    # exit prompt must work on profit_usd + realized_usd.
+    realized_usd: float = 0.0
 
     def to_dict(self) -> Dict:
         d = asdict(self)
@@ -311,6 +316,7 @@ class PositionManager:
                 "tp": 0.0,
                 "max_profit_usd": 0.0,
                 "max_drawdown_usd": 0.0,
+                "realized_usd": 0.0,
                 "spread_pips": 0.0,
                 "entry_reasoning": "",
                 "ai_decisions": [],
@@ -337,6 +343,7 @@ class PositionManager:
                     "tp": self.position.tp,
                     "max_profit_usd": self.position.max_profit_usd,
                     "max_drawdown_usd": self.position.max_drawdown_usd,
+                    "realized_usd": self.position.realized_usd,
                     "spread_pips": self.position.spread_pips,
                     "entry_reasoning": self.position.entry_reasoning,
                     "ai_decisions": list(self.position.ai_decisions),
@@ -392,6 +399,25 @@ class PositionManager:
                                f"got {reported_ticket}. Ignoring update.")
                 return self._hold_response()
 
+            # Partial-close realization: when the reported volume drops (AI
+            # PARTIAL_CLOSE or a manual partial in MT5), the floating P/L of
+            # the closed fraction leaves the report stream. Credit it as
+            # realized BEFORE profit_usd is overwritten with the remaining
+            # lots' floating value — otherwise the peak-drop guardrail sees a
+            # phantom ~50% collapse right after the partial and force-closes
+            # the rest (2026-07-22 GBPUSD: $201.60 peak -> $96 floating).
+            reported_lots = data.get("remaining_lots", self.position.remaining_lots)
+            prev_lots = self.position.remaining_lots
+            if prev_lots > 0 and reported_lots < prev_lots - 1e-9:
+                closed_fraction = 1.0 - (reported_lots / prev_lots)
+                realized_delta = self.position.profit_usd * closed_fraction
+                self.position.realized_usd += realized_delta
+                self.position.partial_closed = True
+                logger.info(f"Partial close detected: {prev_lots:.2f} -> "
+                            f"{reported_lots:.2f} lots | ~${realized_delta:.2f} "
+                            f"credited as realized (total realized: "
+                            f"${self.position.realized_usd:.2f})")
+
             # Update position data from EA report
             self.position.current_price = data.get("current_price", self.position.current_price)
             self.position.remaining_lots = data.get("remaining_lots", self.position.remaining_lots)
@@ -406,11 +432,14 @@ class PositionManager:
             self.position.nearest_support = data.get("nearest_support", 0.0)
             self.position.last_update = utcnow()
 
-            # Track max profit and drawdown
-            if self.position.profit_usd > self.position.max_profit_usd:
-                self.position.max_profit_usd = self.position.profit_usd
-            if self.position.profit_usd < self.position.max_drawdown_usd:
-                self.position.max_drawdown_usd = self.position.profit_usd
+            # Track max profit and drawdown on the WHOLE trade (floating on
+            # remaining lots + realized partials) — continuous across a
+            # partial close, unlike the raw floating value which halves
+            total_pnl = self.position.profit_usd + self.position.realized_usd
+            if total_pnl > self.position.max_profit_usd:
+                self.position.max_profit_usd = total_pnl
+            if total_pnl < self.position.max_drawdown_usd:
+                self.position.max_drawdown_usd = total_pnl
 
             # 1. Check safety guardrails (immediate, no LLM needed)
             guardrail_cmd = self._check_guardrails()
@@ -473,14 +502,19 @@ class PositionManager:
         if pos is None:
             return None
 
+        # Whole-trade P/L: floating on remaining lots + realized partials.
+        # Before any partial close realized_usd is 0, so this is identical
+        # to the old floating-only checks.
+        total_pnl = pos.profit_usd + pos.realized_usd
+
         # Max loss per trade (USD)
         max_loss = self.config.get("max_loss_usd", 100.0)
-        if pos.profit_usd < -max_loss:
+        if total_pnl < -max_loss:
             logger.warning(f"GUARDRAIL: Max loss ${max_loss} exceeded. "
-                           f"Current P/L: ${pos.profit_usd:.2f}")
+                           f"Current P/L: ${total_pnl:.2f}")
             return PositionCommand(
                 action="CLOSE",
-                reason=f"Safety: max loss ${max_loss} exceeded (P/L: ${pos.profit_usd:.2f})",
+                reason=f"Safety: max loss ${max_loss} exceeded (P/L: ${total_pnl:.2f})",
             )
 
         # Max hold time
@@ -503,18 +537,24 @@ class PositionManager:
                 reason=f"Safety: emergency spread {pos.spread_pips:.1f} pips",
             )
 
-        # Profit protection: close if profit dropped >X% from peak
+        # Profit protection: close if the WHOLE trade's profit dropped >X%
+        # from its peak. Comparing floating-only against the peak made every
+        # 50% partial close look like a ~50% collapse and instantly killed
+        # the runner the AI had deliberately left open.
         protection_pct = self.config.get("profit_protection_percent", 50)
         if pos.max_profit_usd > 20.0:  # only activate after meaningful profit
-            profit_drop_pct = ((pos.max_profit_usd - pos.profit_usd) / pos.max_profit_usd) * 100
+            profit_drop_pct = ((pos.max_profit_usd - total_pnl) / pos.max_profit_usd) * 100
             if profit_drop_pct >= protection_pct:
+                current_txt = f"${total_pnl:.2f}"
+                if pos.realized_usd:
+                    current_txt += f" incl. ${pos.realized_usd:.2f} realized"
                 logger.warning(f"GUARDRAIL: Profit protection triggered. "
-                               f"Peak: ${pos.max_profit_usd:.2f}, Current: ${pos.profit_usd:.2f} "
+                               f"Peak: ${pos.max_profit_usd:.2f}, Current: {current_txt} "
                                f"(-{profit_drop_pct:.0f}%)")
                 return PositionCommand(
                     action="CLOSE",
                     reason=f"Safety: profit dropped {profit_drop_pct:.0f}% from peak "
-                           f"(${pos.max_profit_usd:.2f} → ${pos.profit_usd:.2f})",
+                           f"(${pos.max_profit_usd:.2f} → {current_txt})",
                 )
 
         return None
@@ -564,6 +604,20 @@ class PositionManager:
             "has_command": True,
             "command": cmd.to_dict(),
         }
+
+    def get_trade_by_decision(self, decision_id: str) -> Optional[Dict]:
+        """Full record — including the ai_decisions management trail that
+        /api/position/status deliberately strips — of the most recent closed
+        trade bound to this decision_id (F2 lineage). None when no trade
+        matched: SKIP decisions, a still-open position, or trades older
+        than the recent_trades cap (50; the JSONL keeps them all)."""
+        if not decision_id:
+            return None
+        with self.lock:
+            for rec in reversed(self.recent_trades):
+                if rec.get("decision_id") == decision_id:
+                    return dict(rec)
+        return None
 
     def get_status(self) -> Dict:
         """Get current position manager status (for debugging/monitoring)."""

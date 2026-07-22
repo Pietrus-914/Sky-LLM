@@ -235,6 +235,18 @@ def get_decision_history():
     })
 
 
+@app.route('/api/trade-log/<decision_id>', methods=['GET'])
+def get_trade_log(decision_id):
+    """Position-management trail (AI exit decisions, close reason, P/L) of
+    the closed trade bound to a decision_id. Fetched lazily when a Decision
+    History row is expanded — recent_trades in /api/position/status is
+    deliberately slimmed (no ai_decisions), this is the fat single-trade
+    view. Returns trade: null when the decision never became a trade."""
+    ensure_services()
+    trade = position_manager.get_trade_by_decision(decision_id)
+    return jsonify({"status": "ok", "trade": trade})
+
+
 @app.route('/api/datasources/status', methods=['GET'])
 def get_datasource_status():
     """Check which data sources are currently responding."""
@@ -1565,6 +1577,9 @@ def trade_executed():
                 )
                 executed_trades.add(event_key_to_cleanup)
                 logger.info(f"Event {event_key_to_cleanup} marked as executed")
+                # Stop the updater from re-analyzing this event after we
+                # release next_decision (event may still be seconds ahead)
+                _mark_decision_event_analyzed(next_decision)
 
             next_decision = None
 
@@ -1650,6 +1665,9 @@ def position_opened():
                     event_time
                 )
                 executed_trades.add(event_key_to_cleanup)
+                # Stop the updater from re-analyzing this event after we
+                # release next_decision (event may still be seconds ahead)
+                _mark_decision_event_analyzed(next_decision)
 
             next_decision = None
 
@@ -1983,6 +2001,22 @@ def _mark_event_analyzed(event):
 def _is_event_analyzed(event) -> bool:
     """Check if event was already analyzed."""
     return _analyzed_event_key(event) in analyzed_events
+
+
+def _mark_decision_event_analyzed(decision) -> None:
+    """Mark a decision's event as analyzed when its trade opens/executes.
+    The open handlers clear next_decision while the event can still be a few
+    seconds ahead (entry is at T-15s) — without this marker the next updater
+    tick saw an 'unanalyzed' in-window event and paid for a SECOND full LLM
+    analysis (with SKYTOWER_ENSEMBLE_K=3 that doubled the entry cost:
+    2026-07-22 GBP CPI ran 3 Fable calls at 07:57 and 3 more at 08:00 CEST).
+    Must be called under decision_lock (reads the live decision object)."""
+    try:
+        key = _analyzed_event_key_from_decision(decision)
+        analyzed_events[key] = utcnow()
+        logger.info(f"Event marked as analyzed (trade executed): {key}")
+    except Exception as e:
+        logger.debug(f"Could not mark decision event analyzed: {e}")
 
 
 def _cleanup_analyzed_events():

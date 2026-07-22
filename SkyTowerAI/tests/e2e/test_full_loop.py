@@ -337,6 +337,12 @@ class TestFullLoop:
         # ============ 7. Second analysis SEES the learning ===============
         with server.decision_lock:
             server.next_decision = None
+        # Opening the trade marked event1 as analyzed — that marker is what
+        # stops the updater from paying for a SECOND ensemble on the same
+        # release (2026-07-22 double-analysis fix). The next release is a new
+        # event at a new time; the fake-event helper reuses the same name and
+        # near-same minute, so simulate "new event" by clearing the marker.
+        server.analyzed_events.clear()
         inject_fake_event(120)
         captured = {}
 
