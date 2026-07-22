@@ -213,6 +213,90 @@ def config_risk():
     return jsonify({"status": "ok", "updated": updated})
 
 
+@app.route('/api/config/models', methods=['GET', 'POST'])
+def config_models():
+    """
+    Dashboard-editable AI model setup (Event Config -> AI Models card),
+    persisted via logs/runtime_overrides.json (default < .env < panel).
+    Applies LIVE: the engines read self.model per call and the ensemble
+    reads module globals, so the NEXT decision uses the new setup without
+    a restart. Validation is all-or-nothing: one bad field rejects the
+    whole POST and nothing is applied.
+    """
+    import config as cfg
+    import llm_decision_engine as lde
+    ensure_services()
+
+    if request.method == 'GET':
+        return jsonify({
+            "status": "ok",
+            "entry_model": cfg.LLM_CONFIG.get("model"),
+            "exit_model": cfg.POSITION_MANAGEMENT_CONFIG.get("exit_llm_model"),
+            "ensemble_k": cfg.ENSEMBLE_K,
+            "ensemble_models": list(cfg.ENSEMBLE_MODELS),
+            "panel_active": len(cfg.ENSEMBLE_MODELS) >= 2,
+        })
+
+    data = request.json or {}
+    staged = {}
+
+    def _model_id(value, field):
+        s = str(value).strip()
+        if not s or '/' not in s or ' ' in s:
+            raise ValueError(f"{field}: expected an OpenRouter id like "
+                             f"'vendor/model', got '{value}'")
+        return s
+
+    try:
+        if 'entry_model' in data:
+            staged['entry_model'] = _model_id(data['entry_model'], 'entry_model')
+        if 'exit_model' in data:
+            staged['exit_model'] = _model_id(data['exit_model'], 'exit_model')
+        if 'ensemble_k' in data:
+            k = int(data['ensemble_k'])
+            if not 1 <= k <= 5:
+                raise ValueError("ensemble_k: must be between 1 and 5")
+            staged['ensemble_k'] = k
+        if 'ensemble_models' in data:
+            raw = data['ensemble_models']
+            if isinstance(raw, str):
+                raw = raw.split(',')
+            if not isinstance(raw, list):
+                raise ValueError("ensemble_models: expected a list or a "
+                                 "comma-separated string")
+            models = [str(p).strip() for p in raw if str(p).strip()]
+            if models and len(models) < 2:
+                raise ValueError("ensemble_models: needs >= 2 models "
+                                 "(or empty to disable the panel)")
+            if len(models) > 5:
+                raise ValueError("ensemble_models: max 5 models")
+            staged['ensemble_models'] = [_model_id(m, 'ensemble_models')
+                                         for m in models]
+    except (TypeError, ValueError) as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+    if 'entry_model' in staged:
+        cfg.LLM_CONFIG['model'] = staged['entry_model']
+        if decision_engine is not None:
+            decision_engine.model = staged['entry_model']
+    if 'exit_model' in staged:
+        cfg.POSITION_MANAGEMENT_CONFIG['exit_llm_model'] = staged['exit_model']
+        exit_eng = getattr(position_manager, 'exit_engine', None)
+        if exit_eng is not None:
+            exit_eng.model = staged['exit_model']
+    if 'ensemble_k' in staged:
+        cfg.ENSEMBLE_K = staged['ensemble_k']
+        lde.ENSEMBLE_K = staged['ensemble_k']
+    if 'ensemble_models' in staged:
+        cfg.ENSEMBLE_MODELS = list(staged['ensemble_models'])
+        lde.ENSEMBLE_MODELS = list(staged['ensemble_models'])
+
+    if staged:
+        cfg.save_runtime_overrides(staged)
+        logger.info(f"AI model config updated via dashboard: {staged}")
+    return jsonify({"status": "ok", "updated": staged})
+
+
 @app.route('/api/decisions/history', methods=['GET'])
 def get_decision_history():
     """Get decision audit log — all LLM decisions (BUY/SELL/SKIP)"""

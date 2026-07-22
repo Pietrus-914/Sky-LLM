@@ -453,6 +453,41 @@ elif len(ENSEMBLE_MODELS) > 5:
           f"models — capping at 5")
     ENSEMBLE_MODELS = ENSEMBLE_MODELS[:5]
 
+
+def _apply_model_runtime_overrides():
+    """Panel-set AI model config (dashboard: Event Config -> AI Models,
+    endpoint /api/config/models). Runs AFTER the env-based defaults above —
+    _apply_runtime_overrides() at line ~415 fires BEFORE ENSEMBLE_K/
+    ENSEMBLE_MODELS exist, so these keys need their own late pass to keep
+    the default < env < panel precedence. Junk in the file is ignored;
+    validation mirrors the endpoint's."""
+    import json
+    global ENSEMBLE_K, ENSEMBLE_MODELS
+    try:
+        if not os.path.exists(_OVERRIDES_FILE):
+            return
+        with open(_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    entry = data.get('entry_model')
+    if isinstance(entry, str) and '/' in entry and entry.strip():
+        LLM_CONFIG['model'] = entry.strip()
+    exit_m = data.get('exit_model')
+    if isinstance(exit_m, str) and '/' in exit_m and exit_m.strip():
+        POSITION_MANAGEMENT_CONFIG['exit_llm_model'] = exit_m.strip()
+    k = data.get('ensemble_k')
+    if isinstance(k, int) and 1 <= k <= 5:
+        ENSEMBLE_K = k
+    models = data.get('ensemble_models')
+    if isinstance(models, list):
+        cleaned = [str(m).strip() for m in models if str(m).strip()]
+        if len(cleaned) == 0 or 2 <= len(cleaned) <= 5:
+            ENSEMBLE_MODELS = cleaned
+
+
+_apply_model_runtime_overrides()
+
 # =============================================================================
 # TEST MODE: FORCE DECISION (never SKIP)
 # =============================================================================
