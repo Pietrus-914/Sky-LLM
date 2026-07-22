@@ -392,3 +392,103 @@ class TestTradeLogEndpoint:
         data = client.get('/api/trade-log/no-such-decision').get_json()
         assert data["status"] == "ok"
         assert data["trade"] is None
+
+
+# ============================================================================
+# TestModelsConfigEndpoint
+# ============================================================================
+
+class TestModelsConfigEndpoint:
+    """/api/config/models — the Event Config 'AI Models' card. POST must
+    apply LIVE (config dicts + module globals + engine objects) and persist
+    via save_runtime_overrides; validation is all-or-nothing."""
+
+    @staticmethod
+    def _snapshot():
+        import config as cfg
+        import llm_decision_engine as lde
+        return (cfg.LLM_CONFIG["model"],
+                cfg.POSITION_MANAGEMENT_CONFIG["exit_llm_model"],
+                cfg.ENSEMBLE_K, list(cfg.ENSEMBLE_MODELS),
+                lde.ENSEMBLE_K, list(lde.ENSEMBLE_MODELS))
+
+    @staticmethod
+    def _restore(snap):
+        import config as cfg
+        import llm_decision_engine as lde
+        (cfg.LLM_CONFIG["model"],
+         cfg.POSITION_MANAGEMENT_CONFIG["exit_llm_model"],
+         cfg.ENSEMBLE_K, cfg.ENSEMBLE_MODELS,
+         lde.ENSEMBLE_K, lde.ENSEMBLE_MODELS) = snap
+
+    def test_get_returns_current_setup(self, client):
+        data = client.get('/api/config/models').get_json()
+        assert data["status"] == "ok"
+        assert "entry_model" in data and "exit_model" in data
+        assert isinstance(data["ensemble_k"], int)
+        assert isinstance(data["ensemble_models"], list)
+        assert isinstance(data["panel_active"], bool)
+
+    def test_post_applies_live_and_persists(self, client, monkeypatch):
+        import server
+        import config as cfg
+        import llm_decision_engine as lde
+        saved = {}
+        monkeypatch.setattr(cfg, "save_runtime_overrides",
+                            lambda updates: saved.update(updates))
+        snap = self._snapshot()
+        try:
+            resp = client.post('/api/config/models', json={
+                "entry_model": "test/entry-x",
+                "exit_model": "test/exit-y",
+                "ensemble_k": 2,
+                "ensemble_models": "a/one, b/two, c/three"})
+            data = resp.get_json()
+            assert resp.status_code == 200 and data["status"] == "ok"
+            # Live-applied everywhere the runtime reads from
+            assert cfg.LLM_CONFIG["model"] == "test/entry-x"
+            assert cfg.POSITION_MANAGEMENT_CONFIG["exit_llm_model"] == "test/exit-y"
+            assert cfg.ENSEMBLE_K == 2 and lde.ENSEMBLE_K == 2
+            assert lde.ENSEMBLE_MODELS == ["a/one", "b/two", "c/three"]
+            assert server.decision_engine.model == "test/entry-x"
+            # Persisted for the next restart
+            assert saved["entry_model"] == "test/entry-x"
+            assert saved["ensemble_models"] == ["a/one", "b/two", "c/three"]
+        finally:
+            self._restore(snap)
+
+    def test_post_empty_panel_disables_it(self, client, monkeypatch):
+        import config as cfg
+        import llm_decision_engine as lde
+        monkeypatch.setattr(cfg, "save_runtime_overrides", lambda updates: None)
+        snap = self._snapshot()
+        try:
+            cfg.ENSEMBLE_MODELS = ["a/one", "b/two"]
+            lde.ENSEMBLE_MODELS = ["a/one", "b/two"]
+            resp = client.post('/api/config/models',
+                               json={"ensemble_models": ""})
+            assert resp.status_code == 200
+            assert lde.ENSEMBLE_MODELS == [] and cfg.ENSEMBLE_MODELS == []
+        finally:
+            self._restore(snap)
+
+    def test_post_validation_is_all_or_nothing(self, client, monkeypatch):
+        """A bad field must reject the WHOLE payload — the valid entry_model
+        in the same POST must not be applied or persisted."""
+        import config as cfg
+        saved = {}
+        monkeypatch.setattr(cfg, "save_runtime_overrides",
+                            lambda updates: saved.update(updates))
+        snap = self._snapshot()
+        try:
+            for bad in ({"entry_model": "good/model",
+                         "ensemble_models": "only/one"},      # 1-model panel
+                        {"entry_model": "no-slash"},           # not vendor/model
+                        {"entry_model": "good/model",
+                         "ensemble_k": 9}):                    # k out of range
+                resp = client.post('/api/config/models', json=bad)
+                assert resp.status_code == 400, bad
+            assert cfg.LLM_CONFIG["model"] == snap[0]   # untouched
+            assert saved == {}                          # nothing persisted
+        finally:
+            self._restore(snap)

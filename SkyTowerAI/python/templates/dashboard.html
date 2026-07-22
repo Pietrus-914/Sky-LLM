@@ -1122,6 +1122,36 @@
                 </div>
             </div>
 
+            <!-- AI Models -->
+            <div class="config-section">
+                <h3>AI Models (OpenRouter)</h3>
+                <div class="config-row">
+                    <label for="modelEntry">Entry model (single-call / K-sample mode)</label>
+                    <input type="text" id="modelEntry" style="width:320px" placeholder="anthropic/claude-fable-5">
+                </div>
+                <div class="config-row">
+                    <label for="modelExit">Exit model (position management, ~every 30 s)</label>
+                    <input type="text" id="modelExit" style="width:320px" placeholder="google/gemini-3.1-pro-preview">
+                </div>
+                <div class="config-row">
+                    <label for="modelEnsembleK">Ensemble K (same-model samples, 1-5; used when the panel below is empty)</label>
+                    <input type="number" id="modelEnsembleK" min="1" max="5" step="1" style="width:110px">
+                </div>
+                <div class="config-row">
+                    <label for="modelEnsemblePanel">Mixed panel: 2-5 OpenRouter ids, comma-separated. FIRST = anchor. Empty = panel off</label>
+                    <input type="text" id="modelEnsemblePanel" style="width:100%;max-width:620px"
+                           placeholder="anthropic/claude-fable-5, openai/gpt-5.6-sol-pro, google/gemini-3.1-pro-preview">
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
+                    Saved with the Save button below; applies from the NEXT decision (no
+                    restart) and survives restarts (overrides .env). Panel rule: trade only
+                    when the anchor's direction is confirmed by &ge;1 other model and no
+                    model votes the opposite way (SKIP = abstain). The traded decision
+                    reports the anchor's confidence/reasoning. Per-model votes: expand a
+                    row in AI Decisions &rarr; Decision History.
+                </div>
+            </div>
+
             <!-- Currency Regimes (auto-tracked) -->
             <div class="config-section">
                 <h3>Currency Regimes (auto)</h3>
@@ -1297,16 +1327,22 @@
         <!-- AI models (.env) -->
         <div class="card">
             <div class="card-header">
-                <span class="card-title">Modele AI (plik python/.env na maszynie serwera — zmiana wymaga restartu)</span>
+                <span class="card-title">Modele AI — ustawiasz w panelu: Event Config &rarr; karta "AI Models"</span>
             </div>
+            <p style="font-size:0.8rem;line-height:1.6;color:var(--text-secondary);margin-bottom:8px">
+                Zapis przyciskiem Save w Event Config: działa od NASTĘPNEJ decyzji (bez
+                restartu), przeżywa restarty (logs/runtime_overrides.json) i nadpisuje
+                .env. Zmienne w .env (te same nazwy z prefiksem SKYTOWER_) są tylko
+                wartościami startowymi dla świeżej maszyny.
+            </p>
             <div class="table-wrapper">
                 <table>
-                    <thead><tr><th>Zmienna</th><th>Co robi</th></tr></thead>
+                    <thead><tr><th>Pole</th><th>Co robi</th></tr></thead>
                     <tbody style="font-size:0.82rem">
-                        <tr><td><b>SKYTOWER_ENTRY_MODEL</b></td><td>Model decyzji wejściowych (single-call oraz tryb K próbek).</td></tr>
-                        <tr><td><b>SKYTOWER_EXIT_MODEL</b></td><td>Model zarządzania otwartą pozycją — wywoływany co ~30 s przez cały czas trwania trade'u (20-60 wywołań), więc cena ma tu największe znaczenie.</td></tr>
-                        <tr><td><b>SKYTOWER_ENSEMBLE_K</b></td><td>K &ge; 2: K równoległych próbek TEGO SAMEGO modelu wejściowego; wejście tylko przy jednomyślności kierunku (każdy split = SKIP). Filtruje "fuksy" jednego losowania. Ignorowane, gdy aktywny jest panel poniżej.</td></tr>
-                        <tr><td><b>SKYTOWER_ENSEMBLE_MODELS</b></td><td>Panel RÓŻNYCH modeli: 2-5 ID OpenRoutera po przecinku, po jednym głosie na model. <b>Pierwszy = kotwica</b>: wejście tylko, gdy jej kierunek potwierdzi &ge; 1 inny model i żaden nie zagłosuje przeciwnie (SKIP = wstrzymanie się, głos przeciwny = weto). Confidence i reasoning decyzji pochodzą od kotwicy (skal pewności różnych vendorów nie wolno mieszać). Głosy per model widać w Decision History po rozwinięciu wiersza. Koszt eventu = suma cen wszystkich modeli z listy.</td></tr>
+                        <tr><td><b>Entry model</b></td><td>Model decyzji wejściowych (single-call oraz tryb K próbek). Env: SKYTOWER_ENTRY_MODEL.</td></tr>
+                        <tr><td><b>Exit model</b></td><td>Model zarządzania otwartą pozycją — wywoływany co ~30 s przez cały czas trwania trade'u (20-60 wywołań), więc cena ma tu największe znaczenie. Env: SKYTOWER_EXIT_MODEL.</td></tr>
+                        <tr><td><b>Ensemble K</b></td><td>K &ge; 2: K równoległych próbek TEGO SAMEGO modelu wejściowego; wejście tylko przy jednomyślności kierunku (każdy split = SKIP). Filtruje "fuksy" jednego losowania. Ignorowane, gdy aktywny jest panel mieszany. Env: SKYTOWER_ENSEMBLE_K.</td></tr>
+                        <tr><td><b>Mixed panel</b></td><td>Panel RÓŻNYCH modeli: 2-5 ID OpenRoutera po przecinku, po jednym głosie na model. <b>Pierwszy = kotwica</b>: wejście tylko, gdy jej kierunek potwierdzi &ge; 1 inny model i żaden nie zagłosuje przeciwnie (SKIP = wstrzymanie się, głos przeciwny = weto). Confidence i reasoning decyzji pochodzą od kotwicy (skal pewności różnych vendorów nie wolno mieszać). Głosy per model widać w Decision History po rozwinięciu wiersza. Koszt eventu = suma cen modeli z listy. Puste pole = panel wyłączony. Env: SKYTOWER_ENSEMBLE_MODELS.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -2066,11 +2102,29 @@
                     body: JSON.stringify(riskPayload)
                 });
 
-                if (resp.ok && riskResp.ok) {
+                // AI models too (empty text fields are simply not sent;
+                // the panel field IS sent when empty — that disables it)
+                var modelsPayload = { ensemble_models: $('modelEnsemblePanel').value };
+                var entryVal = $('modelEntry').value.trim();
+                if (entryVal) modelsPayload.entry_model = entryVal;
+                var exitVal = $('modelExit').value.trim();
+                if (exitVal) modelsPayload.exit_model = exitVal;
+                var kVal = parseInt($('modelEnsembleK').value, 10);
+                if (!isNaN(kVal)) modelsPayload.ensemble_k = kVal;
+                var modelsResp = await fetch(BASE_URL + '/api/config/models', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(modelsPayload)
+                });
+
+                if (resp.ok && riskResp.ok && modelsResp.ok) {
                     showToast('Configuration saved (applies immediately, survives restarts)');
                 } else if (!riskResp.ok) {
                     var err = await riskResp.json().catch(function(){ return {}; });
                     showToast('Risk limits rejected: ' + (err.message || riskResp.status), false);
+                } else if (!modelsResp.ok) {
+                    var merr = await modelsResp.json().catch(function(){ return {}; });
+                    showToast('AI models rejected: ' + (merr.message || modelsResp.status), false);
                 } else {
                     showToast('Event config save failed', false);
                 }
@@ -2085,6 +2139,16 @@
                 if (data.max_daily_trades != null) $('riskMaxDailyTrades').value = data.max_daily_trades;
                 if (data.max_daily_loss_usd != null) $('riskMaxDailyLoss').value = data.max_daily_loss_usd;
                 if (data.max_loss_usd != null) $('riskMaxLoss').value = data.max_loss_usd;
+            } catch(e) { /* server offline - leave blank */ }
+        }
+
+        async function loadModelsConfig() {
+            try {
+                var data = await apiFetch('/api/config/models');
+                if (data.entry_model) $('modelEntry').value = data.entry_model;
+                if (data.exit_model) $('modelExit').value = data.exit_model;
+                if (data.ensemble_k != null) $('modelEnsembleK').value = data.ensemble_k;
+                $('modelEnsemblePanel').value = (data.ensemble_models || []).join(', ');
             } catch(e) { /* server offline - leave blank */ }
         }
 
@@ -2513,7 +2577,7 @@
                 var conf = (typeof d.confidence === 'number') ? (d.confidence * 100).toFixed(0) + '%' : '--';
                 var reason = d.reasoning || '';
                 var preview = escapeHtml(reason.substring(0, 220)) + (reason.length > 220 ? '&hellip;' : '');
-                html += '<tr class="dh-row" onclick="toggleDhRow(' + i + ')">' +
+                html += '<tr class="dh-row" data-idx="' + i + '">' +
                     '<td style="white-space:nowrap">' + (isOpen ? '&#9662;' : '&#9656;') + ' ' + utcToCETFull(d.timestamp || '') + '</td>' +
                     '<td>' + escapeHtml((d.event_name || '--')) + ' <span class="currency-tag">' + escapeHtml(d.currency || '') + '</span></td>' +
                     '<td style="color:' + dirColor + ';font-weight:600">' + escapeHtml(dir) + '</td>' +
@@ -2550,6 +2614,23 @@
                 if (dhExpanded[key]) renderDecisionHistoryRows();
             }
         }
+
+        // Delegated click handler: the whole script lives inside an IIFE
+        // ('use strict'), so an inline onclick="..." attribute could never
+        // resolve toggleDhRow (it looks it up on window). One listener on
+        // the tbody survives every innerHTML rebuild.
+        (function() {
+            var dhBody = $('decisionHistoryBody');
+            if (dhBody) {
+                dhBody.addEventListener('click', function(ev) {
+                    var tr = ev.target && ev.target.closest
+                        ? ev.target.closest('tr.dh-row') : null;
+                    if (!tr || !dhBody.contains(tr)) return;
+                    var idx = parseInt(tr.getAttribute('data-idx'), 10);
+                    if (!isNaN(idx)) toggleDhRow(idx);
+                });
+            }
+        })();
 
         async function refreshDecisionHistory() {
             try {
@@ -2747,6 +2828,7 @@
                     }
                 } catch(e) { /* offline */ }
                 loadRiskConfig();
+                loadModelsConfig();
                 loadRegimes();
                 loadProposals();
             })();
