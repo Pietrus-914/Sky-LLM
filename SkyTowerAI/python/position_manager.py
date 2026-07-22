@@ -605,6 +605,20 @@ class PositionManager:
             "command": cmd.to_dict(),
         }
 
+    def get_trade_by_decision(self, decision_id: str) -> Optional[Dict]:
+        """Full record — including the ai_decisions management trail that
+        /api/position/status deliberately strips — of the most recent closed
+        trade bound to this decision_id (F2 lineage). None when no trade
+        matched: SKIP decisions, a still-open position, or trades older
+        than the recent_trades cap (50; the JSONL keeps them all)."""
+        if not decision_id:
+            return None
+        with self.lock:
+            for rec in reversed(self.recent_trades):
+                if rec.get("decision_id") == decision_id:
+                    return dict(rec)
+        return None
+
     def get_status(self) -> Dict:
         """Get current position manager status (for debugging/monitoring)."""
         with self.lock:

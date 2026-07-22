@@ -219,3 +219,138 @@ class TestPersistence:
                                     [reply("BUY", 0.8)], k=1)
         engine.decision_log.record(d)
         assert "ensemble" not in engine.decision_log.get_recent(5)[0]
+
+
+# ============================================================================
+# Mixed panel (F4c): SKYTOWER_ENSEMBLE_MODELS — one vote per model,
+# anchor-gated aggregation (confirm trades, opposite vetoes, SKIP abstains)
+# ============================================================================
+
+PANEL = ["model-anchor", "model-b", "model-c"]
+
+
+def run_panel(tmp_path, monkeypatch, script, force=False, models=None,
+              provider="openrouter", k=1):
+    """Drive _llm_decision with a heterogeneous panel. `script` maps model
+    id -> reply string or Exception. Records which model each call used."""
+    engine = make_engine(tmp_path)
+    engine.provider = provider
+    monkeypatch.setattr(lde, "ENSEMBLE_K", k)
+    monkeypatch.setattr(lde, "ENSEMBLE_MODELS", list(models or PANEL))
+    monkeypatch.setattr(lde, "FORCE_DECISION", force)
+    routed = []
+
+    def fake_chat(prompt, model=None):
+        routed.append(model)
+        r = script[model]
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    engine._chat = fake_chat
+    ctx = engine._gather_data(make_event(), None)
+    decision = engine._llm_decision(make_event(), ctx)
+    return decision, routed, engine
+
+
+class TestMixedPanel:
+    def test_anchor_plus_confirmation_trades_with_anchor_confidence(
+            self, tmp_path, monkeypatch):
+        d, routed, _ = run_panel(tmp_path, monkeypatch, {
+            "model-anchor": reply("BUY", 0.8, reasoning="anchor essay"),
+            "model-b": reply("BUY", 0.4),      # cheaper model, own scale
+            "model-c": reply("SKIP", 0.9)})    # abstains, does not block
+        assert d.direction == "BUY"
+        assert d.confidence == 0.8             # anchor's, never averaged
+        assert "anchor essay" in d.reasoning
+        assert "ENSEMBLE panel 2/3 BUY" in d.reasoning
+        assert routed == PANEL                 # one call per listed model
+        assert d.ensemble["anchor"] == "model-anchor"
+        assert d.ensemble["panel"] == PANEL
+        models_in_votes = [v["model"] for v in d.ensemble["votes"]]
+        assert models_in_votes == PANEL
+
+    def test_opposite_vote_vetoes(self, tmp_path, monkeypatch):
+        d, _, _ = run_panel(tmp_path, monkeypatch, {
+            "model-anchor": reply("BUY", 0.9),
+            "model-b": reply("SELL", 0.6),
+            "model-c": reply("BUY", 0.8)})
+        assert d.direction == "SKIP"
+        assert "veto" in d.reasoning
+        assert "model-b" in d.reasoning
+
+    def test_unconfirmed_anchor_skips(self, tmp_path, monkeypatch):
+        d, _, _ = run_panel(tmp_path, monkeypatch, {
+            "model-anchor": reply("BUY", 0.9),
+            "model-b": reply("SKIP", 0.5),
+            "model-c": reply("SKIP", 0.4)})
+        assert d.direction == "SKIP"
+        assert "unconfirmed" in d.reasoning
+
+    def test_anchor_skip_gates_even_when_others_agree(self, tmp_path,
+                                                      monkeypatch):
+        d, _, _ = run_panel(tmp_path, monkeypatch, {
+            "model-anchor": reply("SKIP", 0.4),
+            "model-b": reply("BUY", 0.9),
+            "model-c": reply("BUY", 0.9)})
+        assert d.direction == "SKIP"
+        assert "anchor voted SKIP" in d.reasoning
+
+    def test_anchor_call_failure_skips(self, tmp_path, monkeypatch):
+        d, _, _ = run_panel(tmp_path, monkeypatch, {
+            "model-anchor": RuntimeError("api down"),
+            "model-b": reply("BUY", 0.9),
+            "model-c": reply("BUY", 0.9)})
+        assert d.direction == "SKIP"
+        assert "call failed" in d.reasoning
+        assert d.ensemble["valid"] == 2
+
+    def test_panel_raw_dump_labels_models(self, tmp_path, monkeypatch):
+        d, _, _ = run_panel(tmp_path, monkeypatch, {
+            "model-anchor": reply("BUY", 0.8),
+            "model-b": reply("BUY", 0.7),
+            "model-c": reply("BUY", 0.6)})
+        assert "[model-anchor]" in d.raw_response
+        assert "[model-c]" in d.raw_response
+
+    def test_force_mode_majority_still_works_with_panel(self, tmp_path,
+                                                        monkeypatch):
+        d, _, _ = run_panel(tmp_path, monkeypatch, {
+            "model-anchor": reply("SELL", 0.6),
+            "model-b": reply("BUY", 0.8),
+            "model-c": reply("BUY", 0.7)}, force=True)
+        assert d.direction == "BUY"
+        assert d.forced is True
+        assert "majority BUY" in d.reasoning
+
+    def test_non_openrouter_provider_falls_back_to_single_call(
+            self, tmp_path, monkeypatch):
+        """Models-only config on a single-vendor SDK must degrade to the
+        classic single call, not a 1-vote committee that SKIPs everything."""
+        engine = make_engine(tmp_path)
+        engine.provider = "anthropic"
+        monkeypatch.setattr(lde, "ENSEMBLE_K", 1)
+        monkeypatch.setattr(lde, "ENSEMBLE_MODELS", list(PANEL))
+        monkeypatch.setattr(lde, "FORCE_DECISION", False)
+        calls = {"n": 0}
+
+        def fake_chat(prompt, model=None):
+            calls["n"] += 1
+            return reply("BUY", 0.8)
+
+        engine._chat = fake_chat
+        ctx = engine._gather_data(make_event(), None)
+        d = engine._llm_decision(make_event(), ctx)
+        assert calls["n"] == 1
+        assert d.direction == "BUY"
+        assert d.ensemble is None
+
+    def test_panel_metadata_persisted_in_history(self, tmp_path, monkeypatch):
+        d, _, engine = run_panel(tmp_path, monkeypatch, {
+            "model-anchor": reply("BUY", 0.8),
+            "model-b": reply("BUY", 0.7),
+            "model-c": reply("SELL", 0.6)})
+        engine.decision_log.record(d)
+        row = engine.decision_log.get_recent(5)[0]
+        assert row["ensemble"]["anchor"] == "model-anchor"
+        assert row["ensemble"]["votes"][1]["model"] == "model-b"

@@ -235,6 +235,18 @@ def get_decision_history():
     })
 
 
+@app.route('/api/trade-log/<decision_id>', methods=['GET'])
+def get_trade_log(decision_id):
+    """Position-management trail (AI exit decisions, close reason, P/L) of
+    the closed trade bound to a decision_id. Fetched lazily when a Decision
+    History row is expanded — recent_trades in /api/position/status is
+    deliberately slimmed (no ai_decisions), this is the fat single-trade
+    view. Returns trade: null when the decision never became a trade."""
+    ensure_services()
+    trade = position_manager.get_trade_by_decision(decision_id)
+    return jsonify({"status": "ok", "trade": trade})
+
+
 @app.route('/api/datasources/status', methods=['GET'])
 def get_datasource_status():
     """Check which data sources are currently responding."""

@@ -20,7 +20,7 @@ from decision_history import DecisionHistory
 from market_context import normalize_pair
 from config import (LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS,
                     HIGH_IMPACT_EVENTS, OPENROUTER_API_KEY, FORCE_DECISION,
-                    ENSEMBLE_K)
+                    ENSEMBLE_K, ENSEMBLE_MODELS)
 
 
 @dataclass
@@ -1058,9 +1058,14 @@ decision in JSON format."""
         """Use LLM to make trading decision"""
         prompt = self._entry_prompt(data_context)
 
-        # Self-consistency ensemble (F4): K parallel votes, unanimity gates
-        # the trade. Single-call classic path below stays byte-identical.
-        if ENSEMBLE_K >= 2:
+        # Self-consistency ensemble (F4) / heterogeneous panel (F4c):
+        # parallel votes gate the trade. Single-call classic path below
+        # stays byte-identical. The panel needs the openrouter provider —
+        # one client serves every vendor there; with any other provider a
+        # models-only config degrades to the classic single call instead
+        # of a degenerate 1-vote committee that would SKIP everything.
+        if ENSEMBLE_K >= 2 or (len(ENSEMBLE_MODELS) >= 2
+                               and self.provider == "openrouter"):
             return self._ensemble_decision(event, data_context, prompt)
 
         try:
@@ -1141,17 +1146,26 @@ decision in JSON format."""
         Numeric fields of a traded decision are per-voter clamped medians;
         all raw replies go to the decision-context dump."""
         from concurrent.futures import ThreadPoolExecutor
-        k = ENSEMBLE_K
-        logger.info(f"Ensemble entry: {k} parallel LLM calls "
-                    f"({self.provider}/{self.model})...")
+        panel = (ENSEMBLE_MODELS if len(ENSEMBLE_MODELS) >= 2
+                 and self.provider == "openrouter" else None)
+        k = len(panel) if panel else ENSEMBLE_K
+        if panel:
+            logger.info(f"Ensemble entry: mixed panel of {k} models, "
+                        f"anchor {panel[0]} ({', '.join(panel)})...")
+        else:
+            logger.info(f"Ensemble entry: {k} parallel LLM calls "
+                        f"({self.provider}/{self.model})...")
 
         def one_call(i):
+            call_model = panel[i] if panel else None
             try:
-                text = self._chat(prompt)
-                return text, self._parse_llm_response(text)
+                text = (self._chat(prompt, call_model) if call_model
+                        else self._chat(prompt))
+                return text, self._parse_llm_response(text), call_model or self.model
             except Exception as e:
-                logger.warning(f"Ensemble call {i + 1}/{k} failed: {e}")
-                return "", {"_parse_failed": True}
+                logger.warning(f"Ensemble call {i + 1}/{k} "
+                               f"({call_model or self.model}) failed: {e}")
+                return "", {"_parse_failed": True}, call_model or self.model
 
         try:
             with ThreadPoolExecutor(max_workers=k) as pool:
@@ -1161,13 +1175,17 @@ decision in JSON format."""
             return self._rule_based_decision(event, data_context)
 
         votes, raws = [], []
-        for text, parsed in results:
-            raws.append(text or "(call failed)")
+        for text, parsed, vote_model in results:
+            # Label raw replies per model in panel mode — the context dump
+            # is unreadable otherwise (three vendors, one blob)
+            raws.append((f"[{vote_model}]\n" if panel else "")
+                        + (text or "(call failed)"))
             if parsed.get('_parse_failed'):
                 continue
             votes.append({
                 "direction": self._normalize_direction(parsed.get('direction')),
                 "confidence": self._num(parsed.get('confidence'), 0.0, 0.0, 1.0),
+                "model": vote_model,
                 "parsed": parsed,
             })
         raw_joined = "\n\n=== ENSEMBLE CALL BOUNDARY ===\n\n".join(raws)
@@ -1179,8 +1197,12 @@ decision in JSON format."""
         counts = {d: dirs.count(d) for d in sorted(set(dirs))}
         meta = {"k": k, "valid": len(votes),
                 "votes": [{"direction": v["direction"],
-                           "confidence": round(v["confidence"], 2)}
+                           "confidence": round(v["confidence"], 2),
+                           "model": v["model"]}
                           for v in votes]}
+        if panel:
+            meta["panel"] = list(panel)
+            meta["anchor"] = panel[0]
 
         def _median(vals):
             vals = sorted(vals)
@@ -1267,6 +1289,46 @@ decision in JSON format."""
                 return build(direction, min(v["confidence"] for v in votes),
                              votes, reasoning)
 
+            if panel:
+                # Heterogeneous committee (F4c): the ANCHOR's call gates the
+                # trade. Confirmation = >=1 other model votes the same
+                # direction; an OPPOSITE BUY/SELL vote vetoes; SKIP votes
+                # abstain. Confidence and reasoning come from the anchor —
+                # confidence scales are not comparable across vendors, so
+                # they are never mixed or averaged.
+                anchor = next((v for v in votes if v["model"] == panel[0]), None)
+                if anchor and anchor["direction"] in ('BUY', 'SELL'):
+                    d = anchor["direction"]
+                    others = [v for v in votes if v is not anchor]
+                    confirms = [v for v in others if v["direction"] == d]
+                    opposed = [v for v in others
+                               if v["direction"] in ('BUY', 'SELL')
+                               and v["direction"] != d]
+                    if confirms and not opposed:
+                        votes_for = [anchor] + confirms
+                        anchor_text = anchor["parsed"].get('reasoning')
+                        reasoning = (f"ENSEMBLE panel {len(votes_for)}/{k} {d} "
+                                     f"(anchor + {len(confirms)} confirm, no veto). "
+                                     + (str(anchor_text) if anchor_text
+                                        else 'LLM decision'))
+                        logger.info(f"Ensemble panel: {d} — anchor confirmed "
+                                    f"by {[v['model'] for v in confirms]}")
+                        return build(d, anchor["confidence"], votes_for, reasoning)
+                    if opposed:
+                        why = (f"veto — {', '.join(v['model'] for v in opposed)} "
+                               f"voted against anchor {d}")
+                    else:
+                        why = f"anchor {d} unconfirmed by any other model"
+                elif anchor:
+                    why = "anchor voted SKIP"
+                else:
+                    why = f"anchor {panel[0]} call failed"
+                logger.info(f"Ensemble panel SKIP: {why} ({counts})")
+                return build('SKIP',
+                             anchor["confidence"] if anchor
+                             else _median([v["confidence"] for v in votes]),
+                             votes, f"ENSEMBLE SKIP: {why} ({counts}).")
+
             unanimous = (len(votes) >= 2 and len(counts) == 1
                          and dirs[0] in ('BUY', 'SELL'))
             if unanimous:
@@ -1307,13 +1369,17 @@ decision in JSON format."""
             v = min(hi, v)
         return v
 
-    def _chat(self, prompt: str) -> str:
-        """Send one prompt to the configured LLM provider and return the raw text."""
+    def _chat(self, prompt: str, model: str = None) -> str:
+        """Send one prompt to the configured LLM provider and return the raw
+        text. `model` overrides the engine's default for THIS call only —
+        used by the F4c mixed panel, which routes each vote to a different
+        OpenRouter id through the same client."""
         system_prompt = self._system_prompt()
+        use_model = model or self.model
         if self.provider == "openrouter":
             # OpenRouter uses OpenAI-compatible API
             response = self.client.chat.completions.create(
-                model=self.model,
+                model=use_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
@@ -1326,12 +1392,12 @@ decision in JSON format."""
                     "X-Title": "SkyTower-AI Trading"
                 }
             )
-            logger.info(f"OpenRouter response received from {self.model}")
+            logger.info(f"OpenRouter response received from {use_model}")
             return response.choices[0].message.content
 
         elif self.provider == "anthropic":
             response = self.client.messages.create(
-                model=self.model,
+                model=use_model,
                 max_tokens=LLM_CONFIG.get("max_tokens", 1500),
                 system=system_prompt,
                 messages=[{"role": "user", "content": prompt}],
@@ -1341,7 +1407,7 @@ decision in JSON format."""
 
         elif self.provider == "openai":
             response = self.client.chat.completions.create(
-                model=self.model,
+                model=use_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}

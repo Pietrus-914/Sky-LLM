@@ -429,6 +429,30 @@ if not 1 <= ENSEMBLE_K <= 5:
     print(f"WARNING: SKYTOWER_ENSEMBLE_K={ENSEMBLE_K} out of range 1-5 — using 1")
     ENSEMBLE_K = 1
 
+# ENSEMBLE PANEL (F4c): heterogeneous committee instead of K same-model
+# samples. Comma-separated OpenRouter model ids; empty = classic K-call
+# self-consistency above. With >= 2 ids the entry engine fires ONE call per
+# listed model. The FIRST id is the ANCHOR: a trade requires the anchor's
+# BUY/SELL to be confirmed by >= 1 other model with NO opposite vote (SKIP
+# votes abstain, an opposite vote vetoes), and the traded decision reports
+# the ANCHOR's confidence/reasoning — confidence scales are not comparable
+# across vendors, so they are never mixed or averaged. Same-model sampling
+# catches one-off flukes; a mixed panel also catches the anchor's
+# systematic blind spots (correlated errors are what unanimity cannot see).
+# OpenRouter provider only — one client serves every vendor there.
+# SKYTOWER_ENSEMBLE_K is ignored while the panel is active.
+ENSEMBLE_MODELS = [m.strip() for m in
+                   os.getenv("SKYTOWER_ENSEMBLE_MODELS", "").split(",")
+                   if m.strip()]
+if len(ENSEMBLE_MODELS) == 1:
+    print("WARNING: SKYTOWER_ENSEMBLE_MODELS needs >= 2 models — ignoring it "
+          "(use SKYTOWER_ENTRY_MODEL to change the single-call model)")
+    ENSEMBLE_MODELS = []
+elif len(ENSEMBLE_MODELS) > 5:
+    print(f"WARNING: SKYTOWER_ENSEMBLE_MODELS has {len(ENSEMBLE_MODELS)} "
+          f"models — capping at 5")
+    ENSEMBLE_MODELS = ENSEMBLE_MODELS[:5]
+
 # =============================================================================
 # TEST MODE: FORCE DECISION (never SKIP)
 # =============================================================================

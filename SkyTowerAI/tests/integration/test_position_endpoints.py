@@ -361,3 +361,34 @@ class TestNoReanalysisAfterTradeOpen:
                     == server._analyzed_event_key_from_decision(decision))
         finally:
             self._teardown(server)
+
+
+# ============================================================================
+# TestTradeLogEndpoint
+# ============================================================================
+
+class TestTradeLogEndpoint:
+    """/api/trade-log/<decision_id> — the fat single-trade view (incl. the
+    ai_decisions trail that /api/position/status strips) used by the
+    expandable Decision History rows."""
+
+    def test_returns_full_trail_for_closed_trade(self, client):
+        open_position(client, decision_id="dl-test-1")
+        report_position(client, profit_usd=50.0)
+        resp = close_position(client, profit=75.0)
+        assert resp.get_json()["status"] == "ok"
+
+        data = client.get('/api/trade-log/dl-test-1').get_json()
+        assert data["status"] == "ok"
+        trade = data["trade"]
+        assert trade is not None
+        assert trade["decision_id"] == "dl-test-1"
+        assert trade["profit_usd"] == 75.0
+        assert "ai_decisions" in trade   # the field /api/position/status strips
+        assert "reason" in trade
+        assert "realized_usd" in trade
+
+    def test_unknown_decision_returns_null(self, client):
+        data = client.get('/api/trade-log/no-such-decision').get_json()
+        assert data["status"] == "ok"
+        assert data["trade"] is None
