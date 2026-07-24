@@ -195,6 +195,10 @@ public:
    // Position management
    bool              OnNewPosition(ulong ticket, string symbol, string direction,
                                   double entry_price, double lots);
+   bool              OnRecoveredPosition(ulong ticket, string symbol, string direction,
+                                         double entry_price, double original_lots,
+                                         double current_lots, datetime open_time,
+                                         double sl, double tp);
    bool              OnPositionClosed();
 
    // Zone/Target retrieval
@@ -302,6 +306,32 @@ bool CSmartExitManager::OnNewPosition(ulong ticket, string symbol, string direct
       }
    }
 
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Restore local state without fetching or applying new trade targets |
+//+------------------------------------------------------------------+
+bool CSmartExitManager::OnRecoveredPosition(ulong ticket, string symbol,
+                                             string direction, double entry_price,
+                                             double original_lots,
+                                             double current_lots,
+                                             datetime open_time, double sl, double tp)
+{
+   m_position.Clear();
+   m_position.ticket = ticket;
+   m_position.symbol = symbol;
+   m_position.direction = direction;
+   m_position.entry_price = entry_price;
+   m_position.initial_lots = original_lots;
+   m_position.current_lots = current_lots;
+   m_position.open_time = open_time;
+   m_position.highest_price = entry_price;
+   m_position.lowest_price = entry_price;
+   m_position.targets.Clear();
+   m_position.targets.sl = sl;
+   m_position.targets.tp1 = tp;
+   m_position.targets.valid = false;
    return true;
 }
 

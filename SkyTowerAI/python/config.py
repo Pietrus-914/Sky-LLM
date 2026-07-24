@@ -309,6 +309,8 @@ _OVERRIDES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # watchdog restarts. Lives next to the other JSONL stores in logs/.
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                   'logs', 'trade_history.jsonl')
+ACTIVE_POSITION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    'logs', 'active_position.json')
 
 # Curated event playbooks (hand/Claude-distilled patterns from historical
 # charts) injected into the entry prompt. Optional — missing file = no

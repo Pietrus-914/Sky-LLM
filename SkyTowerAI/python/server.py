@@ -22,7 +22,11 @@ from sentiment_analyzer import SentimentAggregator
 from llm_decision_engine import LLMDecisionEngine, TradingDecision
 from zone_analyzer import ZoneAnalyzer, PriceBar, analyze_from_ohlc_data
 from target_calculator import TargetCalculator
-from position_manager import PositionManager
+from position_manager import (
+    PositionConflictError,
+    PositionManager,
+    PositionPersistenceError,
+)
 from exit_decision_engine import ExitDecisionEngine
 from decision_history import DecisionHistory
 from event_path_recorder import EventPathRecorder
@@ -69,7 +73,7 @@ def init_services():
     global decision_engine, calendar, zone_analyzer, target_calculator, position_manager, exit_engine, decision_history, path_recorder, regime_tracker
     logger.info("Initializing SkyTower-AI services...")
 
-    from config import TRADE_HISTORY_FILE
+    from config import ACTIVE_POSITION_FILE, TRADE_HISTORY_FILE
     # DecisionHistory must be created first and SHARED with the engine —
     # the engine's TRACK RECORD section reads the same instance the server
     # records into (a private copy never sees in-session decisions)
@@ -94,7 +98,8 @@ def init_services():
     target_calculator = TargetCalculator(ZONE_CONFIG)
     exit_engine = ExitDecisionEngine()
     position_manager = PositionManager(exit_engine=exit_engine,
-                                       history_file=TRADE_HISTORY_FILE)
+                                       history_file=TRADE_HISTORY_FILE,
+                                       state_file=ACTIVE_POSITION_FILE)
     # Post-event price paths for ALL monitored events (traded or not) —
     # measured server-side from EA-pushed M1, the system's learning substrate
     path_recorder = EventPathRecorder(regime_provider=regime_tracker.get)
@@ -1734,6 +1739,39 @@ def trade_executed():
 # AI POSITION MANAGEMENT ENDPOINTS
 # =============================================================================
 
+@app.route('/api/position/reconcile', methods=['POST'])
+def position_reconcile():
+    """Reconcile the broker's empty/non-empty position observation."""
+    ensure_services()
+    try:
+        data = request.json
+        if not isinstance(data, dict) or "has_position" not in data:
+            return jsonify({
+                "status": "error",
+                "message": "has_position is required",
+            }), 422
+        if data["has_position"]:
+            registration = position_manager.on_position_opened(
+                data,
+                decision_id=str(data.get("decision_id") or ""),
+                forced=bool(data.get("forced", False)),
+                recovered=True,
+            )
+            status_code = 409 if registration == "conflict" else 200
+            return jsonify({
+                "status": "conflict" if status_code == 409 else "ok",
+                "reconciliation": registration,
+                "allow_new_trades": False,
+            }), status_code
+
+        result = position_manager.reconcile_empty()
+        return jsonify({"status": "ok", **result})
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 422
+    except PositionPersistenceError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 503
+
+
 @app.route('/api/position/opened', methods=['POST'])
 def position_opened():
     """
@@ -1780,31 +1818,40 @@ def position_opened():
                 entry_reasoning = next_decision.reasoning
                 forced_flag = getattr(next_decision, 'forced', False)
 
-        position_manager.on_position_opened(data, entry_reasoning=entry_reasoning,
-                                            decision_id=decision_id,
-                                            forced=forced_flag)
+        registration = position_manager.on_position_opened(
+            data,
+            entry_reasoning=entry_reasoning,
+            decision_id=decision_id,
+            forced=forced_flag,
+            recovered=bool(data.get("recovered", False)),
+        )
+        if registration == "conflict":
+            return jsonify({
+                "status": "conflict",
+                "message": "A different broker position is already tracked",
+            }), 409
 
         # Also mark trade as executed (same as /api/trade-executed)
         event_key_to_cleanup = None
+        if registration == "opened" and not data.get("recovered", False):
+            with decision_lock:
+                if next_decision:
+                    event_time = datetime.fromisoformat(
+                        next_decision.data_summary['event']['datetime']
+                    )
+                    if event_time.tzinfo is not None:
+                        event_time = event_time.replace(tzinfo=None)
 
-        with decision_lock:
-            if next_decision:
-                event_time = datetime.fromisoformat(
-                    next_decision.data_summary['event']['datetime']
-                )
-                if event_time.tzinfo is not None:
-                    event_time = event_time.replace(tzinfo=None)
+                    event_key_to_cleanup = get_event_key(
+                        next_decision.data_summary['event'].get('currency', ''),
+                        event_time
+                    )
+                    executed_trades.add(event_key_to_cleanup)
+                    # Stop the updater from re-analyzing this event after we
+                    # release next_decision (event may still be seconds ahead)
+                    _mark_decision_event_analyzed(next_decision)
 
-                event_key_to_cleanup = get_event_key(
-                    next_decision.data_summary['event'].get('currency', ''),
-                    event_time
-                )
-                executed_trades.add(event_key_to_cleanup)
-                # Stop the updater from re-analyzing this event after we
-                # release next_decision (event may still be seconds ahead)
-                _mark_decision_event_analyzed(next_decision)
-
-            next_decision = None
+                next_decision = None
 
         if event_key_to_cleanup:
             with pair_lock:
@@ -1814,8 +1861,18 @@ def position_opened():
         logger.info(f"Position opened: {data.get('direction')} {data.get('symbol')} "
                      f"@ {data.get('entry_price')} | ticket={data.get('ticket')}")
 
-        return jsonify({"status": "ok", "message": "Position registered"})
+        return jsonify({
+            "status": "ok",
+            "message": "Position registered",
+            "registration": registration,
+        })
 
+    except ValueError as e:
+        logger.warning(f"Invalid position open snapshot: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 422
+    except PositionPersistenceError as e:
+        logger.error(f"Could not persist position open: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 503
     except Exception as e:
         logger.error(f"Error registering position: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -1892,8 +1949,22 @@ def position_closed():
         data = request.json
         if not data:
             return jsonify({"status": "error", "message": "No data provided"}), 400
+        if (
+            data.get("position_id") in (None, "", "0")
+            and data.get("ticket") in (None, "", 0, "0")
+        ):
+            return jsonify({
+                "status": "error",
+                "message": "position_id or ticket is required",
+            }), 422
 
         record = position_manager.on_position_closed(data)
+        if record is None:
+            return jsonify({
+                "status": "ok",
+                "message": "Duplicate position close ignored",
+                "duplicate": True,
+            })
 
         # Post-trade reflection (F5): background thread — the EA's HTTP
         # call must return immediately, and a journal failure is never fatal
@@ -1904,6 +1975,15 @@ def position_closed():
 
         return jsonify({"status": "ok", "message": "Position close recorded"})
 
+    except PositionConflictError as e:
+        logger.warning(f"Rejected stale position close: {e}")
+        return jsonify({"status": "conflict", "message": str(e)}), 409
+    except ValueError as e:
+        logger.warning(f"Invalid position close report: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 422
+    except PositionPersistenceError as e:
+        logger.error(f"Could not persist position close: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 503
     except Exception as e:
         logger.error(f"Error recording position close: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500

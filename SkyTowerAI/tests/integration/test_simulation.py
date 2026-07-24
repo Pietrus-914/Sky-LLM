@@ -264,7 +264,11 @@ class TestDailyLimitsSimulation:
                 "account_balance": 5000.00,
                 "event_name": f"Event {i}",
             })
-            pm.on_position_closed({"profit": loss, "reason": "SL hit"})
+            pm.on_position_closed({
+                "ticket": 90000 + i,
+                "profit": loss,
+                "reason": "SL hit",
+            })
 
         # After all 4 losses (total -$315), should not allow more trades
         can_trade, reason = pm.can_open_trade()
