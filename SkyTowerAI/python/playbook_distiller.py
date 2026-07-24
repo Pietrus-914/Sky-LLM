@@ -45,7 +45,14 @@ def select_batch_candidates(learned_events: Dict, playbooks: Dict,
     whitelist (junk like weekly oil inventories has stats too — the model
     never trades it); no proposal already PENDING; no proposal created
     within the cooldown (a fresh reject must not re-spawn instantly).
-    Returns (candidates, skipped_counter) — pure, unit-testable."""
+
+    Selection is CURRENCY-FAIR: eligible events are grouped by currency and
+    the batch is filled round-robin (each currency's biggest sample first),
+    so ONE click surfaces a spread across NZD/AUD/CAD/GBP/USD. A plain
+    global n_releases sort would front-load high-frequency MONTHLY events
+    (USD/GBP/CAD ~60 samples) and starve all-QUARTERLY NZD (~20-34) behind
+    the cap — the exact reason batch runs looked "USD only". Returns
+    (candidates, skipped_counter) — pure, unit-testable."""
     from datetime import datetime, timedelta
     cutoff = ((datetime.fromisoformat(now_iso.replace('Z', ''))
                - timedelta(days=cooldown_days)).isoformat())
@@ -59,11 +66,10 @@ def select_batch_candidates(learned_events: Dict, playbooks: Dict,
             recent.setdefault(key, 'cooldown')
 
     wanted = [w.lower() for w in tradeable_names or []]
-    candidates, skipped = [], {"thin": 0, "not_tradeable": 0,
-                               "pending": 0, "cooldown": 0, "capped": 0}
-    for key in sorted(learned_events or {},
-                      key=lambda k: -(learned_events[k].get('n_releases') or 0)):
-        entry = learned_events[key]
+    skipped = {"thin": 0, "not_tradeable": 0,
+               "pending": 0, "cooldown": 0, "capped": 0}
+    by_currency: Dict[str, List[Dict]] = {}
+    for key, entry in (learned_events or {}).items():
         display = entry.get('event_name') or key.split('|', 1)[-1]
         currency = entry.get('currency') or key.split('|', 1)[0]
         if (entry.get('n_releases') or 0) < min_releases:
@@ -76,15 +82,31 @@ def select_batch_candidates(learned_events: Dict, playbooks: Dict,
         if state:
             skipped[state] += 1
             continue
-        if len(candidates) >= max_batch:
-            skipped["capped"] += 1
-            continue
-        candidates.append({
+        by_currency.setdefault(currency, []).append({
             "event_name": display,
             "currency": currency,
             "learned": entry,
             "playbook_key": find_playbook_key(playbooks, display),
         })
+
+    # Biggest sample first WITHIN each currency...
+    for cands in by_currency.values():
+        cands.sort(key=lambda c: -(c["learned"].get('n_releases') or 0))
+    # ...then round-robin ACROSS currencies (the one with the meatiest single
+    # event leads each round) so no single high-frequency currency eats the
+    # cap before the others get a slot.
+    order = sorted(by_currency,
+                   key=lambda cur: (-(by_currency[cur][0]["learned"].get('n_releases') or 0),
+                                    cur))
+    interleaved: List[Dict] = []
+    depth = max((len(v) for v in by_currency.values()), default=0)
+    for i in range(depth):
+        for cur in order:
+            if i < len(by_currency[cur]):
+                interleaved.append(by_currency[cur][i])
+
+    candidates = interleaved[:max_batch]
+    skipped["capped"] = len(interleaved) - len(candidates)
     return candidates, skipped
 
 

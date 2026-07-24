@@ -1190,6 +1190,16 @@ def api_playbooks_distill():
         from event_reaction_history import normalize_event_name
         stats = decision_engine._load_learned_stats()
         events = stats.get('events', {})
+        if not events:
+            # _load_learned_stats swallows a broken/absent file into {} (fine
+            # for the prompt section, which just disappears). HERE that would
+            # surface as a confident "z danymi: brak" — a false statement
+            # pointing the operator away from the real problem (the FILE).
+            return jsonify({"status": "error",
+                            "message": ("Learned stats niedostępne/puste "
+                                        "(knowledge/learned_stats.json) — "
+                                        "odbuduj: python tools/build_learned_stats.py "
+                                        "i sprawdź server.log")}), 503
         key_stats = f"{currency}|{normalize_event_name(event_name)}"
         learned = events.get(key_stats)
         if learned is None:
@@ -1197,6 +1207,39 @@ def api_playbooks_distill():
             # dominant release — same alias fallback the entry prompt uses
             alias = (stats.get('bundle_alias') or {}).get(key_stats)
             learned = events.get((alias or {}).get('to'))
+        if learned is None:
+            # Nothing MEASURED to distill. The old path drafted BLIND here — a
+            # real-looking entry with no measured basis (502 only when the
+            # reply was garbage). Instead: guide the operator to names that DO
+            # have data. Ranked typed-substring match first, then the tradeable
+            # whitelist (a raw n-sort would bury USD "CPI m/m" at rank 18
+            # under junk like Crude Oil Inventories n=286), then sample size.
+            from config import HIGH_IMPACT_EVENTS
+            wanted = [w.lower() for w in HIGH_IMPACT_EVENTS]
+            typed = event_name.lower()
+            avail = []
+            for k, e in events.items():
+                if not isinstance(e, dict):
+                    continue     # one bad regen row must not 500 the guidance
+                if (e.get('currency') or k.split('|', 1)[0]).upper() != currency:
+                    continue
+                name = e.get('event_name') or k.split('|', 1)[-1]
+                try:
+                    n = int(e.get('n_releases') or 0)
+                except (TypeError, ValueError):
+                    n = 0
+                avail.append((typed in name.lower(),
+                              any(w in name.lower() for w in wanted),
+                              n, name))
+            avail.sort(key=lambda t: (not t[0], not t[1], -t[2], t[3]))
+            names = ", ".join(f"{t[3]} (n={t[2]})"
+                              for t in avail[:12]) or "brak"
+            return jsonify({"status": "error",
+                            "message": (f"Brak zmierzonej próbki dla {currency} "
+                                        f"\"{event_name}\". Wpisz dokładną nazwę "
+                                        f"(z sufiksem m/m / q/q) — {currency} "
+                                        f"z danymi: {names}"),
+                            "available": [t[3] for t in avail]}), 404
         playbooks = decision_engine._load_playbooks()
         key = find_playbook_key(playbooks, event_name)
         current = playbooks.get(key) if isinstance(playbooks.get(key), dict) else None
@@ -1238,6 +1281,14 @@ def api_playbooks_distill_batch():
         from config import HIGH_IMPACT_EVENTS
         store = _proposals_store()
         learned = decision_engine._load_learned_stats().get('events', {})
+        if not learned:
+            # Same guard as the single-event endpoint: a broken/absent stats
+            # file must not masquerade as a green "Drafted 0, all counters 0"
+            return jsonify({"status": "error",
+                            "message": ("Learned stats niedostępne/puste "
+                                        "(knowledge/learned_stats.json) — "
+                                        "odbuduj: python tools/build_learned_stats.py "
+                                        "i sprawdź server.log")}), 503
         playbooks = decision_engine._load_playbooks()
         candidates, skipped = select_batch_candidates(
             learned, playbooks, store.list(limit=500), HIGH_IMPACT_EVENTS,

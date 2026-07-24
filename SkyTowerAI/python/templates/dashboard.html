@@ -1182,14 +1182,17 @@
                     <button class="btn btn-secondary" id="btnDistill">Generate proposal</button>
                     <button class="btn btn-primary" id="btnDistillAll">Generate ALL (świeże dane)</button>
                 </div>
+                <div id="distillHint" style="display:none;font-size:0.78rem;color:var(--text-muted);margin-bottom:8px"></div>
                 <div id="proposalsRows"><div class="no-data">No pending proposals</div></div>
                 <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
                     Model (tier exit) destyluje ZMIERZONE statystyki eventu do wpisu playbooka —
                     jako częstości z n=, nie nakazy. <b>Generate ALL</b> robi to jednym klikiem dla
-                    wszystkich handlowanych eventów z próbą n≥10 (max 10 propozycji/klik, bez
-                    duplikatów pending, cooldown 14 dni po decyzji). NIC nie zapisuje się samo:
-                    Approve wpisuje do knowledge/event_playbooks.json (hot-reload), Reject tylko
-                    oznacza propozycję.
+                    handlowanych eventów z próbą n≥10 (max 10/klik, <b>rozłożone po walutach</b>
+                    NZD/AUD/CAD/GBP/USD — nadmiar czeka „w kolejce", klikaj ponownie; bez duplikatów
+                    pending, cooldown 14 dni po decyzji). <b>Generate proposal</b> wymaga DOKŁADNEJ
+                    nazwy z sufiksem (np. NZD „CPI q/q", USD „CPI m/m") — przy pudle pokaże listę
+                    eventów danej waluty z danymi. NIC nie zapisuje się samo: Approve wpisuje do
+                    knowledge/event_playbooks.json (hot-reload), Reject tylko oznacza propozycję.
                 </div>
             </div>
 
@@ -2274,6 +2277,29 @@
             }
         }
 
+        function renderDistillHint(names) {
+            // Persistent, clickable carrier of the 404 "available" list — the
+            // toast dies after 3s, far too short to retype an exact name
+            var box = $('distillHint');
+            if (!box) return;
+            box.innerHTML = '';
+            if (!names || !names.length) { box.style.display = 'none'; return; }
+            box.appendChild(document.createTextNode(
+                'Eventy tej waluty z danymi (kliknij, by wpisać): '));
+            names.slice(0, 15).forEach(function(n) {
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'btn btn-secondary';
+                b.style.cssText = 'padding:2px 8px;margin:2px;font-size:0.75rem';
+                b.textContent = n;
+                b.addEventListener('click', function() {
+                    $('distillEventName').value = n;
+                });
+                box.appendChild(b);
+            });
+            box.style.display = 'block';
+        }
+
         async function distillPlaybook() {
             var name = ($('distillEventName').value || '').trim();
             var currency = $('distillCurrency').value;
@@ -2288,9 +2314,11 @@
                 });
                 var body = await resp.json();
                 if (resp.ok) {
+                    renderDistillHint(null);
                     showToast('Proposal drafted — review below');
                     loadProposals();
                 } else {
+                    renderDistillHint(body.available);
                     showToast('Distill failed: ' + (body.message || resp.status), false);
                 }
             } catch(e) { showToast('Distill failed: ' + e.message, false); }
@@ -2308,11 +2336,20 @@
                 });
                 var body = await resp.json();
                 if (resp.ok) {
-                    var n = (body.generated || []).length;
+                    var gen = body.generated || [];
+                    var n = gen.length;
                     var sk = body.skipped || {};
+                    // Currency spread of this click (proves NZD/AUD are covered)
+                    var mix = {};
+                    gen.forEach(function(g) { var c = (g.split(' ')[0] || '?');
+                                              mix[c] = (mix[c] || 0) + 1; });
+                    var mixStr = Object.keys(mix).sort().map(function(c) {
+                        return c + ' ' + mix[c]; }).join(', ');
                     showToast('Drafted ' + n + ' proposal(s)' +
+                              (mixStr ? ' [' + mixStr + ']' : '') +
                               (body.failed ? (', ' + body.failed + ' failed') : '') +
-                              ' | pominięte: pending ' + (sk.pending || 0) +
+                              ' | w kolejce ' + (sk.capped || 0) +
+                              ' (klik ponownie), pending ' + (sk.pending || 0) +
                               ', cooldown ' + (sk.cooldown || 0) +
                               ', cienka próba ' + (sk.thin || 0));
                     loadProposals();
