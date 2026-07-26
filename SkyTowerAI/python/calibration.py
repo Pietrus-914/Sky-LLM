@@ -27,6 +27,7 @@ Pure functions over plain dicts — no file or server dependencies; callers
 """
 from typing import Dict, List, Optional
 
+from config import TYPICAL_NEWS_SPREADS
 from event_reaction_history import normalize_event_name
 from market_context import normalize_pair
 
@@ -34,6 +35,21 @@ from market_context import normalize_pair
 MIN_DIRECTIONAL_PIPS = 1.0
 # A skipped event that then moved at least this much was a "big mover"
 BIG_MOVE_PIPS = 15.0
+# Fallback when a pair has no configured news spread
+DEFAULT_NEWS_SPREAD_PIPS = 8.0
+
+
+def news_spread_pips(pair: str) -> float:
+    """Typical NEWS spread for the pair — the cost every entry crosses.
+    Direction-hit alone flatters the model: the 2026-07 path study showed
+    only ~56-83% of even HIGH-impact 5-min moves clear this spread."""
+    value = TYPICAL_NEWS_SPREADS.get(normalize_pair(pair or ""))
+    if isinstance(value, dict):
+        try:
+            return float(value.get("news", DEFAULT_NEWS_SPREAD_PIPS))
+        except (TypeError, ValueError):
+            return DEFAULT_NEWS_SPREAD_PIPS
+    return DEFAULT_NEWS_SPREAD_PIPS
 # Reliability buckets over stated confidence (right-open; last takes 1.0)
 BUCKETS = ((0.0, 0.55), (0.55, 0.70), (0.70, 1.01))
 BUCKET_LABELS = ("<55%", "55-70%", ">=70%")
@@ -99,17 +115,25 @@ def score_decision(decision: Dict, paths_index: Dict) -> Optional[Dict]:
         confidence = min(max(float(decision.get('confidence') or 0.0), 0.0), 1.0)
     except (TypeError, ValueError):
         confidence = 0.0
+    spread = news_spread_pips(key[3])
     row = {
         "decision_id": decision.get('decision_id', ''),
         "event_name": decision.get('event_name', ''),
         "direction": direction,
         "confidence": confidence,
+        "model": decision.get('model', ''),
         "pair": key[3],
         "move_5min_pips": move,
+        "spread_pips": spread,
         "correct": None,   # None = flat or SKIP (not scoreable directionally)
+        "net_pips": None,  # signed 5-min move minus the news spread
+        "playable": None,  # |move| cleared the news spread at all
     }
     if direction in ('BUY', 'SELL') and abs(move) >= MIN_DIRECTIONAL_PIPS:
         row["correct"] = (move > 0) == (direction == 'BUY')
+        signed = move if direction == 'BUY' else -move
+        row["net_pips"] = round(signed - spread, 1)
+        row["playable"] = abs(move) >= spread
     return row
 
 
@@ -146,6 +170,38 @@ def build_summary(decisions: List[Dict], paths: List[Dict]) -> Dict:
             sum(1 for r in directional if r["correct"]) / n, 2)
         summary["avg_confidence"] = round(
             sum(r["confidence"] for r in directional) / n, 2)
+        # Spread-aware view: mean signed pips net of the news spread, and
+        # the hit rate among moves that actually cleared the spread. The
+        # 2026-07 path study break-even for the TIER1-like basket is ~57%
+        # directional hit — direction-only hit rate above 50% can still
+        # lose money, and this makes that visible.
+        summary["net_ev_pips"] = round(
+            sum(r["net_pips"] for r in directional) / n, 2)
+        playable = [r for r in directional if r["playable"]]
+        summary["playable"] = {
+            "n": len(playable),
+            "hit_rate": (round(sum(1 for r in playable if r["correct"])
+                               / len(playable), 2) if playable else None),
+        }
+        # Per-model breakdown (decision rows carry `model` since 2026-07-26)
+        by_model = {}
+        for r in directional:
+            by_model.setdefault(r["model"] or "(unknown)", []).append(r)
+        summary["by_model"] = [
+            {
+                "model": model,
+                "n": len(sub),
+                "hit_rate": round(
+                    sum(1 for r in sub if r["correct"]) / len(sub), 2),
+                "avg_confidence": round(
+                    sum(r["confidence"] for r in sub) / len(sub), 2),
+                "net_ev_pips": round(
+                    sum(r["net_pips"] for r in sub) / len(sub), 2),
+            }
+            for model, sub in sorted(
+                by_model.items(), key=lambda kv: -len(kv[1]))
+            if len(sub) >= 10
+        ]
         for (lo, hi), label in zip(BUCKETS, BUCKET_LABELS):
             sub = [r for r in directional if lo <= r["confidence"] < hi]
             if not sub:

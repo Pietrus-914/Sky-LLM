@@ -23,6 +23,12 @@ from config import (LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS,
                     ENSEMBLE_K, ENSEMBLE_MODELS)
 
 
+# Bump MANUALLY on every substantive entry-prompt change. Recorded with each
+# decision so calibration/replay can be grouped per prompt version — without
+# it, prompt edits silently mix regimes inside one calibration ledger.
+ENTRY_PROMPT_VERSION = "2026-07-26.1"
+
+
 @dataclass
 class TradingDecision:
     """Represents the AI's trading decision"""
@@ -50,6 +56,12 @@ class TradingDecision:
     # Ensemble metadata (F4, SKYTOWER_ENSEMBLE_K >= 2): {"k", "valid",
     # "votes": [{"direction", "confidence"}, ...]}; None for single-call
     ensemble: Dict = None
+    # Which engine produced the direction ("anthropic/claude-fable-5",
+    # "panel:<models>", "rule-based") and under which entry-prompt version —
+    # calibration must be computable PER MODEL and PER PROMPT VERSION, or
+    # every prompt/model change silently resets the meaning of the ledger.
+    model: str = ""
+    prompt_version: str = ""
 
     def to_dict(self):
         d = asdict(self)
@@ -1135,6 +1147,8 @@ decision in JSON format."""
                 pair=data_context['suggested_pair'],
                 direction=direction,
                 confidence=self._num(decision_data.get('confidence'), 0.0, 0.0, 1.0),
+                model=str(self.model or ""),
+                prompt_version=ENTRY_PROMPT_VERSION,
                 lot_percent=int(self._num(decision_data.get('lot_percent'), 70, 0, 85)),
                 entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
                 exit_minutes_after=int(self._num(decision_data.get('exit_minutes'), 10, 5, 15)),
@@ -1253,6 +1267,9 @@ decision in JSON format."""
                 pair=data_context['suggested_pair'],
                 direction=direction,
                 confidence=round(min(max(confidence, 0.0), 1.0), 2),
+                model=("panel:" + ",".join(panel) if panel
+                       else f"{self.model} x{k}"),
+                prompt_version=ENTRY_PROMPT_VERSION,
                 lot_percent=int(_median([self._num(v["parsed"].get('lot_percent'),
                                                    70, 0, 85) for v in src])),
                 entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
@@ -1612,6 +1629,8 @@ decision in JSON format."""
             pair=pair,
             direction=direction,
             confidence=min(confidence, 1.0),
+            model="rule-based",
+            prompt_version="",
             lot_percent=lot_percent,
             entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
             exit_minutes_after=10 if confidence > 0.6 else 5,

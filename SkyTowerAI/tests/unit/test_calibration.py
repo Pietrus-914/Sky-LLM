@@ -227,3 +227,81 @@ class TestEngineIntegration:
         ctx = engine._gather_data(event, None)
         assert ctx["calibration_line"] is None
         assert ctx["_source_status"]["calibration"] == "no_data"
+
+
+class TestSpreadAwareLedger:
+    """2026-07-26: direction-hit alone flatters the model — the ledger now
+    also reports net EV (5-min move minus news spread), playable hit rate
+    and a per-model breakdown (decision rows carry `model`)."""
+
+    def test_row_carries_net_pips_and_playable(self):
+        idx = index_paths([path_rec(move5=20.0)])   # USDCAD, news spread 4.0
+        row = score_decision(decision(direction="BUY", confidence=0.7), idx)
+        assert row["correct"] is True
+        assert row["spread_pips"] == 4.0
+        assert row["net_pips"] == pytest.approx(16.0)
+        assert row["playable"] is True
+
+    def test_wrong_direction_pays_move_plus_spread(self):
+        idx = index_paths([path_rec(move5=20.0)])
+        row = score_decision(decision(direction="SELL"), idx)
+        assert row["correct"] is False
+        assert row["net_pips"] == pytest.approx(-24.0)
+
+    def test_sub_spread_move_is_not_playable(self):
+        idx = index_paths([path_rec(move5=2.0)])
+        row = score_decision(decision(direction="BUY"), idx)
+        assert row["correct"] is True
+        assert row["playable"] is False
+
+    def test_summary_net_ev_playable_and_by_model(self):
+        paths, decisions = [], []
+        for i in range(10):
+            t = f"2026-07-15T{10 + i:02d}:30"
+            paths.append(path_rec(time=t, move5=20.0))
+            d = decision(time=t, ts=f"2026-07-15T{10 + i:02d}:28:00Z",
+                         direction="BUY", confidence=0.6,
+                         decision_id=f"d{i}")
+            d["model"] = "anthropic/claude-fable-5"
+            decisions.append(d)
+        summary = build_summary(decisions, paths)
+        assert summary["n_scored"] == 10
+        assert summary["net_ev_pips"] == pytest.approx(16.0)
+        assert summary["playable"] == {"n": 10, "hit_rate": 1.0}
+        assert summary["by_model"] == [{
+            "model": "anthropic/claude-fable-5", "n": 10,
+            "hit_rate": 1.0, "avg_confidence": 0.6,
+            "net_ev_pips": 16.0,
+        }]
+
+
+class TestModelAndPromptVersionRecording:
+    """Calibration must be groupable per model and prompt version."""
+
+    def test_decision_history_records_model_fields(self, tmp_path):
+        from llm_decision_engine import (ENTRY_PROMPT_VERSION,
+                                         TradingDecision)
+        dh = DecisionHistory(log_dir=str(tmp_path))
+        dh.record(TradingDecision(
+            event="CPI m/m", currency="USD", pair="USD/CAD",
+            direction="BUY", confidence=0.6, lot_percent=70,
+            entry_seconds_before=15, exit_minutes_after=10,
+            stop_loss_percent=40,
+            model="panel:a,b,c", prompt_version=ENTRY_PROMPT_VERSION,
+        ))
+        row = dh.get_recent(1)[0]
+        assert row["model"] == "panel:a,b,c"
+        assert row["prompt_version"] == ENTRY_PROMPT_VERSION
+
+    def test_rule_based_decision_labels_itself(self):
+        from types import SimpleNamespace
+        from datetime import datetime, timedelta
+        engine = LLMDecisionEngine()
+        event = SimpleNamespace(
+            event_name="CPI m/m", currency="USD",
+            datetime_utc=datetime.utcnow() + timedelta(minutes=30),
+            impact="HIGH", forecast="0.3%", previous="0.2%", actual=None,
+        )
+        ctx = engine._gather_data(event, None)
+        result = engine._rule_based_decision(event, ctx)
+        assert result.model == "rule-based"
