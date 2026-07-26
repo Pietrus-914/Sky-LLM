@@ -268,6 +268,34 @@ class TestFlagManagement:
         pm.update_position(make_report_data(profit_usd=35.0))
         assert pm.position.sl_moved_to_be is True
 
+    def test_be_tolerance_stops_at_two_pips(self, pm):
+        pm.on_position_opened(make_position_data(entry_price=0.6200))
+        pm._update_flags_from_command(
+            PositionCommand(action="MODIFY_SL", sl_price=0.6202)
+        )
+        assert pm.position.sl_moved_to_be is True
+
+        pm.position.sl_moved_to_be = False
+        pm._update_flags_from_command(
+            PositionCommand(action="MODIFY_SL", sl_price=0.62021)
+        )
+        assert pm.position.sl_moved_to_be is False
+
+    def test_jpy_be_tolerance_uses_quote_currency(self, pm):
+        pm.on_position_opened(
+            make_position_data(symbol="USDJPY", entry_price=150.00)
+        )
+        pm._update_flags_from_command(
+            PositionCommand(action="MODIFY_SL", sl_price=150.02)
+        )
+        assert pm.position.sl_moved_to_be is True
+
+        pm.position.sl_moved_to_be = False
+        pm._update_flags_from_command(
+            PositionCommand(action="MODIFY_SL", sl_price=150.021)
+        )
+        assert pm.position.sl_moved_to_be is False
+
     def test_partial_closed_flag_set_after_partial_close(self, pm):
         """PARTIAL_CLOSE command should set partial_closed flag."""
         pm.on_position_opened(make_position_data())

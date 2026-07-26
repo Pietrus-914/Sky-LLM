@@ -74,6 +74,7 @@ class TestRuleBasedDecisions:
         decision = engine._rule_based_decision(pos)
         assert decision.action == "MODIFY_SL"
         assert decision.sl_price > 0
+        assert decision.sl_price == pytest.approx(0.6201)
         assert "BE" in decision.reason.upper() or "break" in decision.reason.lower()
 
     def test_partial_close_after_high_profit(self, engine):
@@ -89,13 +90,11 @@ class TestRuleBasedDecisions:
 
     def test_trailing_sl(self, engine):
         """Profit > $40 with SL at BE should trigger trailing SL.
-        Trail distance = 0.0001 * 100 = 0.01 (10 pips).
-        For trail to tighten SL: current_price - 0.01 must be > current SL.
-        So current_price must be > SL + 0.01 = 0.6201 + 0.01 = 0.6301.
+        Trail distance = 0.0001 * 10 = 0.0010 (10 pips).
         """
         pos = make_open_position(
             profit_usd=45.0,
-            current_price=0.6320,  # 120 pips above entry → trail SL = 0.6220 > 0.6201
+            current_price=0.6320,
             sl=0.6201,  # Already at break-even
             sl_moved_to_be=True,
             partial_closed=True,  # Partial already done — skip partial rule
@@ -103,9 +102,56 @@ class TestRuleBasedDecisions:
         decision = engine._rule_based_decision(pos)
         assert decision.action == "MODIFY_SL"
         assert "trail" in decision.reason.lower()
-        # Trailing SL = current_price - 0.01 = 0.6220
+        assert decision.sl_price == pytest.approx(0.6310)
         assert decision.sl_price < pos.current_price
-        assert decision.sl_price > pos.sl  # 0.6220 > 0.6201
+        assert decision.sl_price > pos.sl
+
+    @pytest.mark.parametrize(
+        ("direction", "entry", "expected"),
+        [
+            ("BUY", 150.00, 150.01),
+            ("SELL", 150.00, 149.99),
+        ],
+    )
+    def test_jpy_break_even_buffer_is_one_pip(
+        self, engine, direction, entry, expected
+    ):
+        pos = make_open_position(
+            symbol="USDJPY",
+            direction=direction,
+            entry_price=entry,
+            current_price=150.20 if direction == "BUY" else 149.80,
+            sl=149.50 if direction == "BUY" else 150.50,
+            profit_usd=35.0,
+            sl_moved_to_be=False,
+        )
+        decision = engine._rule_based_decision(pos)
+        assert decision.action == "MODIFY_SL"
+        assert decision.sl_price == pytest.approx(expected)
+
+    @pytest.mark.parametrize(
+        ("direction", "current", "current_sl", "expected"),
+        [
+            ("BUY", 150.30, 150.01, 150.20),
+            ("SELL", 149.70, 149.99, 149.80),
+        ],
+    )
+    def test_jpy_trailing_distance_is_ten_pips(
+        self, engine, direction, current, current_sl, expected
+    ):
+        pos = make_open_position(
+            symbol="USDJPY",
+            direction=direction,
+            entry_price=150.00,
+            current_price=current,
+            sl=current_sl,
+            profit_usd=45.0,
+            sl_moved_to_be=True,
+            partial_closed=True,
+        )
+        decision = engine._rule_based_decision(pos)
+        assert decision.action == "MODIFY_SL"
+        assert decision.sl_price == pytest.approx(expected)
 
     def test_cut_loss_after_time(self, engine):
         """Loss after 10+ minutes should trigger CLOSE."""

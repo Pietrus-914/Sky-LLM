@@ -7,6 +7,7 @@ from flask_cors import CORS
 from datetime import datetime, timedelta
 from timeutil import utcnow
 import json
+import math
 import os
 import threading
 import time
@@ -885,6 +886,7 @@ def register_pair():
                 "pair": pair,
                 "current_price": data.get('current_price', 0),
                 "spread_points": data.get('spread_points', 0),
+                "spread_pips": data.get('spread_pips'),
                 "zones": data.get('zones', {}),
                 "ohlc": data.get('ohlc', []),
                 "registered_at": utcnow().isoformat()
@@ -951,6 +953,7 @@ def report_market_data():
                 "pair": pair,
                 "ohlc_multi": ohlc_multi,
                 "spread_points": data.get('spread_points', 0),
+                "spread_pips": data.get('spread_pips'),
                 "updated_at": utcnow().isoformat()
             }
 
@@ -1013,6 +1016,7 @@ def _build_market_context_for_event(event):
         pair_name = normalize_pair(suggested)
         data_timestamp = None
         spread_points = None
+        spread_pips = None
 
         with market_data_lock:
             market_entry = _find_pair_data(market_data_reports, suggested, currency)
@@ -1025,6 +1029,7 @@ def _build_market_context_for_event(event):
                 pair_name = market_entry.get('pair', pair_name)
                 data_timestamp = market_entry.get('updated_at')
                 spread_points = market_entry.get('spread_points')
+                spread_pips = market_entry.get('spread_pips')
 
         # Multi-instance registration may carry zone data for this event
         event_time = event.datetime_utc
@@ -1046,7 +1051,7 @@ def _build_market_context_for_event(event):
 
         context = build_market_context(
             ohlc_multi, pair_name, zones=zones, registered_at=data_timestamp,
-            spread_points=spread_points
+            spread_points=spread_points, spread_pips=spread_pips
         )
 
         # CROSS-PAIR PICTURE: brief summaries of OTHER fresh pairs that
@@ -1087,7 +1092,8 @@ def _build_cross_pair_summaries(currency: str, exclude_pair: str, cap: int = 3):
                 continue
             brief = summarize_pair_brief(
                 entry.get('ohlc_multi', {}), norm, currency,
-                spread_points=entry.get('spread_points')
+                spread_points=entry.get('spread_points'),
+                spread_pips=entry.get('spread_pips'),
             )
             if brief:
                 summaries.append(brief)
@@ -1515,6 +1521,7 @@ def report_zone():
                 "nearest_support": data.get('nearest_support', 0),
                 "current_price": data.get('current_price', 0),
                 "spread_points": data.get('spread_points', 0),
+                "spread_pips": data.get('spread_pips'),
                 "updated_at": utcnow().isoformat()
             }
 
@@ -1568,6 +1575,35 @@ def get_mt5_signal():
             # No eager analysis here — the background updater preloads
             # decisions inside the event window (see get_trade_decision note)
             if next_decision and next_decision.direction != "SKIP":
+                if next_decision.direction not in {"BUY", "SELL"}:
+                    logger.error(
+                        "Signal blocked by invalid direction: "
+                        f"{next_decision.direction!r}"
+                    )
+                    return jsonify({
+                        "signal": False,
+                        "message": "Invalid direction in trade decision",
+                    })
+                raw_lot_percent = getattr(next_decision, "lot_percent", None)
+                try:
+                    lot_percent = float(raw_lot_percent)
+                except (TypeError, ValueError):
+                    lot_percent = math.nan
+                if (
+                    isinstance(raw_lot_percent, bool)
+                    or not math.isfinite(lot_percent)
+                    or lot_percent <= 0
+                    or lot_percent > 100
+                ):
+                    logger.error(
+                        "Signal blocked by invalid lot_percent: "
+                        f"{raw_lot_percent!r}"
+                    )
+                    return jsonify({
+                        "signal": False,
+                        "message": "Invalid lot_percent in trade decision",
+                    })
+
                 # Calculate time until event
                 # IMPORTANT: event_time is in UTC, so we must compare with UTC time
                 event_time = datetime.fromisoformat(
@@ -1588,6 +1624,11 @@ def get_mt5_signal():
                         "signal": False,
                         "message": f"Decision exists but event is {int(time_until)}s away "
                                    f"(signals are served inside the {TRADING_CONFIG['preload_seconds']}s window)"
+                    })
+                if time_until < 0:
+                    return jsonify({
+                        "signal": False,
+                        "message": "Decision event has already passed",
                     })
 
                 # Bare, suffix-free pair — the EA resolves its broker symbol itself
@@ -1620,6 +1661,57 @@ def get_mt5_signal():
 
                 sl_pips = getattr(next_decision, 'stop_loss_pips', 0)
                 tp_pips = getattr(next_decision, 'take_profit_pips', 0)
+                raw_numbers = {
+                    "confidence": getattr(next_decision, "confidence", None),
+                    "entry_seconds_before": getattr(
+                        next_decision, "entry_seconds_before", None
+                    ),
+                    "exit_minutes": getattr(
+                        next_decision, "exit_minutes_after", None
+                    ),
+                    "stop_loss_percent": getattr(
+                        next_decision, "stop_loss_percent", None
+                    ),
+                    "stop_loss_pips": sl_pips,
+                    "take_profit_pips": tp_pips,
+                    "max_loss_usd": POSITION_MANAGEMENT_CONFIG.get(
+                        "max_loss_usd", 100.0
+                    ),
+                }
+                normalized_numbers = {}
+                try:
+                    for name, value in raw_numbers.items():
+                        if isinstance(value, bool):
+                            raise ValueError(name)
+                        normalized_numbers[name] = float(value)
+                        if not math.isfinite(normalized_numbers[name]):
+                            raise ValueError(name)
+                except (TypeError, ValueError) as exc:
+                    logger.error(
+                        "Signal blocked by non-finite numeric field: "
+                        f"{exc}"
+                    )
+                    return jsonify({
+                        "signal": False,
+                        "message": "Invalid numeric field in trade decision",
+                    })
+
+                if (
+                    not 0 <= normalized_numbers["confidence"] <= 1
+                    or normalized_numbers["entry_seconds_before"] < 0
+                    or normalized_numbers["exit_minutes"] <= 0
+                    or normalized_numbers["stop_loss_percent"] < 0
+                    or normalized_numbers["stop_loss_pips"] < 0
+                    or normalized_numbers["take_profit_pips"] < 0
+                    or normalized_numbers["max_loss_usd"] <= 0
+                ):
+                    logger.error(
+                        f"Signal blocked by invalid numeric ranges: {raw_numbers}"
+                    )
+                    return jsonify({
+                        "signal": False,
+                        "message": "Invalid risk fields in trade decision",
+                    })
 
                 # Capture the served decision for lineage stamping at
                 # /api/position/opened (see _last_served_signal note)
@@ -1636,7 +1728,8 @@ def get_mt5_signal():
                 if _signal_served_log_key != serve_key:
                     _signal_served_log_key = serve_key
                     logger.info(f"=== SIGNAL SERVED === {next_decision.direction} {decision_pair} "
-                                f"to EA[{requesting_pair or 'any'}] | conf {next_decision.confidence:.0%} "
+                                f"to EA[{requesting_pair or 'any'}] | conf "
+                                f"{normalized_numbers['confidence']:.0%} "
                                 f"| T-{int(time_until)}s | {next_decision.event}")
 
                 return jsonify({
@@ -1646,17 +1739,17 @@ def get_mt5_signal():
                     "decision_id": getattr(next_decision, 'decision_id', ''),
                     "direction": next_decision.direction,
                     "pair": decision_pair,  # MT5 format (no slash)
-                    "lot_percent": next_decision.lot_percent,
+                    "lot_percent": lot_percent,
                     # Panel-owned per-trade risk budget (USD). Single source of
                     # truth: the EA sizes the lot from this and uses it as its
                     # offline max-loss guardrail (no EA-side duplicate input).
-                    "max_loss_usd": POSITION_MANAGEMENT_CONFIG.get("max_loss_usd", 100.0),
-                    "confidence": next_decision.confidence,
-                    "entry_seconds_before": next_decision.entry_seconds_before,
-                    "exit_minutes": next_decision.exit_minutes_after,
-                    "stop_loss_percent": next_decision.stop_loss_percent,
-                    "stop_loss_pips": sl_pips,
-                    "take_profit_pips": tp_pips,
+                    "max_loss_usd": normalized_numbers["max_loss_usd"],
+                    "confidence": normalized_numbers["confidence"],
+                    "entry_seconds_before": normalized_numbers["entry_seconds_before"],
+                    "exit_minutes": normalized_numbers["exit_minutes"],
+                    "stop_loss_percent": normalized_numbers["stop_loss_percent"],
+                    "stop_loss_pips": normalized_numbers["stop_loss_pips"],
+                    "take_profit_pips": normalized_numbers["take_profit_pips"],
                     "time_until_event": int(time_until),
                     "event_time": event_time.isoformat(),
                     "event_name": next_decision.event,
@@ -2081,6 +2174,48 @@ def create_test_signal():
         event_name = data.get('event_name', 'TEST EVENT')
         stop_loss_pips = data.get('stop_loss_pips', 40)
         take_profit_pips = data.get('take_profit_pips', 60)
+
+        raw_numbers = {
+            "seconds_until": seconds_until,
+            "lot_percent": lot_percent,
+            "confidence": confidence,
+            "exit_minutes": exit_minutes,
+            "stop_loss_pips": stop_loss_pips,
+            "take_profit_pips": take_profit_pips,
+        }
+        try:
+            normalized = {}
+            for name, value in raw_numbers.items():
+                if isinstance(value, bool):
+                    raise ValueError(name)
+                normalized[name] = float(value)
+                if not math.isfinite(normalized[name]):
+                    raise ValueError(name)
+        except (TypeError, ValueError) as exc:
+            return jsonify({
+                "status": "error",
+                "message": f"{exc} must be a finite number",
+            }), 400
+
+        if (
+            normalized["seconds_until"] < 0
+            or not 0 < normalized["lot_percent"] <= 100
+            or not 0 <= normalized["confidence"] <= 1
+            or normalized["exit_minutes"] <= 0
+            or normalized["stop_loss_pips"] < 0
+            or normalized["take_profit_pips"] < 0
+        ):
+            return jsonify({
+                "status": "error",
+                "message": "Invalid numeric range in test signal",
+            }), 400
+
+        seconds_until = normalized["seconds_until"]
+        lot_percent = normalized["lot_percent"]
+        confidence = normalized["confidence"]
+        exit_minutes = normalized["exit_minutes"]
+        stop_loss_pips = normalized["stop_loss_pips"]
+        take_profit_pips = normalized["take_profit_pips"]
 
         # Calculate event time (use UTC to match server's UTC-based comparisons)
         event_time = utcnow() + timedelta(seconds=seconds_until)

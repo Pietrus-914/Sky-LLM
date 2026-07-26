@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict
 from enum import Enum
 from loguru import logger
+from trading_units import pips_to_price, price_to_pips
 
 
 class ZoneType(Enum):
@@ -69,6 +70,7 @@ class Zone:
     touches: int = 1            # Number of times price touched this zone
     is_filled: bool = False     # Whether FVG has been filled
     invalidated: bool = False   # Whether zone is no longer valid
+    symbol: str = ""            # Needed for quote-currency pip semantics
 
     @property
     def midpoint(self) -> float:
@@ -77,8 +79,8 @@ class Zone:
 
     @property
     def size_pips(self) -> float:
-        """Zone size in pips (assumes 4/5 digit broker)"""
-        return (self.price_high - self.price_low) * 10000
+        """Zone size in conventional FX pips."""
+        return price_to_pips(self.price_high - self.price_low, self.symbol)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API response"""
@@ -164,16 +166,11 @@ class ZoneAnalyzer:
 
     def _to_pips(self, price_diff: float, symbol: str = "") -> float:
         """Convert price difference to pips"""
-        # Assume 4/5 digit broker for major pairs
-        if "JPY" in symbol.upper():
-            return price_diff * 100
-        return price_diff * 10000
+        return price_to_pips(price_diff, symbol)
 
     def _from_pips(self, pips: float, symbol: str = "") -> float:
         """Convert pips to price difference"""
-        if "JPY" in symbol.upper():
-            return pips / 100
-        return pips / 10000
+        return pips_to_price(pips, symbol)
 
     def find_liquidity_pools(self, bars: List[PriceBar], symbol: str = "") -> Tuple[List[Zone], List[Zone]]:
         """
@@ -240,6 +237,7 @@ class ZoneAnalyzer:
                     creation_time=time1,
                     strength=strength,
                     touches=equal_count,
+                    symbol=symbol,
                 )
                 liquidity_highs.append(zone)
 
@@ -273,6 +271,7 @@ class ZoneAnalyzer:
                     creation_time=time1,
                     strength=strength,
                     touches=equal_count,
+                    symbol=symbol,
                 )
                 liquidity_lows.append(zone)
 
@@ -320,6 +319,7 @@ class ZoneAnalyzer:
                         price_low=next_bar.high,
                         creation_time=curr_bar.time,
                         strength=ZoneStrength.MODERATE if gap_size > min_gap * 2 else ZoneStrength.WEAK,
+                        symbol=symbol,
                     )
                     # Check if already filled
                     for check_bar in bars[i+2:]:
@@ -340,6 +340,7 @@ class ZoneAnalyzer:
                         price_low=prev_bar.high,
                         creation_time=curr_bar.time,
                         strength=ZoneStrength.MODERATE if gap_size > min_gap * 2 else ZoneStrength.WEAK,
+                        symbol=symbol,
                     )
                     # Check if already filled
                     for check_bar in bars[i+2:]:
@@ -394,6 +395,7 @@ class ZoneAnalyzer:
                         price_low=curr_bar.low,
                         creation_time=curr_bar.time,
                         strength=ZoneStrength.STRONG if next_bar.body_size >= impulse_threshold * 1.5 else ZoneStrength.MODERATE,
+                        symbol=symbol,
                     )
                     # Check if revisited and held
                     for check_bar in bars[i+2:]:
@@ -415,6 +417,7 @@ class ZoneAnalyzer:
                         price_low=curr_bar.open,
                         creation_time=curr_bar.time,
                         strength=ZoneStrength.STRONG if next_bar.body_size >= impulse_threshold * 1.5 else ZoneStrength.MODERATE,
+                        symbol=symbol,
                     )
                     # Check if revisited and held
                     for check_bar in bars[i+2:]:

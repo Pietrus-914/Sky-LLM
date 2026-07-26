@@ -16,6 +16,7 @@ from loguru import logger
 
 from config import POSITION_MANAGEMENT_CONFIG
 from position_store import PositionStore, PositionStoreError
+from trading_units import forex_pip_size
 
 
 class PositionConflictError(ValueError):
@@ -1059,9 +1060,12 @@ class PositionManager:
 
         if cmd.action == "MODIFY_SL" and cmd.sl_price > 0:
             # Check if SL was moved close to entry price (break-even)
-            pip_size = 0.01 if "JPY" in self.position.symbol else 0.0001
-            be_tolerance = pip_size * 20  # 2 pips tolerance
-            if abs(cmd.sl_price - self.position.entry_price) <= be_tolerance:
+            pip_size = forex_pip_size(self.position.symbol)
+            be_tolerance = pip_size * 2  # 2 pips tolerance
+            if (
+                abs(cmd.sl_price - self.position.entry_price)
+                <= be_tolerance + pip_size * 1e-9
+            ):
                 self.position.sl_moved_to_be = True
                 logger.debug(f"Flag set: sl_moved_to_be = True "
                              f"(SL {cmd.sl_price} ≈ entry {self.position.entry_price})")

@@ -19,6 +19,7 @@ import sqlite3
 import os
 
 from config import TRADING_CONFIG, TYPICAL_NEWS_SPREADS, SPREAD_LOT_REDUCTION
+from trading_units import spread_price_to_pips
 
 
 @dataclass
@@ -198,9 +199,29 @@ class SignalValidator:
 
         # Calculate spread
         symbol_info = mt5.symbol_info(symbol)
-        point = symbol_info.point
-        spread_points = tick.ask - tick.bid
-        spread_pips = spread_points / point / 10  # Convert to pips
+        try:
+            if symbol_info is None:
+                raise ValueError("missing symbol specification")
+            spread_pips = spread_price_to_pips(
+                tick.bid,
+                tick.ask,
+                symbol_info.point,
+                symbol_info.digits,
+            )
+        except (TypeError, ValueError, AttributeError) as exc:
+            return SignalValidation(
+                timestamp=timestamp,
+                symbol=symbol,
+                direction=direction,
+                confidence=confidence,
+                current_bid=tick.bid,
+                current_ask=tick.ask,
+                current_spread=0,
+                spread_status="UNKNOWN",
+                recommended_lot_multiplier=0,
+                validation_passed=False,
+                reason=f"Invalid broker quote: {exc}",
+            )
 
         # Determine spread status and lot multiplier
         spread_status, lot_multiplier = self._evaluate_spread(symbol.replace("/", ""), spread_pips)
