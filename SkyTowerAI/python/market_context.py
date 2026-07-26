@@ -403,6 +403,33 @@ def _summarize_zones(zones: Dict, last_price: Optional[float], pip: float) -> Di
     for key in ("resistance_zones", "support_zones", "fvg_zones"):
         if isinstance(zones.get(key), list):
             summary[f"{key}_count"] = len(zones[key])
+
+    # Stop clusters (equal-high/low liquidity pools), computed server-side from
+    # the pair's own OHLC. Report the NEAREST cluster on each side as a pip
+    # distance + strength: the model reads a cluster in the SURPRISE direction
+    # as potential fuel that can extend the move if run — never as a target.
+    # Same MAX_LEVEL_DISTANCE_PIPS gate as S/R keeps a wrong-scale level out.
+    pools = zones.get("liquidity_pools")
+    if isinstance(pools, list) and price:
+        for pool in pools:
+            if not isinstance(pool, dict):
+                continue
+            level = pool.get("price") or 0
+            if not level:
+                continue
+            signed = round((level - price) / pip, 1)
+            side = "liquidity_above" if signed > 0 else "liquidity_below"
+            dist = abs(signed)
+            if not (0 < dist <= MAX_LEVEL_DISTANCE_PIPS):
+                continue
+            prev = summary.get(side)
+            if prev is None or dist < prev["distance_pips"]:
+                summary[side] = {"distance_pips": dist,
+                                 "strength": pool.get("strength"),
+                                 "touches": pool.get("touches")}
+        if zones.get("liquidity_tf") and (
+                "liquidity_above" in summary or "liquidity_below" in summary):
+            summary["liquidity_tf"] = zones["liquidity_tf"]
     return summary
 
 

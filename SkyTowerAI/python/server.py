@@ -999,6 +999,44 @@ def _market_data_age_seconds(entry) -> float:
     return entry_age_seconds(entry)
 
 
+# Timeframes to try for stop-cluster (equal-high/low) detection, best first.
+# M15/M5 recent swings are where a news trade's retail stops actually cluster;
+# H1 is a coarse fallback. ZoneAnalyzer.analyze() needs >= 10 bars.
+_LIQUIDITY_TF_PREFERENCE = ("M15", "M5", "H1", "M30", "M1")
+
+
+def _liquidity_pools_from_ohlc(ohlc_multi, pair_name):
+    """Run the server's ZoneAnalyzer on the OHLC we already hold to surface
+    equal-high/low STOP CLUSTERS (liquidity pools) for the decision pair.
+    find_liquidity_pools previously ran only on mock data in test endpoints —
+    the live entry decision never saw it. Returns
+    {"liquidity_pools": [{price, strength, touches}, ...], "liquidity_tf": tf}
+    (nearest cluster first, both sides of price) or None. Pair-exact by
+    construction (the pair's own OHLC), so the levels are safe to size against."""
+    if not isinstance(ohlc_multi, dict):
+        return None
+    bars = tf_used = None
+    for tf in _LIQUIDITY_TF_PREFERENCE:
+        candidate = ohlc_multi.get(tf)
+        if isinstance(candidate, list) and len(candidate) >= 10:
+            bars, tf_used = candidate, tf
+            break
+    if bars is None:
+        return None
+    try:
+        result = analyze_from_ohlc_data(bars, pair_name, ZONE_CONFIG)
+    except Exception as e:
+        logger.debug(f"Liquidity-pool analysis failed for {pair_name}: {e}")
+        return None
+    pools = [{"price": round(z.midpoint, 5),
+              "strength": z.strength.value,
+              "touches": z.touches}
+             for z in (result.liquidity_above[:3] + result.liquidity_below[:3])]
+    if not pools:
+        return None
+    return {"liquidity_pools": pools, "liquidity_tf": tf_used}
+
+
 def _build_market_context_for_event(event):
     """
     Assemble the market context for an event from EA-pushed data:
@@ -1048,6 +1086,14 @@ def _build_market_context_for_event(event):
             zone_entry = _find_pair_data(zone_reports, pair_name)
             if zone_entry:
                 zones = {**(zones or {}), **zone_entry}
+
+        # Stop clusters (equal-high/low liquidity pools) computed SERVER-SIDE
+        # from the OHLC we already hold — the ZoneAnalyzer capability was
+        # otherwise unused in the live decision path. Extra keys only; never
+        # clobbers the EA-reported bias / S-R levels.
+        liq = _liquidity_pools_from_ohlc(ohlc_multi, pair_name)
+        if liq:
+            zones = {**(zones or {}), **liq}
 
         context = build_market_context(
             ohlc_multi, pair_name, zones=zones, registered_at=data_timestamp,

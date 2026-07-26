@@ -113,7 +113,11 @@ b. Pre-news drift: what do the last 30-60 min candles show? A strong run INTO th
    (a rate decision deviating from what markets priced), the fundamentals won
    historically — a merely as-forecast print is NOT such a surprise.
 c. Chart evidence: read the raw candles — momentum, wicks, rejection levels,
-   where the stops likely sit relative to nearest support/resistance.
+   where the stops likely sit relative to nearest support/resistance. When the
+   market-structure "zones" block reports liquidity_above / liquidity_below
+   (measured equal-high/low stop clusters, with pip distance and strength),
+   treat a cluster in the SURPRISE direction as potential FUEL that can extend
+   the move if price runs it — never as a target the move must reach.
 d. Volatility fit: are your stop_loss_pips/take_profit_pips consistent with ATR and
    the current spread (a stop inside 1x spread+ATR noise will be swept)? Entry happens
    seconds BEFORE the release, so also budget the stop for an adverse stop-run wick
