@@ -7,13 +7,18 @@ from flask_cors import CORS
 from datetime import datetime, timedelta
 from timeutil import utcnow
 import json
+import math
 import os
 import threading
 import time
 from loguru import logger
 
 from config import SERVER_CONFIG, TRADING_CONFIG, ZONE_CONFIG, EXIT_CONFIG, POSITION_MANAGEMENT_CONFIG
-from config import HIGH_IMPACT_EVENTS, CURRENCY_PAIRS, DEFAULT_PAIRS
+# NOTE: HIGH_IMPACT_EVENTS is deliberately NOT imported at module level —
+# the panel rebinds cfg.HIGH_IMPACT_EVENTS at runtime and a module-level
+# binding here would pin the import-time list (callers pass
+# event_keywords=None so calendar_fetcher reads it fresh).
+from config import CURRENCY_PAIRS, DEFAULT_PAIRS
 from market_context import (build_market_context, normalize_pair,
                             summarize_pair_brief, entry_age_seconds)
 from calendar_fetcher import CalendarAggregator
@@ -22,7 +27,11 @@ from sentiment_analyzer import SentimentAggregator
 from llm_decision_engine import LLMDecisionEngine, TradingDecision
 from zone_analyzer import ZoneAnalyzer, PriceBar, analyze_from_ohlc_data
 from target_calculator import TargetCalculator
-from position_manager import PositionManager
+from position_manager import (
+    PositionConflictError,
+    PositionManager,
+    PositionPersistenceError,
+)
 from exit_decision_engine import ExitDecisionEngine
 from decision_history import DecisionHistory
 from event_path_recorder import EventPathRecorder
@@ -69,7 +78,7 @@ def init_services():
     global decision_engine, calendar, zone_analyzer, target_calculator, position_manager, exit_engine, decision_history, path_recorder, regime_tracker
     logger.info("Initializing SkyTower-AI services...")
 
-    from config import TRADE_HISTORY_FILE
+    from config import ACTIVE_POSITION_FILE, TRADE_HISTORY_FILE
     # DecisionHistory must be created first and SHARED with the engine —
     # the engine's TRACK RECORD section reads the same instance the server
     # records into (a private copy never sees in-session decisions)
@@ -94,7 +103,8 @@ def init_services():
     target_calculator = TargetCalculator(ZONE_CONFIG)
     exit_engine = ExitDecisionEngine()
     position_manager = PositionManager(exit_engine=exit_engine,
-                                       history_file=TRADE_HISTORY_FILE)
+                                       history_file=TRADE_HISTORY_FILE,
+                                       state_file=ACTIVE_POSITION_FILE)
     # Post-event price paths for ALL monitored events (traded or not) —
     # measured server-side from EA-pushed M1, the system's learning substrate
     path_recorder = EventPathRecorder(regime_provider=regime_tracker.get)
@@ -157,6 +167,24 @@ def config_events():
         cfg.TIER2_EVENTS = data['tier2_events']
     if 'tier1_events' in data or 'tier2_events' in data:
         cfg.HIGH_IMPACT_EVENTS = cfg.TIER1_EVENTS + cfg.TIER2_EVENTS
+    # The dashboard's Save sends {events: [...enabled names...]} — a flat
+    # whitelist across both tiers. This key was silently dropped before, so
+    # panel checkbox edits never reached trade selection. Applied as a filter
+    # over the immutable *_ALL rosters and persisted across restarts.
+    if 'events' in data and isinstance(data['events'], list) \
+            and all(isinstance(e, str) for e in data['events']):
+        enabled_set = set(data['events'])
+        cfg.TIER1_EVENTS = [e for e in cfg.TIER1_EVENTS_ALL if e in enabled_set]
+        cfg.TIER2_EVENTS = [e for e in cfg.TIER2_EVENTS_ALL if e in enabled_set]
+        cfg.HIGH_IMPACT_EVENTS = cfg.TIER1_EVENTS + cfg.TIER2_EVENTS
+        cfg.save_runtime_overrides({"enabled_events": sorted(enabled_set)})
+        if not cfg.HIGH_IMPACT_EVENTS:
+            logger.warning("Dashboard saved an EMPTY event whitelist — no "
+                           "named events will trade while TRADE_ALL_EVENTS "
+                           "is off")
+        else:
+            logger.info(f"Event whitelist set via dashboard (persisted): "
+                        f"{len(cfg.HIGH_IMPACT_EVENTS)} events enabled")
     if 'min_impact' in data:
         level = str(data['min_impact']).strip().upper()
         if level in ("LOW", "MEDIUM", "HIGH"):
@@ -487,8 +515,10 @@ def refresh_decision():
         # the updater owns in-window analysis, and a far-future pinned decision
         # would block the pipeline (and could race-arm the EA) until released
         window = TRADING_CONFIG["preload_seconds"] + 60
+        # event_keywords=None -> calendar reads cfg.HIGH_IMPACT_EVENTS at
+        # call time (panel tier edits apply without restart)
         upcoming = calendar.get_tradeable_events(
-            event_keywords=HIGH_IMPACT_EVENTS,
+            event_keywords=None,
             currencies=list(CURRENCY_PAIRS.keys())
         )
         next_event_seconds = None
@@ -510,24 +540,28 @@ def refresh_decision():
                             else "No upcoming tradeable events found.")
             })
 
+        # Run the (paid, 20-60s) analysis OUTSIDE decision_lock — /api/signal
+        # and /api/position/opened block on that lock, and this endpoint can
+        # only fire inside the entry window. Same pattern as the updater's
+        # Phase 2/3.
+        recommendation = decision_engine.get_next_trade_recommendation()
+
+        if recommendation and decision_history:
+            decision_history.record(recommendation)
+
         with decision_lock:
-            next_decision = decision_engine.get_next_trade_recommendation()
+            next_decision = recommendation
 
-            # Record to decision history
-            if next_decision and decision_history:
-                decision_history.record(next_decision)
-
-            if next_decision:
-                return jsonify({
-                    "status": "ok",
-                    "message": "Decision refreshed",
-                    "decision": next_decision.to_dict()
-                })
-            else:
-                return jsonify({
-                    "status": "ok",
-                    "message": "No trade recommendation available"
-                })
+        if recommendation:
+            return jsonify({
+                "status": "ok",
+                "message": "Decision refreshed",
+                "decision": recommendation.to_dict()
+            })
+        return jsonify({
+            "status": "ok",
+            "message": "No trade recommendation available"
+        })
     except Exception as e:
         logger.error(f"Error refreshing decision: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -880,6 +914,7 @@ def register_pair():
                 "pair": pair,
                 "current_price": data.get('current_price', 0),
                 "spread_points": data.get('spread_points', 0),
+                "spread_pips": data.get('spread_pips'),
                 "zones": data.get('zones', {}),
                 "ohlc": data.get('ohlc', []),
                 "registered_at": utcnow().isoformat()
@@ -946,6 +981,7 @@ def report_market_data():
                 "pair": pair,
                 "ohlc_multi": ohlc_multi,
                 "spread_points": data.get('spread_points', 0),
+                "spread_pips": data.get('spread_pips'),
                 "updated_at": utcnow().isoformat()
             }
 
@@ -991,6 +1027,44 @@ def _market_data_age_seconds(entry) -> float:
     return entry_age_seconds(entry)
 
 
+# Timeframes to try for stop-cluster (equal-high/low) detection, best first.
+# M15/M5 recent swings are where a news trade's retail stops actually cluster;
+# H1 is a coarse fallback. ZoneAnalyzer.analyze() needs >= 10 bars.
+_LIQUIDITY_TF_PREFERENCE = ("M15", "M5", "H1", "M30", "M1")
+
+
+def _liquidity_pools_from_ohlc(ohlc_multi, pair_name):
+    """Run the server's ZoneAnalyzer on the OHLC we already hold to surface
+    equal-high/low STOP CLUSTERS (liquidity pools) for the decision pair.
+    find_liquidity_pools previously ran only on mock data in test endpoints —
+    the live entry decision never saw it. Returns
+    {"liquidity_pools": [{price, strength, touches}, ...], "liquidity_tf": tf}
+    (nearest cluster first, both sides of price) or None. Pair-exact by
+    construction (the pair's own OHLC), so the levels are safe to size against."""
+    if not isinstance(ohlc_multi, dict):
+        return None
+    bars = tf_used = None
+    for tf in _LIQUIDITY_TF_PREFERENCE:
+        candidate = ohlc_multi.get(tf)
+        if isinstance(candidate, list) and len(candidate) >= 10:
+            bars, tf_used = candidate, tf
+            break
+    if bars is None:
+        return None
+    try:
+        result = analyze_from_ohlc_data(bars, pair_name, ZONE_CONFIG)
+    except Exception as e:
+        logger.debug(f"Liquidity-pool analysis failed for {pair_name}: {e}")
+        return None
+    pools = [{"price": round(z.midpoint, 5),
+              "strength": z.strength.value,
+              "touches": z.touches}
+             for z in (result.liquidity_above[:3] + result.liquidity_below[:3])]
+    if not pools:
+        return None
+    return {"liquidity_pools": pools, "liquidity_tf": tf_used}
+
+
 def _build_market_context_for_event(event):
     """
     Assemble the market context for an event from EA-pushed data:
@@ -1008,6 +1082,7 @@ def _build_market_context_for_event(event):
         pair_name = normalize_pair(suggested)
         data_timestamp = None
         spread_points = None
+        spread_pips = None
 
         with market_data_lock:
             market_entry = _find_pair_data(market_data_reports, suggested, currency)
@@ -1020,6 +1095,7 @@ def _build_market_context_for_event(event):
                 pair_name = market_entry.get('pair', pair_name)
                 data_timestamp = market_entry.get('updated_at')
                 spread_points = market_entry.get('spread_points')
+                spread_pips = market_entry.get('spread_pips')
 
         # Multi-instance registration may carry zone data for this event
         event_time = event.datetime_utc
@@ -1039,9 +1115,17 @@ def _build_market_context_for_event(event):
             if zone_entry:
                 zones = {**(zones or {}), **zone_entry}
 
+        # Stop clusters (equal-high/low liquidity pools) computed SERVER-SIDE
+        # from the OHLC we already hold — the ZoneAnalyzer capability was
+        # otherwise unused in the live decision path. Extra keys only; never
+        # clobbers the EA-reported bias / S-R levels.
+        liq = _liquidity_pools_from_ohlc(ohlc_multi, pair_name)
+        if liq:
+            zones = {**(zones or {}), **liq}
+
         context = build_market_context(
             ohlc_multi, pair_name, zones=zones, registered_at=data_timestamp,
-            spread_points=spread_points
+            spread_points=spread_points, spread_pips=spread_pips
         )
 
         # CROSS-PAIR PICTURE: brief summaries of OTHER fresh pairs that
@@ -1082,7 +1166,8 @@ def _build_cross_pair_summaries(currency: str, exclude_pair: str, cap: int = 3):
                 continue
             brief = summarize_pair_brief(
                 entry.get('ohlc_multi', {}), norm, currency,
-                spread_points=entry.get('spread_points')
+                spread_points=entry.get('spread_points'),
+                spread_pips=entry.get('spread_pips'),
             )
             if brief:
                 summaries.append(brief)
@@ -1510,6 +1595,7 @@ def report_zone():
                 "nearest_support": data.get('nearest_support', 0),
                 "current_price": data.get('current_price', 0),
                 "spread_points": data.get('spread_points', 0),
+                "spread_pips": data.get('spread_pips'),
                 "updated_at": utcnow().isoformat()
             }
 
@@ -1563,6 +1649,35 @@ def get_mt5_signal():
             # No eager analysis here — the background updater preloads
             # decisions inside the event window (see get_trade_decision note)
             if next_decision and next_decision.direction != "SKIP":
+                if next_decision.direction not in {"BUY", "SELL"}:
+                    logger.error(
+                        "Signal blocked by invalid direction: "
+                        f"{next_decision.direction!r}"
+                    )
+                    return jsonify({
+                        "signal": False,
+                        "message": "Invalid direction in trade decision",
+                    })
+                raw_lot_percent = getattr(next_decision, "lot_percent", None)
+                try:
+                    lot_percent = float(raw_lot_percent)
+                except (TypeError, ValueError):
+                    lot_percent = math.nan
+                if (
+                    isinstance(raw_lot_percent, bool)
+                    or not math.isfinite(lot_percent)
+                    or lot_percent <= 0
+                    or lot_percent > 100
+                ):
+                    logger.error(
+                        "Signal blocked by invalid lot_percent: "
+                        f"{raw_lot_percent!r}"
+                    )
+                    return jsonify({
+                        "signal": False,
+                        "message": "Invalid lot_percent in trade decision",
+                    })
+
                 # Calculate time until event
                 # IMPORTANT: event_time is in UTC, so we must compare with UTC time
                 event_time = datetime.fromisoformat(
@@ -1583,6 +1698,11 @@ def get_mt5_signal():
                         "signal": False,
                         "message": f"Decision exists but event is {int(time_until)}s away "
                                    f"(signals are served inside the {TRADING_CONFIG['preload_seconds']}s window)"
+                    })
+                if time_until < 0:
+                    return jsonify({
+                        "signal": False,
+                        "message": "Decision event has already passed",
                     })
 
                 # Bare, suffix-free pair — the EA resolves its broker symbol itself
@@ -1615,6 +1735,57 @@ def get_mt5_signal():
 
                 sl_pips = getattr(next_decision, 'stop_loss_pips', 0)
                 tp_pips = getattr(next_decision, 'take_profit_pips', 0)
+                raw_numbers = {
+                    "confidence": getattr(next_decision, "confidence", None),
+                    "entry_seconds_before": getattr(
+                        next_decision, "entry_seconds_before", None
+                    ),
+                    "exit_minutes": getattr(
+                        next_decision, "exit_minutes_after", None
+                    ),
+                    "stop_loss_percent": getattr(
+                        next_decision, "stop_loss_percent", None
+                    ),
+                    "stop_loss_pips": sl_pips,
+                    "take_profit_pips": tp_pips,
+                    "max_loss_usd": POSITION_MANAGEMENT_CONFIG.get(
+                        "max_loss_usd", 100.0
+                    ),
+                }
+                normalized_numbers = {}
+                try:
+                    for name, value in raw_numbers.items():
+                        if isinstance(value, bool):
+                            raise ValueError(name)
+                        normalized_numbers[name] = float(value)
+                        if not math.isfinite(normalized_numbers[name]):
+                            raise ValueError(name)
+                except (TypeError, ValueError) as exc:
+                    logger.error(
+                        "Signal blocked by non-finite numeric field: "
+                        f"{exc}"
+                    )
+                    return jsonify({
+                        "signal": False,
+                        "message": "Invalid numeric field in trade decision",
+                    })
+
+                if (
+                    not 0 <= normalized_numbers["confidence"] <= 1
+                    or normalized_numbers["entry_seconds_before"] < 0
+                    or normalized_numbers["exit_minutes"] <= 0
+                    or normalized_numbers["stop_loss_percent"] < 0
+                    or normalized_numbers["stop_loss_pips"] < 0
+                    or normalized_numbers["take_profit_pips"] < 0
+                    or normalized_numbers["max_loss_usd"] <= 0
+                ):
+                    logger.error(
+                        f"Signal blocked by invalid numeric ranges: {raw_numbers}"
+                    )
+                    return jsonify({
+                        "signal": False,
+                        "message": "Invalid risk fields in trade decision",
+                    })
 
                 # Capture the served decision for lineage stamping at
                 # /api/position/opened (see _last_served_signal note)
@@ -1631,7 +1802,8 @@ def get_mt5_signal():
                 if _signal_served_log_key != serve_key:
                     _signal_served_log_key = serve_key
                     logger.info(f"=== SIGNAL SERVED === {next_decision.direction} {decision_pair} "
-                                f"to EA[{requesting_pair or 'any'}] | conf {next_decision.confidence:.0%} "
+                                f"to EA[{requesting_pair or 'any'}] | conf "
+                                f"{normalized_numbers['confidence']:.0%} "
                                 f"| T-{int(time_until)}s | {next_decision.event}")
 
                 return jsonify({
@@ -1641,17 +1813,17 @@ def get_mt5_signal():
                     "decision_id": getattr(next_decision, 'decision_id', ''),
                     "direction": next_decision.direction,
                     "pair": decision_pair,  # MT5 format (no slash)
-                    "lot_percent": next_decision.lot_percent,
+                    "lot_percent": lot_percent,
                     # Panel-owned per-trade risk budget (USD). Single source of
                     # truth: the EA sizes the lot from this and uses it as its
                     # offline max-loss guardrail (no EA-side duplicate input).
-                    "max_loss_usd": POSITION_MANAGEMENT_CONFIG.get("max_loss_usd", 100.0),
-                    "confidence": next_decision.confidence,
-                    "entry_seconds_before": next_decision.entry_seconds_before,
-                    "exit_minutes": next_decision.exit_minutes_after,
-                    "stop_loss_percent": next_decision.stop_loss_percent,
-                    "stop_loss_pips": sl_pips,
-                    "take_profit_pips": tp_pips,
+                    "max_loss_usd": normalized_numbers["max_loss_usd"],
+                    "confidence": normalized_numbers["confidence"],
+                    "entry_seconds_before": normalized_numbers["entry_seconds_before"],
+                    "exit_minutes": normalized_numbers["exit_minutes"],
+                    "stop_loss_percent": normalized_numbers["stop_loss_percent"],
+                    "stop_loss_pips": normalized_numbers["stop_loss_pips"],
+                    "take_profit_pips": normalized_numbers["take_profit_pips"],
                     "time_until_event": int(time_until),
                     "event_time": event_time.isoformat(),
                     "event_name": next_decision.event,
@@ -1684,12 +1856,23 @@ def trade_executed():
     ensure_services()
 
     try:
-        # Get pair from query params or JSON body
+        # Get pair from query params or JSON body (silent=True: a bare GET
+        # has no JSON content type and must not 500 on the parse itself)
         pair = request.args.get('pair', '')
-        if not pair and request.json:
-            pair = request.json.get('pair', '')
+        if not pair:
+            body = request.get_json(silent=True) or {}
+            pair = body.get('pair', '')
 
-        logger.info(f"Trade executed notification received for {pair or 'unknown pair'}")
+        # The EA always sends ?pair=<symbol>. A bare hit (operator pasting
+        # the URL into a browser, a probing healthcheck) must not burn a
+        # daily-trade slot or destroy the pending decision.
+        if not pair:
+            return jsonify({
+                "status": "error",
+                "message": "pair is required",
+            }), 400
+
+        logger.info(f"Trade executed notification received for {pair}")
 
         # Count against the daily limit even without position tracking
         position_manager.register_untracked_trade()
@@ -1733,6 +1916,39 @@ def trade_executed():
 # =============================================================================
 # AI POSITION MANAGEMENT ENDPOINTS
 # =============================================================================
+
+@app.route('/api/position/reconcile', methods=['POST'])
+def position_reconcile():
+    """Reconcile the broker's empty/non-empty position observation."""
+    ensure_services()
+    try:
+        data = request.json
+        if not isinstance(data, dict) or "has_position" not in data:
+            return jsonify({
+                "status": "error",
+                "message": "has_position is required",
+            }), 422
+        if data["has_position"]:
+            registration = position_manager.on_position_opened(
+                data,
+                decision_id=str(data.get("decision_id") or ""),
+                forced=bool(data.get("forced", False)),
+                recovered=True,
+            )
+            status_code = 409 if registration == "conflict" else 200
+            return jsonify({
+                "status": "conflict" if status_code == 409 else "ok",
+                "reconciliation": registration,
+                "allow_new_trades": False,
+            }), status_code
+
+        result = position_manager.reconcile_empty()
+        return jsonify({"status": "ok", **result})
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 422
+    except PositionPersistenceError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 503
+
 
 @app.route('/api/position/opened', methods=['POST'])
 def position_opened():
@@ -1780,31 +1996,40 @@ def position_opened():
                 entry_reasoning = next_decision.reasoning
                 forced_flag = getattr(next_decision, 'forced', False)
 
-        position_manager.on_position_opened(data, entry_reasoning=entry_reasoning,
-                                            decision_id=decision_id,
-                                            forced=forced_flag)
+        registration = position_manager.on_position_opened(
+            data,
+            entry_reasoning=entry_reasoning,
+            decision_id=decision_id,
+            forced=forced_flag,
+            recovered=bool(data.get("recovered", False)),
+        )
+        if registration == "conflict":
+            return jsonify({
+                "status": "conflict",
+                "message": "A different broker position is already tracked",
+            }), 409
 
         # Also mark trade as executed (same as /api/trade-executed)
         event_key_to_cleanup = None
+        if registration == "opened" and not data.get("recovered", False):
+            with decision_lock:
+                if next_decision:
+                    event_time = datetime.fromisoformat(
+                        next_decision.data_summary['event']['datetime']
+                    )
+                    if event_time.tzinfo is not None:
+                        event_time = event_time.replace(tzinfo=None)
 
-        with decision_lock:
-            if next_decision:
-                event_time = datetime.fromisoformat(
-                    next_decision.data_summary['event']['datetime']
-                )
-                if event_time.tzinfo is not None:
-                    event_time = event_time.replace(tzinfo=None)
+                    event_key_to_cleanup = get_event_key(
+                        next_decision.data_summary['event'].get('currency', ''),
+                        event_time
+                    )
+                    executed_trades.add(event_key_to_cleanup)
+                    # Stop the updater from re-analyzing this event after we
+                    # release next_decision (event may still be seconds ahead)
+                    _mark_decision_event_analyzed(next_decision)
 
-                event_key_to_cleanup = get_event_key(
-                    next_decision.data_summary['event'].get('currency', ''),
-                    event_time
-                )
-                executed_trades.add(event_key_to_cleanup)
-                # Stop the updater from re-analyzing this event after we
-                # release next_decision (event may still be seconds ahead)
-                _mark_decision_event_analyzed(next_decision)
-
-            next_decision = None
+                next_decision = None
 
         if event_key_to_cleanup:
             with pair_lock:
@@ -1814,8 +2039,18 @@ def position_opened():
         logger.info(f"Position opened: {data.get('direction')} {data.get('symbol')} "
                      f"@ {data.get('entry_price')} | ticket={data.get('ticket')}")
 
-        return jsonify({"status": "ok", "message": "Position registered"})
+        return jsonify({
+            "status": "ok",
+            "message": "Position registered",
+            "registration": registration,
+        })
 
+    except ValueError as e:
+        logger.warning(f"Invalid position open snapshot: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 422
+    except PositionPersistenceError as e:
+        logger.error(f"Could not persist position open: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 503
     except Exception as e:
         logger.error(f"Error registering position: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -1892,8 +2127,22 @@ def position_closed():
         data = request.json
         if not data:
             return jsonify({"status": "error", "message": "No data provided"}), 400
+        if (
+            data.get("position_id") in (None, "", "0")
+            and data.get("ticket") in (None, "", 0, "0")
+        ):
+            return jsonify({
+                "status": "error",
+                "message": "position_id or ticket is required",
+            }), 422
 
         record = position_manager.on_position_closed(data)
+        if record is None:
+            return jsonify({
+                "status": "ok",
+                "message": "Duplicate position close ignored",
+                "duplicate": True,
+            })
 
         # Post-trade reflection (F5): background thread — the EA's HTTP
         # call must return immediately, and a journal failure is never fatal
@@ -1904,6 +2153,15 @@ def position_closed():
 
         return jsonify({"status": "ok", "message": "Position close recorded"})
 
+    except PositionConflictError as e:
+        logger.warning(f"Rejected stale position close: {e}")
+        return jsonify({"status": "conflict", "message": str(e)}), 409
+    except ValueError as e:
+        logger.warning(f"Invalid position close report: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 422
+    except PositionPersistenceError as e:
+        logger.error(f"Could not persist position close: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 503
     except Exception as e:
         logger.error(f"Error recording position close: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -2001,6 +2259,48 @@ def create_test_signal():
         event_name = data.get('event_name', 'TEST EVENT')
         stop_loss_pips = data.get('stop_loss_pips', 40)
         take_profit_pips = data.get('take_profit_pips', 60)
+
+        raw_numbers = {
+            "seconds_until": seconds_until,
+            "lot_percent": lot_percent,
+            "confidence": confidence,
+            "exit_minutes": exit_minutes,
+            "stop_loss_pips": stop_loss_pips,
+            "take_profit_pips": take_profit_pips,
+        }
+        try:
+            normalized = {}
+            for name, value in raw_numbers.items():
+                if isinstance(value, bool):
+                    raise ValueError(name)
+                normalized[name] = float(value)
+                if not math.isfinite(normalized[name]):
+                    raise ValueError(name)
+        except (TypeError, ValueError) as exc:
+            return jsonify({
+                "status": "error",
+                "message": f"{exc} must be a finite number",
+            }), 400
+
+        if (
+            normalized["seconds_until"] < 0
+            or not 0 < normalized["lot_percent"] <= 100
+            or not 0 <= normalized["confidence"] <= 1
+            or normalized["exit_minutes"] <= 0
+            or normalized["stop_loss_pips"] < 0
+            or normalized["take_profit_pips"] < 0
+        ):
+            return jsonify({
+                "status": "error",
+                "message": "Invalid numeric range in test signal",
+            }), 400
+
+        seconds_until = normalized["seconds_until"]
+        lot_percent = normalized["lot_percent"]
+        confidence = normalized["confidence"]
+        exit_minutes = normalized["exit_minutes"]
+        stop_loss_pips = normalized["stop_loss_pips"]
+        take_profit_pips = normalized["take_profit_pips"]
 
         # Calculate event time (use UTC to match server's UTC-based comparisons)
         event_time = utcnow() + timedelta(seconds=seconds_until)
@@ -2202,8 +2502,11 @@ def _get_next_unanalyzed_events() -> list:
     Returns list of events sorted by time (nearest first).
     """
     # No explicit currencies: the default path routes through the shared
-    # get_monitored_events() accessor — one cache entry for all callers
-    events = calendar.get_tradeable_events(event_keywords=HIGH_IMPACT_EVENTS)
+    # get_monitored_events() accessor — one cache entry for all callers.
+    # event_keywords=None -> calendar reads cfg.HIGH_IMPACT_EVENTS at call
+    # time; passing the module-level import here pinned the import-time list,
+    # silently ignoring panel tier edits until restart.
+    events = calendar.get_tradeable_events(event_keywords=None)
 
     fake = _get_fake_test_event()
     if fake is not None:

@@ -93,9 +93,12 @@ class COTDataFetcher:
             end_date = datetime.now()
             start_date = end_date - timedelta(weeks=weeks_back)
 
-            # Build query
+            # Build query. PREFIX match, not '%name%': a substring match for
+            # 'BRITISH POUND' also returns the 'EURO FX/BRITISH POUND XRATE'
+            # cross contract, interleaving sign-inverted rows into the series
+            # (weekly change then compared main-vs-cross of the SAME week).
             params = {
-                "$where": f"market_and_exchange_names like '%{contract_name}%' "
+                "$where": f"market_and_exchange_names like '{contract_name} - %' "
                           f"AND report_date_as_yyyy_mm_dd >= '{start_date.strftime('%Y-%m-%d')}'",
                 "$order": "report_date_as_yyyy_mm_dd DESC",
                 "$limit": weeks_back,
@@ -110,6 +113,15 @@ class COTDataFetcher:
                 return None
 
             df = pd.DataFrame(data)
+
+            # Defensive post-filter in case the API-side LIKE ever loosens:
+            # keep only rows of the exact contract ('NAME - EXCHANGE').
+            if 'market_and_exchange_names' in df.columns:
+                df = df[df['market_and_exchange_names'].str.startswith(
+                    contract_name + ' -')]
+                if df.empty:
+                    logger.warning(f"No exact-contract COT rows for {currency}")
+                    return None
 
             # Convert numeric columns
             numeric_cols = [

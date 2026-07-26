@@ -141,7 +141,11 @@ class TestGuardrails:
         # Simulate 3 losing trades
         for i in range(3):
             pm.on_position_opened(make_position_data(ticket=100 + i))
-            pm.on_position_closed({"profit": -120.0, "reason": "SL hit"})
+            pm.on_position_closed({
+                "ticket": 100 + i,
+                "profit": -120.0,
+                "reason": "SL hit",
+            })
 
         # Daily P/L should be -$360
         can_trade, reason = pm.can_open_trade()
@@ -152,7 +156,11 @@ class TestGuardrails:
         """More than 5 trades per day should be blocked."""
         for i in range(5):
             pm.on_position_opened(make_position_data(ticket=100 + i))
-            pm.on_position_closed({"profit": 10.0, "reason": "TP hit"})
+            pm.on_position_closed({
+                "ticket": 100 + i,
+                "profit": 10.0,
+                "reason": "TP hit",
+            })
 
         can_trade, reason = pm.can_open_trade()
         assert can_trade is False
@@ -181,7 +189,11 @@ class TestPositionLifecycle:
 
     def test_close_position_updates_daily_pnl(self, pm_with_position):
         """Closing a position should update daily P/L."""
-        pm_with_position.on_position_closed({"profit": 75.0, "reason": "AI close"})
+        pm_with_position.on_position_closed({
+            "ticket": 12345,
+            "profit": 75.0,
+            "reason": "AI close",
+        })
 
         assert pm_with_position.position is None
         assert pm_with_position.daily_pnl_usd == 75.0
@@ -197,7 +209,11 @@ class TestPositionLifecycle:
     def test_daily_reset(self, pm):
         """Daily counters should reset on new day."""
         pm.on_position_opened(make_position_data())
-        pm.on_position_closed({"profit": -50.0, "reason": "SL"})
+        pm.on_position_closed({
+            "ticket": 12345,
+            "profit": -50.0,
+            "reason": "SL",
+        })
 
         assert pm.daily_pnl_usd == -50.0
         assert pm.daily_trades == 1
@@ -251,6 +267,34 @@ class TestFlagManagement:
         # update_position should consume pending command and set the flag
         pm.update_position(make_report_data(profit_usd=35.0))
         assert pm.position.sl_moved_to_be is True
+
+    def test_be_tolerance_stops_at_two_pips(self, pm):
+        pm.on_position_opened(make_position_data(entry_price=0.6200))
+        pm._update_flags_from_command(
+            PositionCommand(action="MODIFY_SL", sl_price=0.6202)
+        )
+        assert pm.position.sl_moved_to_be is True
+
+        pm.position.sl_moved_to_be = False
+        pm._update_flags_from_command(
+            PositionCommand(action="MODIFY_SL", sl_price=0.62021)
+        )
+        assert pm.position.sl_moved_to_be is False
+
+    def test_jpy_be_tolerance_uses_quote_currency(self, pm):
+        pm.on_position_opened(
+            make_position_data(symbol="USDJPY", entry_price=150.00)
+        )
+        pm._update_flags_from_command(
+            PositionCommand(action="MODIFY_SL", sl_price=150.02)
+        )
+        assert pm.position.sl_moved_to_be is True
+
+        pm.position.sl_moved_to_be = False
+        pm._update_flags_from_command(
+            PositionCommand(action="MODIFY_SL", sl_price=150.021)
+        )
+        assert pm.position.sl_moved_to_be is False
 
     def test_partial_closed_flag_set_after_partial_close(self, pm):
         """PARTIAL_CLOSE command should set partial_closed flag."""
@@ -427,7 +471,11 @@ class TestTradeHistoryPersistence:
         hf = str(tmp_path / "trade_history.jsonl")
         pm1 = PositionManager(exit_engine=None, history_file=hf)
         pm1.on_position_opened(make_position_data())
-        pm1.on_position_closed({"profit": -42.5, "reason": "SL hit"})
+        pm1.on_position_closed({
+            "ticket": 12345,
+            "profit": -42.5,
+            "reason": "SL hit",
+        })
 
         pm2 = PositionManager(exit_engine=None, history_file=hf)
         status = pm2.get_status()

@@ -411,13 +411,17 @@ class SentimentAggregator:
     """
 
     def __init__(self):
+        # ONLY real retail-positioning feeds belong here. TradingViewTechnical
+        # is a TECHNICAL-ANALYSIS rating fabricated into pseudo-positioning
+        # ("bullish technicals = retail probably long") — feeding it to the
+        # contrarian logic nets out to "trade against the trend", so it was
+        # removed from the retail path. SimulatedSentiment (hardcoded
+        # constants) must never reach live decisions either: no data means
+        # NO_DATA, not invented data.
         self.sources = [
-            TradingViewTechnical(),  # Primary source - reliable
             MyfxbookSentiment(),
             FXSSISentiment(),
         ]
-        # Fallback to simulated data
-        self.fallback = SimulatedSentiment()
         self._cache = {}
         self._cache_time = None
 
@@ -468,10 +472,13 @@ class SentimentAggregator:
             except Exception as e:
                 logger.error(f"Error fetching from source: {e}")
 
-        # If no data from live sources, use fallback
+        # No live data = honestly NO data. The old SimulatedSentiment
+        # fallback fed hardcoded constants into live decisions while the
+        # engine recorded sentiment as "ok" — fabricated inputs must surface
+        # downstream as NO_DATA instead.
         if len(aggregated) == 0:
-            logger.warning("No live sentiment data, using simulated data")
-            aggregated = self.fallback.fetch_sentiment()
+            logger.warning("No live sentiment data (sources empty) — "
+                           "reporting NO_DATA, not simulated values")
 
         self._cache = aggregated
         self._cache_time = datetime.now()
@@ -525,9 +532,22 @@ class SentimentAggregator:
         currency = currency.upper()
         all_sentiment = self.get_all_sentiment()
 
+        # Pair-level signals are PAIR directions (CONTRARIAN_LONG = long the
+        # pair). To vote on a CURRENCY the side of quotation must be applied:
+        # long USDCAD = bullish USD but BEARISH CAD. Counting pair votes
+        # without this inversion inverted the bias for every quote-side
+        # currency (CAD was wrong 100% of the time).
         matching_pairs = []
+        currency_votes = []  # (data, currency_is_base)
         for pair, data in all_sentiment.items():
-            if currency in pair:
+            normalized = pair.upper().replace('/', '')
+            if len(normalized) < 6:
+                continue
+            if normalized[:3] == currency:
+                currency_votes.append((data, True))
+                matching_pairs.append(data)
+            elif normalized[3:6] == currency:
+                currency_votes.append((data, False))
                 matching_pairs.append(data)
 
         if not matching_pairs:
@@ -538,9 +558,17 @@ class SentimentAggregator:
                 "pairs_analyzed": 0
             }
 
-        # Aggregate signals
-        bullish_signals = sum(1 for s in matching_pairs if s.signal == "CONTRARIAN_LONG")
-        bearish_signals = sum(1 for s in matching_pairs if s.signal == "CONTRARIAN_SHORT")
+        # Aggregate signals in CURRENCY space (invert quote-side votes)
+        bullish_signals = sum(
+            1 for data, is_base in currency_votes
+            if data.signal == ("CONTRARIAN_LONG" if is_base
+                               else "CONTRARIAN_SHORT")
+        )
+        bearish_signals = sum(
+            1 for data, is_base in currency_votes
+            if data.signal == ("CONTRARIAN_SHORT" if is_base
+                               else "CONTRARIAN_LONG")
+        )
         avg_confidence = sum(s.confidence for s in matching_pairs) / len(matching_pairs)
 
         if bullish_signals > bearish_signals:

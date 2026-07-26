@@ -23,6 +23,12 @@ from config import (LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS,
                     ENSEMBLE_K, ENSEMBLE_MODELS)
 
 
+# Bump MANUALLY on every substantive entry-prompt change. Recorded with each
+# decision so calibration/replay can be grouped per prompt version — without
+# it, prompt edits silently mix regimes inside one calibration ledger.
+ENTRY_PROMPT_VERSION = "2026-07-26.1"
+
+
 @dataclass
 class TradingDecision:
     """Represents the AI's trading decision"""
@@ -50,6 +56,12 @@ class TradingDecision:
     # Ensemble metadata (F4, SKYTOWER_ENSEMBLE_K >= 2): {"k", "valid",
     # "votes": [{"direction", "confidence"}, ...]}; None for single-call
     ensemble: Dict = None
+    # Which engine produced the direction ("anthropic/claude-fable-5",
+    # "panel:<models>", "rule-based") and under which entry-prompt version —
+    # calibration must be computable PER MODEL and PER PROMPT VERSION, or
+    # every prompt/model change silently resets the meaning of the ledger.
+    model: str = ""
+    prompt_version: str = ""
 
     def to_dict(self):
         d = asdict(self)
@@ -113,7 +125,11 @@ b. Pre-news drift: what do the last 30-60 min candles show? A strong run INTO th
    (a rate decision deviating from what markets priced), the fundamentals won
    historically — a merely as-forecast print is NOT such a surprise.
 c. Chart evidence: read the raw candles — momentum, wicks, rejection levels,
-   where the stops likely sit relative to nearest support/resistance.
+   where the stops likely sit relative to nearest support/resistance. When the
+   market-structure "zones" block reports liquidity_above / liquidity_below
+   (measured equal-high/low stop clusters, with pip distance and strength),
+   treat a cluster in the SURPRISE direction as potential FUEL that can extend
+   the move if price runs it — never as a target the move must reach.
 d. Volatility fit: are your stop_loss_pips/take_profit_pips consistent with ATR and
    the current spread (a stop inside 1x spread+ATR noise will be swept)? Entry happens
    seconds BEFORE the release, so also budget the stop for an adverse stop-run wick
@@ -327,7 +343,8 @@ confidence — do NOT inflate it just because a direction is required."""
         forecast_info = {
             "current_forecast": event.forecast,
             "previous_value": event.previous,
-            "forecast_vs_previous": self._compare_values(event.forecast, event.previous)
+            "forecast_vs_previous": self._compare_values(
+                event.forecast, event.previous, event.event_name)
         }
         if not event.forecast and not event.previous:
             logger.warning(f"No forecast/previous values for {event.event_name}")
@@ -945,8 +962,13 @@ confidence — do NOT inflate it just because a direction is required."""
                      f"net ${net:+.2f} on {currency} trades")
         return "\n".join(lines)
 
-    def _compare_values(self, forecast: str, previous: str) -> str:
-        """Compare forecast to previous value"""
+    def _compare_values(self, forecast: str, previous: str,
+                        event_name: str = "") -> str:
+        """Compare forecast to previous value.
+
+        For inverse indicators (Unemployment Rate, Jobless/Unemployment
+        Claims — config.LOWER_IS_BETTER_MARKERS) a HIGHER number is
+        currency-negative, so the label is swapped."""
         if not forecast or not previous:
             return "UNKNOWN"
 
@@ -958,10 +980,18 @@ confidence — do NOT inflate it just because a direction is required."""
             return "UNKNOWN"
 
         if forecast_num > previous_num:
-            return "IMPROVEMENT"
+            result = "IMPROVEMENT"
         elif forecast_num < previous_num:
-            return "DETERIORATION"
-        return "UNCHANGED"
+            result = "DETERIORATION"
+        else:
+            return "UNCHANGED"
+
+        from config import LOWER_IS_BETTER_MARKERS
+        name = (event_name or "").lower()
+        if any(marker in name for marker in LOWER_IS_BETTER_MARKERS):
+            result = ("DETERIORATION" if result == "IMPROVEMENT"
+                      else "IMPROVEMENT")
+        return result
 
     def _entry_prompt(self, data_context: Dict) -> str:
         """Assemble the full entry-decision user prompt. Shared by the
@@ -1117,6 +1147,8 @@ decision in JSON format."""
                 pair=data_context['suggested_pair'],
                 direction=direction,
                 confidence=self._num(decision_data.get('confidence'), 0.0, 0.0, 1.0),
+                model=str(self.model or ""),
+                prompt_version=ENTRY_PROMPT_VERSION,
                 lot_percent=int(self._num(decision_data.get('lot_percent'), 70, 0, 85)),
                 entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
                 exit_minutes_after=int(self._num(decision_data.get('exit_minutes'), 10, 5, 15)),
@@ -1235,6 +1267,9 @@ decision in JSON format."""
                 pair=data_context['suggested_pair'],
                 direction=direction,
                 confidence=round(min(max(confidence, 0.0), 1.0), 2),
+                model=("panel:" + ",".join(panel) if panel
+                       else f"{self.model} x{k}"),
+                prompt_version=ENTRY_PROMPT_VERSION,
                 lot_percent=int(_median([self._num(v["parsed"].get('lot_percent'),
                                                    70, 0, 85) for v in src])),
                 entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
@@ -1594,6 +1629,8 @@ decision in JSON format."""
             pair=pair,
             direction=direction,
             confidence=min(confidence, 1.0),
+            model="rule-based",
+            prompt_version="",
             lot_percent=lot_percent,
             entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
             exit_minutes_after=10 if confidence > 0.6 else 5,
@@ -1613,7 +1650,10 @@ decision in JSON format."""
         """
         # Find next high-impact event
         event = self.calendar.get_next_tradeable_event(
-            event_keywords=HIGH_IMPACT_EVENTS,
+            # None = calendar_fetcher reads cfg.HIGH_IMPACT_EVENTS at call
+            # time, so panel edits to the tier lists take effect without a
+            # restart (a module-level import here would pin the old list).
+            event_keywords=None,
             currencies=["NZD", "CAD", "AUD", "USD", "GBP"]
         )
 

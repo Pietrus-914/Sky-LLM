@@ -11,6 +11,7 @@ from enum import Enum
 from loguru import logger
 
 from zone_analyzer import ZoneAnalysisResult, Zone, ZoneType
+from trading_units import pips_to_price, price_to_pips
 
 
 class ExitStrategy(Enum):
@@ -117,15 +118,11 @@ class TargetCalculator:
 
     def _to_pips(self, price_diff: float, symbol: str = "") -> float:
         """Convert price difference to pips"""
-        if "JPY" in symbol.upper():
-            return abs(price_diff) * 100
-        return abs(price_diff) * 10000
+        return abs(price_to_pips(price_diff, symbol))
 
     def _from_pips(self, pips: float, symbol: str = "") -> float:
         """Convert pips to price difference"""
-        if "JPY" in symbol.upper():
-            return pips / 100
-        return pips / 10000
+        return pips_to_price(pips, symbol)
 
     def _get_best_target_zone(
         self,

@@ -133,6 +133,13 @@ _extra_events = os.getenv("SKYTOWER_EXTRA_EVENTS", "")
 if _extra_events.strip():
     TIER2_EVENTS = TIER2_EVENTS + [e.strip() for e in _extra_events.split(",") if e.strip()]
 
+# Pełne rostery (niezmienne bazy do filtrowania). Panel zapisuje listę
+# WŁĄCZONYCH nazw (enabled_events w runtime_overrides.json); TIER1_EVENTS/
+# TIER2_EVENTS są filtrowanym widokiem tych rosterów — nigdy odwrotnie,
+# inaczej pierwszy zapis z panelu bezpowrotnie skróciłby bazę.
+TIER1_EVENTS_ALL = list(TIER1_EVENTS)
+TIER2_EVENTS_ALL = list(TIER2_EVENTS)
+
 # Wszystkie high impact events (dla kompatybilności)
 HIGH_IMPACT_EVENTS = TIER1_EVENTS + TIER2_EVENTS
 
@@ -161,6 +168,16 @@ NON_DATA_EVENT_MARKERS = [
     "press conference",
     "q&a",
     "projections",
+]
+
+# Eventy "odwrócone": WYŻSZA wartość jest NEGATYWNA dla waluty (bezrobocie,
+# wnioski o zasiłek). Dopasowanie podciągiem, case-insensitive — dla tych
+# eventów IMPROVEMENT/DETERIORATION w porównaniu forecast-vs-previous jest
+# zamieniane miejscami. Świadomie krótka lista: tylko jednoznaczne przypadki.
+LOWER_IS_BETTER_MARKERS = [
+    "unemployment",
+    "jobless",
+    "claims",
 ]
 
 # =============================================================================
@@ -309,6 +326,8 @@ _OVERRIDES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # watchdog restarts. Lives next to the other JSONL stores in logs/.
 TRADE_HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                   'logs', 'trade_history.jsonl')
+ACTIVE_POSITION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    'logs', 'active_position.json')
 
 # Curated event playbooks (hand/Claude-distilled patterns from historical
 # charts) injected into the entry prompt. Optional — missing file = no
@@ -396,10 +415,19 @@ def _apply_runtime_overrides():
     except (OSError, ValueError):
         return
     global MIN_IMPACT_LEVEL, TRADE_ALL_EVENTS
+    global TIER1_EVENTS, TIER2_EVENTS, HIGH_IMPACT_EVENTS
     if str(data.get('min_impact', '')).upper() in ("LOW", "MEDIUM", "HIGH"):
         MIN_IMPACT_LEVEL = str(data['min_impact']).upper()
     if isinstance(data.get('trade_all_events'), bool):
         TRADE_ALL_EVENTS = data['trade_all_events']
+    # Panel-persisted event whitelist: list of ENABLED names, applied as a
+    # filter over the immutable *_ALL rosters (unknown names are ignored).
+    enabled = data.get('enabled_events')
+    if isinstance(enabled, list) and all(isinstance(e, str) for e in enabled):
+        enabled_set = set(enabled)
+        TIER1_EVENTS = [e for e in TIER1_EVENTS_ALL if e in enabled_set]
+        TIER2_EVENTS = [e for e in TIER2_EVENTS_ALL if e in enabled_set]
+        HIGH_IMPACT_EVENTS = TIER1_EVENTS + TIER2_EVENTS
     for key, lo, hi, cast in (("max_daily_trades", 1, 100, int),
                               ("max_daily_loss_usd", 10, 1_000_000, float),
                               ("max_loss_usd", 5, 100_000, float)):
@@ -493,6 +521,8 @@ _apply_model_runtime_overrides()
 # =============================================================================
 # When enabled, the entry decision engine must always pick BUY or SELL —
 # SKIP is disabled at every level (LLM prompt, parse fallback, rule fallback).
-# Intended ONLY for the demo-account data-collection phase. Set explicitly in
-# docker-compose.yml, not in .env, so it stays visible and deliberate.
+# Intended ONLY for the demo-account data-collection phase. Lives in
+# python/.env (SKYTOWER_FORCE_DECISION=true); the native server is the
+# primary run mode and docker-compose deliberately does not set it.
+# GOING LIVE = delete that .env line (see RUNBOOK "Przejście na LIVE").
 FORCE_DECISION = _env_bool("SKYTOWER_FORCE_DECISION", False)

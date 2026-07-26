@@ -106,6 +106,15 @@ class TradingEconomicsCalendar:
                         continue
 
                     event_dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                    # TE 'Date' strings usually carry no tz suffix -> naive
+                    # datetime. Aggregation compares against aware UTC; a
+                    # naive value raises TypeError OUTSIDE the per-source
+                    # try, killing every calendar call the moment TE starts
+                    # serving JSON again. (TE tz still unverified — see the
+                    # calendar-timezone lesson — but aware-or-crash is not
+                    # an acceptable failure mode.)
+                    if event_dt.tzinfo is None:
+                        event_dt = pytz.UTC.localize(event_dt)
 
                     # Get currency from country
                     country = item.get('Country', '')

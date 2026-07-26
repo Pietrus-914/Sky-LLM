@@ -8,14 +8,24 @@ position within the daily range, and distances to recent extremes.
 Pure functions, no I/O — the server wires this into the decision pipeline.
 """
 import re
+import math
 from typing import Dict, List, Optional
 from datetime import datetime, timezone
 from timeutil import utcnow
+from trading_units import forex_pip_size
 
 
 def pip_size(pair: str) -> float:
     """Pip size for a pair (same 4/5-digit convention as ZoneAnalyzer._to_pips)."""
-    return 0.01 if "JPY" in pair.upper() else 0.0001
+    return forex_pip_size(pair)
+
+
+def _positive_finite(value) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
 
 
 def normalize_pair(pair: str) -> str:
@@ -177,6 +187,7 @@ def build_market_context(
     zones: Optional[Dict] = None,
     registered_at: Optional[str] = None,
     spread_points: Optional[float] = None,
+    spread_pips: Optional[float] = None,
 ) -> Optional[Dict]:
     """
     Build the market-context dict for the entry LLM prompt.
@@ -278,8 +289,14 @@ def build_market_context(
         context["distance_to_recent_high_pips"] = round((window_high - last_price) / pip, 1)
         context["distance_to_recent_low_pips"] = round((last_price - window_low) / pip, 1)
 
-    if spread_points is not None and spread_points > 0:
-        context["current_spread_pips"] = round(spread_points / 10.0, 1)
+    explicit_spread = _positive_finite(spread_pips)
+    legacy_spread = _positive_finite(spread_points)
+    if explicit_spread is not None:
+        context["current_spread_pips"] = round(explicit_spread, 1)
+    elif spread_pips is None and legacy_spread is not None:
+        # Backward compatibility for pre-stage-2 EAs, which reported points
+        # from the project's standard 3/5-digit broker feed.
+        context["current_spread_pips"] = round(legacy_spread / 10.0, 1)
 
     if zones:
         context["zones"] = _summarize_zones(zones, context.get("last_price"), pip)
@@ -295,6 +312,7 @@ def summarize_pair_brief(
     pair: str,
     event_currency: str,
     spread_points: Optional[float] = None,
+    spread_pips: Optional[float] = None,
 ) -> Optional[str]:
     """
     One-line technical brief of a sibling pair for the CROSS-PAIR PICTURE
@@ -346,8 +364,12 @@ def summarize_pair_brief(
         pos = round((last_price - window_low) / (window_high - window_low) * 100)
         parts.append(f"range pos {pos}%")
 
-    if spread_points is not None and spread_points > 0:
-        parts.append(f"spread {spread_points / 10.0:.1f} pips")
+    explicit_spread = _positive_finite(spread_pips)
+    legacy_spread = _positive_finite(spread_points)
+    if explicit_spread is not None:
+        parts.append(f"spread {explicit_spread:.1f} pips")
+    elif spread_pips is None and legacy_spread is not None:
+        parts.append(f"spread {legacy_spread / 10.0:.1f} pips")
 
     if not parts:
         return None
@@ -381,6 +403,33 @@ def _summarize_zones(zones: Dict, last_price: Optional[float], pip: float) -> Di
     for key in ("resistance_zones", "support_zones", "fvg_zones"):
         if isinstance(zones.get(key), list):
             summary[f"{key}_count"] = len(zones[key])
+
+    # Stop clusters (equal-high/low liquidity pools), computed server-side from
+    # the pair's own OHLC. Report the NEAREST cluster on each side as a pip
+    # distance + strength: the model reads a cluster in the SURPRISE direction
+    # as potential fuel that can extend the move if run — never as a target.
+    # Same MAX_LEVEL_DISTANCE_PIPS gate as S/R keeps a wrong-scale level out.
+    pools = zones.get("liquidity_pools")
+    if isinstance(pools, list) and price:
+        for pool in pools:
+            if not isinstance(pool, dict):
+                continue
+            level = pool.get("price") or 0
+            if not level:
+                continue
+            signed = round((level - price) / pip, 1)
+            side = "liquidity_above" if signed > 0 else "liquidity_below"
+            dist = abs(signed)
+            if not (0 < dist <= MAX_LEVEL_DISTANCE_PIPS):
+                continue
+            prev = summary.get(side)
+            if prev is None or dist < prev["distance_pips"]:
+                summary[side] = {"distance_pips": dist,
+                                 "strength": pool.get("strength"),
+                                 "touches": pool.get("touches")}
+        if zones.get("liquidity_tf") and (
+                "liquidity_above" in summary or "liquidity_below" in summary):
+            summary["liquidity_tf"] = zones["liquidity_tf"]
     return summary
 
 

@@ -63,6 +63,10 @@ class DecisionHistory:
             "direction": getattr(decision, 'direction', ''),
             "confidence": getattr(decision, 'confidence', 0),
             "forced": getattr(decision, 'forced', False),
+            # Per-model / per-prompt-version calibration keys — without them
+            # every model or prompt change silently mixes calibration regimes
+            "model": getattr(decision, 'model', ''),
+            "prompt_version": getattr(decision, 'prompt_version', ''),
             "reasoning": getattr(decision, 'reasoning', ''),
             # The LLM's numeric choices — without them SL-sizing and
             # exit-window calibration can never be evaluated later

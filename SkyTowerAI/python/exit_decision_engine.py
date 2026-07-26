@@ -11,6 +11,7 @@ import os
 
 from config import LLM_CONFIG, OPENROUTER_API_KEY, POSITION_MANAGEMENT_CONFIG
 from position_manager import OpenPosition, PositionCommand
+from trading_units import forex_pip_size
 
 
 EXIT_SYSTEM_PROMPT = """You are an expert forex position manager for the SkyTower-FX news trading strategy.
@@ -258,8 +259,8 @@ Respond with JSON only."""
 
         # Rule 1: Move SL to break-even after $30+ profit
         if pos.profit_usd > 30.0 and not pos.sl_moved_to_be:
-            pip_size = 0.01 if "JPY" in pos.symbol else 0.0001
-            buffer = pip_size * 10  # 1 pip buffer
+            pip_size = forex_pip_size(pos.symbol)
+            buffer = pip_size  # 1 pip buffer
 
             if pos.direction == "BUY":
                 new_sl = pos.entry_price + buffer
@@ -288,8 +289,8 @@ Respond with JSON only."""
 
         # Rule 3: Trail SL to protect profits
         if pos.profit_usd > 40.0 and pos.sl_moved_to_be:
-            pip_size = 0.01 if "JPY" in pos.symbol else 0.0001
-            trail_distance = pip_size * 100  # 10 pips
+            pip_size = forex_pip_size(pos.symbol)
+            trail_distance = pip_size * 10  # 10 pips
 
             if pos.direction == "BUY":
                 potential_sl = pos.current_price - trail_distance

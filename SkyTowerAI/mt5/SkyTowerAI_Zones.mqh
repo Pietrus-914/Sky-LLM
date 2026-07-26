@@ -194,7 +194,12 @@ public:
 
    // Position management
    bool              OnNewPosition(ulong ticket, string symbol, string direction,
-                                  double entry_price, double lots);
+                                  double entry_price, double lots,
+                                  double sl, double tp1, double tp2);
+   bool              OnRecoveredPosition(ulong ticket, string symbol, string direction,
+                                         double entry_price, double original_lots,
+                                         double current_lots, datetime open_time,
+                                         double sl, double tp);
    bool              OnPositionClosed();
 
    // Zone/Target retrieval
@@ -247,7 +252,8 @@ void CSmartExitManager::Init(string host, int port, bool use_zone_targets)
 //| Called when new position is opened                                |
 //+------------------------------------------------------------------+
 bool CSmartExitManager::OnNewPosition(ulong ticket, string symbol, string direction,
-                                      double entry_price, double lots)
+                                      double entry_price, double lots,
+                                      double sl, double tp1, double tp2)
 {
    m_position.Clear();
 
@@ -261,47 +267,52 @@ bool CSmartExitManager::OnNewPosition(ulong ticket, string symbol, string direct
    m_position.highest_price = entry_price;
    m_position.lowest_price = entry_price;
 
-   // Get targets from server
-   if(m_use_zone_targets)
-   {
-      if(GetTargetsFromServer(symbol, direction, m_position.targets))
-      {
-         Print("Smart targets received: TP1=", m_position.targets.tp1,
-               " (", m_position.targets.tp1_pips, "p), TP2=", m_position.targets.tp2,
-               " (", m_position.targets.tp2_pips, "p), SL=", m_position.targets.sl,
-               " (", m_position.targets.sl_pips, "p), RR=", m_position.targets.risk_reward);
-         return true;
-      }
-      else
-      {
-         Print("WARNING: Could not get zone targets, using defaults");
-         // Set default targets
-         double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-         double default_tp_pips = 40;
-         double default_sl_pips = 30;
+   // Targets are finalized before order sizing/submission. Never fetch a
+   // second target set after the fill because it could silently widen the SL
+   // after the volume was calculated.
+   m_position.targets.sl = sl;
+   m_position.targets.tp1 = tp1;
+   m_position.targets.tp2 = tp2;
+   m_position.targets.sl_pips =
+      (sl > 0) ? SkyPriceToPips(symbol, MathAbs(entry_price - sl)) : 0;
+   m_position.targets.tp1_pips =
+      (tp1 > 0) ? SkyPriceToPips(symbol, MathAbs(tp1 - entry_price)) : 0;
+   m_position.targets.tp2_pips =
+      (tp2 > 0) ? SkyPriceToPips(symbol, MathAbs(tp2 - entry_price)) : 0;
+   if(m_position.targets.sl_pips > 0 && m_position.targets.tp1_pips > 0)
+      m_position.targets.risk_reward =
+         m_position.targets.tp1_pips / m_position.targets.sl_pips;
+   m_position.targets.tp1_zone_type = "entry-finalized";
+   m_position.targets.tp2_zone_type = "entry-finalized";
+   m_position.targets.sl_zone_type = "entry-finalized";
+   m_position.targets.valid = (sl > 0 || tp1 > 0 || tp2 > 0);
 
-         if(direction == "BUY")
-         {
-            m_position.targets.tp1 = entry_price + PipsToPrice(default_tp_pips, symbol);
-            m_position.targets.tp2 = entry_price + PipsToPrice(default_tp_pips * 1.5, symbol);
-            m_position.targets.sl = entry_price - PipsToPrice(default_sl_pips, symbol);
-         }
-         else
-         {
-            m_position.targets.tp1 = entry_price - PipsToPrice(default_tp_pips, symbol);
-            m_position.targets.tp2 = entry_price - PipsToPrice(default_tp_pips * 1.5, symbol);
-            m_position.targets.sl = entry_price + PipsToPrice(default_sl_pips, symbol);
-         }
+   return true;
+}
 
-         m_position.targets.tp1_pips = default_tp_pips;
-         m_position.targets.tp2_pips = default_tp_pips * 1.5;
-         m_position.targets.sl_pips = default_sl_pips;
-         m_position.targets.risk_reward = default_tp_pips / default_sl_pips;
-         m_position.targets.tp1_zone_type = "default";
-         m_position.targets.valid = true;
-      }
-   }
-
+//+------------------------------------------------------------------+
+//| Restore local state without fetching or applying new trade targets |
+//+------------------------------------------------------------------+
+bool CSmartExitManager::OnRecoveredPosition(ulong ticket, string symbol,
+                                             string direction, double entry_price,
+                                             double original_lots,
+                                             double current_lots,
+                                             datetime open_time, double sl, double tp)
+{
+   m_position.Clear();
+   m_position.ticket = ticket;
+   m_position.symbol = symbol;
+   m_position.direction = direction;
+   m_position.entry_price = entry_price;
+   m_position.initial_lots = original_lots;
+   m_position.current_lots = current_lots;
+   m_position.open_time = open_time;
+   m_position.highest_price = entry_price;
+   m_position.lowest_price = entry_price;
+   m_position.targets.Clear();
+   m_position.targets.sl = sl;
+   m_position.targets.tp1 = tp;
+   m_position.targets.valid = false;
    return true;
 }
 
@@ -420,13 +431,7 @@ bool CSmartExitManager::ParseTargetsResponse(string json, STradeTargets &targets
 //+------------------------------------------------------------------+
 double CSmartExitManager::PipsToPrice(double pips, string symbol)
 {
-   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-
-   if(digits == 3 || digits == 5)
-      return pips * point * 10;
-   else
-      return pips * point;
+   return SkyPipsToPrice(symbol, pips);
 }
 
 //+------------------------------------------------------------------+

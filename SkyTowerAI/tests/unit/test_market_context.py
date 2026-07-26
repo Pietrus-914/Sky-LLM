@@ -76,6 +76,59 @@ class TestZoneSanity:
         assert ctx["zones"]["support_distance_pips"] == pytest.approx(50, abs=6)
 
 
+class TestLiquidityPools:
+    """Server-computed stop clusters surfaced to the entry prompt."""
+
+    def test_nearest_cluster_each_side_reported(self):
+        # Two clusters above (20 and 40 pips) + one below (20 pips): the NEAREST
+        # on each side wins, with its own strength/touches, in pip distance.
+        zones = {
+            "liquidity_pools": [
+                {"price": 1.0870, "strength": 2, "touches": 2},   # 20 above (near)
+                {"price": 1.0890, "strength": 3, "touches": 4},   # 40 above (far)
+                {"price": 1.0830, "strength": 1, "touches": 2},   # 20 below
+            ],
+            "liquidity_tf": "M15",
+        }
+        ctx = build_market_context({"M5": make_bars([1.0850] * 30)}, "EURUSD", zones=zones)
+        z = ctx["zones"]
+        assert z["liquidity_above"]["distance_pips"] == pytest.approx(20, abs=6)
+        assert z["liquidity_above"]["strength"] == 2          # the nearer cluster
+        assert z["liquidity_below"]["distance_pips"] == pytest.approx(20, abs=6)
+        assert z["liquidity_below"]["touches"] == 2
+        assert z["liquidity_tf"] == "M15"
+
+    def test_wrong_scale_pool_rejected(self):
+        # A pool from a different price scale must not produce an absurd distance
+        zones = {"liquidity_pools": [{"price": 0.6200, "strength": 3, "touches": 5}],
+                 "liquidity_tf": "M15"}
+        ctx = build_market_context({"M5": make_bars([1.0850] * 30)}, "EURUSD", zones=zones)
+        assert "liquidity_above" not in ctx["zones"]
+        assert "liquidity_below" not in ctx["zones"]
+        assert "liquidity_tf" not in ctx["zones"]     # no side kept -> no tf label
+
+    def test_no_pools_no_keys(self):
+        ctx = build_market_context({"M5": make_bars([1.0850] * 30)}, "EURUSD",
+                                   zones={"direction_bias": "neutral"})
+        assert "liquidity_above" not in ctx["zones"]
+        assert "liquidity_below" not in ctx["zones"]
+
+    def test_malformed_pool_entries_skipped(self):
+        # A non-dict / priceless entry must not crash the summary
+        zones = {"liquidity_pools": ["junk", {"strength": 3}, {"price": 1.0870, "strength": 2, "touches": 2}],
+                 "liquidity_tf": "M5"}
+        ctx = build_market_context({"M5": make_bars([1.0850] * 30)}, "EURUSD", zones=zones)
+        assert ctx["zones"]["liquidity_above"]["distance_pips"] == pytest.approx(20, abs=6)
+
+    def test_jpy_pip_scale(self):
+        # 150.00 price, cluster at 150.30 -> 30 pips on a JPY pair (pip=0.01)
+        zones = {"liquidity_pools": [{"price": 150.30, "strength": 2, "touches": 3}],
+                 "liquidity_tf": "M15"}
+        ctx = build_market_context({"M5": make_bars([150.00] * 30, spread=0.05)},
+                                   "USDJPY", zones=zones)
+        assert ctx["zones"]["liquidity_above"]["distance_pips"] == pytest.approx(30, abs=6)
+
+
 class TestTrend:
     def test_uptrend(self):
         assert _trend(rising()) == "UP"
