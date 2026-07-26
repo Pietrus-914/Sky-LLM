@@ -155,8 +155,9 @@ lżejszy (bez WSL2) i zalecany na słabszych maszynach.
 1. Zainstaluj **Python 3.10+** z https://python.org — przy instalacji zaznacz
    **"Add Python to PATH"**. Zainstaluj też Git i Purple Trading MT5.
 2. `git clone https://github.com/Pietrus-914/Sky-LLM.git`
-3. Skopiuj ze starego komputera plik `.env` do `<repo>\SkyTowerAI\python\.env`
-   i dopisz w nim linię (w Dockerze robił to compose, natywnie robi to .env):
+3. Skopiuj ze starego komputera plik `.env` do `<repo>\SkyTowerAI\python\.env`.
+   **Tylko na czas fazy demo** dopisz w nim linię (FORCE_DECISION = tryb
+   testowy, wymusza BUY/SELL — NIGDY na koncie live, patrz "Przejście na LIVE"):
    ```
    SKYTOWER_FORCE_DECISION=true
    ```
@@ -254,9 +255,19 @@ tylko serwer Python).
 
 ## Przejście na LIVE (dopiero po udanej fazie demo!)
 
-1. W `docker-compose.yml` usuń linię `SKYTOWER_FORCE_DECISION=true` (albo ustaw false)
-   — LLM odzyska prawo do SKIP.
-2. `docker compose up -d` (przeładowanie configu).
-3. Sprawdź w logu startowym, że banner FORCE_DECISION **nie** występuje.
+UWAGA: serwer działa NATYWNIE — FORCE_DECISION steruje wyłącznie plik
+`python\.env` (docker-compose od commitu 1731a93 niczego tu nie ustawia,
+a kroki dockerowe NIE dotykają natywnego serwera).
+
+1. W `python\.env` **usuń linię** `SKYTOWER_FORCE_DECISION=true` (albo ustaw
+   `false`) — LLM odzyska prawo do SKIP.
+2. Zamknij okno serwera i kliknij `START.bat` (restart z nowym .env).
+3. Weryfikacja (OBIE muszą przejść):
+   - `Get-Content python\logs\server.log -Tail 30` — banner
+     "FORCE_DECISION TEST MODE" **nie może** wystąpić po restarcie;
+   - `curl http://127.0.0.1:5555/api/decision` — w odpowiedzi
+     `"forced": false` (albo brak aktywnej decyzji).
 4. Przełącz MT5 na konto live z mikro lotami; guardraile: max strata $100/trade,
-   $300/dzień, max 5 trade'ów/dzień, max 30 min w pozycji.
+   $300/dzień, max 5 trade'ów/dzień, max 30 min w pozycji (karta Risk & Daily
+   Limits w panelu — wartości jadą do EA z każdym sygnałem).
+5. Usuń też `SKYTOWER_FAKE_EVENT_IN_SECONDS`, jeśli został po testach.

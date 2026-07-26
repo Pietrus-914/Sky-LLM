@@ -200,9 +200,11 @@ class TestTradeExecutedEndpoint:
     """Test /api/trade-executed endpoint"""
 
     def test_trade_executed_accepts_post(self, client):
-        """Trade executed endpoint should accept POST"""
+        """Trade executed endpoint should accept POST (pair is REQUIRED —
+        the EA always sends it; a bare hit must not burn a trade slot)"""
         response = client.post('/api/trade-executed',
-                               json={'ticket': 12345, 'profit': 50.0})
+                               json={'ticket': 12345, 'profit': 50.0,
+                                     'pair': 'NZDUSD'})
         assert response.status_code == 200
         data = response.get_json()
         assert data['status'] == 'ok'
@@ -214,8 +216,15 @@ class TestTradeExecutedEndpoint:
 
         # Then mark trade as executed
         response = client.post('/api/trade-executed',
-                               json={'ticket': 12345})
+                               json={'ticket': 12345, 'pair': 'NZDUSD'})
         assert response.status_code == 200
+
+    def test_trade_executed_without_pair_is_rejected(self, client):
+        """A stray GET/POST without pair (browser, probe script) must be
+        rejected BEFORE any side effect (trade counter, decision cleanup)."""
+        response = client.get('/api/trade-executed')
+        assert response.status_code == 400
+        assert 'pair' in response.get_json()['message']
 
 
 class TestDecisionRefreshEndpoint:

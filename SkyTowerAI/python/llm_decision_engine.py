@@ -331,7 +331,8 @@ confidence — do NOT inflate it just because a direction is required."""
         forecast_info = {
             "current_forecast": event.forecast,
             "previous_value": event.previous,
-            "forecast_vs_previous": self._compare_values(event.forecast, event.previous)
+            "forecast_vs_previous": self._compare_values(
+                event.forecast, event.previous, event.event_name)
         }
         if not event.forecast and not event.previous:
             logger.warning(f"No forecast/previous values for {event.event_name}")
@@ -949,8 +950,13 @@ confidence — do NOT inflate it just because a direction is required."""
                      f"net ${net:+.2f} on {currency} trades")
         return "\n".join(lines)
 
-    def _compare_values(self, forecast: str, previous: str) -> str:
-        """Compare forecast to previous value"""
+    def _compare_values(self, forecast: str, previous: str,
+                        event_name: str = "") -> str:
+        """Compare forecast to previous value.
+
+        For inverse indicators (Unemployment Rate, Jobless/Unemployment
+        Claims — config.LOWER_IS_BETTER_MARKERS) a HIGHER number is
+        currency-negative, so the label is swapped."""
         if not forecast or not previous:
             return "UNKNOWN"
 
@@ -962,10 +968,18 @@ confidence — do NOT inflate it just because a direction is required."""
             return "UNKNOWN"
 
         if forecast_num > previous_num:
-            return "IMPROVEMENT"
+            result = "IMPROVEMENT"
         elif forecast_num < previous_num:
-            return "DETERIORATION"
-        return "UNCHANGED"
+            result = "DETERIORATION"
+        else:
+            return "UNCHANGED"
+
+        from config import LOWER_IS_BETTER_MARKERS
+        name = (event_name or "").lower()
+        if any(marker in name for marker in LOWER_IS_BETTER_MARKERS):
+            result = ("DETERIORATION" if result == "IMPROVEMENT"
+                      else "IMPROVEMENT")
+        return result
 
     def _entry_prompt(self, data_context: Dict) -> str:
         """Assemble the full entry-decision user prompt. Shared by the
@@ -1617,7 +1631,10 @@ decision in JSON format."""
         """
         # Find next high-impact event
         event = self.calendar.get_next_tradeable_event(
-            event_keywords=HIGH_IMPACT_EVENTS,
+            # None = calendar_fetcher reads cfg.HIGH_IMPACT_EVENTS at call
+            # time, so panel edits to the tier lists take effect without a
+            # restart (a module-level import here would pin the old list).
+            event_keywords=None,
             currencies=["NZD", "CAD", "AUD", "USD", "GBP"]
         )
 

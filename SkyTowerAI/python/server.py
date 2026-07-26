@@ -14,7 +14,11 @@ import time
 from loguru import logger
 
 from config import SERVER_CONFIG, TRADING_CONFIG, ZONE_CONFIG, EXIT_CONFIG, POSITION_MANAGEMENT_CONFIG
-from config import HIGH_IMPACT_EVENTS, CURRENCY_PAIRS, DEFAULT_PAIRS
+# NOTE: HIGH_IMPACT_EVENTS is deliberately NOT imported at module level —
+# the panel rebinds cfg.HIGH_IMPACT_EVENTS at runtime and a module-level
+# binding here would pin the import-time list (callers pass
+# event_keywords=None so calendar_fetcher reads it fresh).
+from config import CURRENCY_PAIRS, DEFAULT_PAIRS
 from market_context import (build_market_context, normalize_pair,
                             summarize_pair_brief, entry_age_seconds)
 from calendar_fetcher import CalendarAggregator
@@ -163,6 +167,24 @@ def config_events():
         cfg.TIER2_EVENTS = data['tier2_events']
     if 'tier1_events' in data or 'tier2_events' in data:
         cfg.HIGH_IMPACT_EVENTS = cfg.TIER1_EVENTS + cfg.TIER2_EVENTS
+    # The dashboard's Save sends {events: [...enabled names...]} — a flat
+    # whitelist across both tiers. This key was silently dropped before, so
+    # panel checkbox edits never reached trade selection. Applied as a filter
+    # over the immutable *_ALL rosters and persisted across restarts.
+    if 'events' in data and isinstance(data['events'], list) \
+            and all(isinstance(e, str) for e in data['events']):
+        enabled_set = set(data['events'])
+        cfg.TIER1_EVENTS = [e for e in cfg.TIER1_EVENTS_ALL if e in enabled_set]
+        cfg.TIER2_EVENTS = [e for e in cfg.TIER2_EVENTS_ALL if e in enabled_set]
+        cfg.HIGH_IMPACT_EVENTS = cfg.TIER1_EVENTS + cfg.TIER2_EVENTS
+        cfg.save_runtime_overrides({"enabled_events": sorted(enabled_set)})
+        if not cfg.HIGH_IMPACT_EVENTS:
+            logger.warning("Dashboard saved an EMPTY event whitelist — no "
+                           "named events will trade while TRADE_ALL_EVENTS "
+                           "is off")
+        else:
+            logger.info(f"Event whitelist set via dashboard (persisted): "
+                        f"{len(cfg.HIGH_IMPACT_EVENTS)} events enabled")
     if 'min_impact' in data:
         level = str(data['min_impact']).strip().upper()
         if level in ("LOW", "MEDIUM", "HIGH"):
@@ -493,8 +515,10 @@ def refresh_decision():
         # the updater owns in-window analysis, and a far-future pinned decision
         # would block the pipeline (and could race-arm the EA) until released
         window = TRADING_CONFIG["preload_seconds"] + 60
+        # event_keywords=None -> calendar reads cfg.HIGH_IMPACT_EVENTS at
+        # call time (panel tier edits apply without restart)
         upcoming = calendar.get_tradeable_events(
-            event_keywords=HIGH_IMPACT_EVENTS,
+            event_keywords=None,
             currencies=list(CURRENCY_PAIRS.keys())
         )
         next_event_seconds = None
@@ -516,24 +540,28 @@ def refresh_decision():
                             else "No upcoming tradeable events found.")
             })
 
+        # Run the (paid, 20-60s) analysis OUTSIDE decision_lock — /api/signal
+        # and /api/position/opened block on that lock, and this endpoint can
+        # only fire inside the entry window. Same pattern as the updater's
+        # Phase 2/3.
+        recommendation = decision_engine.get_next_trade_recommendation()
+
+        if recommendation and decision_history:
+            decision_history.record(recommendation)
+
         with decision_lock:
-            next_decision = decision_engine.get_next_trade_recommendation()
+            next_decision = recommendation
 
-            # Record to decision history
-            if next_decision and decision_history:
-                decision_history.record(next_decision)
-
-            if next_decision:
-                return jsonify({
-                    "status": "ok",
-                    "message": "Decision refreshed",
-                    "decision": next_decision.to_dict()
-                })
-            else:
-                return jsonify({
-                    "status": "ok",
-                    "message": "No trade recommendation available"
-                })
+        if recommendation:
+            return jsonify({
+                "status": "ok",
+                "message": "Decision refreshed",
+                "decision": recommendation.to_dict()
+            })
+        return jsonify({
+            "status": "ok",
+            "message": "No trade recommendation available"
+        })
     except Exception as e:
         logger.error(f"Error refreshing decision: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -1828,12 +1856,23 @@ def trade_executed():
     ensure_services()
 
     try:
-        # Get pair from query params or JSON body
+        # Get pair from query params or JSON body (silent=True: a bare GET
+        # has no JSON content type and must not 500 on the parse itself)
         pair = request.args.get('pair', '')
-        if not pair and request.json:
-            pair = request.json.get('pair', '')
+        if not pair:
+            body = request.get_json(silent=True) or {}
+            pair = body.get('pair', '')
 
-        logger.info(f"Trade executed notification received for {pair or 'unknown pair'}")
+        # The EA always sends ?pair=<symbol>. A bare hit (operator pasting
+        # the URL into a browser, a probing healthcheck) must not burn a
+        # daily-trade slot or destroy the pending decision.
+        if not pair:
+            return jsonify({
+                "status": "error",
+                "message": "pair is required",
+            }), 400
+
+        logger.info(f"Trade executed notification received for {pair}")
 
         # Count against the daily limit even without position tracking
         position_manager.register_untracked_trade()
@@ -2463,8 +2502,11 @@ def _get_next_unanalyzed_events() -> list:
     Returns list of events sorted by time (nearest first).
     """
     # No explicit currencies: the default path routes through the shared
-    # get_monitored_events() accessor — one cache entry for all callers
-    events = calendar.get_tradeable_events(event_keywords=HIGH_IMPACT_EVENTS)
+    # get_monitored_events() accessor — one cache entry for all callers.
+    # event_keywords=None -> calendar reads cfg.HIGH_IMPACT_EVENTS at call
+    # time; passing the module-level import here pinned the import-time list,
+    # silently ignoring panel tier edits until restart.
+    events = calendar.get_tradeable_events(event_keywords=None)
 
     fake = _get_fake_test_event()
     if fake is not None:

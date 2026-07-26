@@ -76,6 +76,50 @@ Started: 2026-07-24
 - Known minor gaps accepted and assigned to Stage 3: `/api/position/reconcile` is never called by the EA (a stale server snapshot without matching EA metadata needs an operator `has_position:false` POST or deleting `logs/active_position.json`); a 503 from `/api/position/opened` after in-memory registration makes the EA fall back to `/api/trade-executed`, double-counting one trade against the daily limit (conservative direction).
 - `docker-compose.yml` hardcoded `SKYTOWER_FORCE_DECISION=true`; changed in a follow-up commit so test mode is opt-in via `python/.env` (compose `environment:` overrides `env_file`, so the hardcode also could not be disabled from `.env`).
 
+### Pre-live multi-agent review (Claude, 2026-07-26)
+
+Full-code review before the planned Monday live start: 7 domain finders +
+adversarial verification (3 verifier agents hit a session limit; their
+findings were verified manually against the source). 21 findings confirmed,
+1 refuted, all confirmed items fixed the same day:
+
+- P0 sentiment quote-side inversion (`get_currency_sentiment` counted pair
+  votes without base/quote inversion — CAD bias inverted 100% of the time);
+  fabricated sentiment removed (TradingView technical rating dressed as
+  retail positioning, hardcoded SimulatedSentiment fallback) — empty
+  sources now surface as NO_DATA.
+- P0 RUNBOOK go-live procedure pointed at docker-compose for FORCE_DECISION
+  while the native server reads python/.env — rewritten with a two-step
+  verification (no banner in server.log + forced:false in /api/decision).
+- P1 `open_time` sent as broker-time epoch and parsed as UTC — minutes_open
+  was negative for a trade's whole life, so server max-hold and time-phased
+  exits never fired. EA now sends UTC; the server clamps future epochs.
+- P1 `_compare_values` treated higher unemployment/claims as IMPROVEMENT —
+  config.LOWER_IS_BETTER_MARKERS swaps the label for inverse indicators.
+- P1 CFTC `'%BRITISH POUND%'` LIKE also matched the EUR/GBP cross contract
+  (verified live: weekly change computed main-vs-cross of the same week) —
+  prefix match + defensive post-filter.
+- P1 panel event whitelist: the dashboard's `{events:[...]}` payload was
+  silently dropped AND three call sites pinned the import-time
+  HIGH_IMPACT_EVENTS list — the whitelist now applies at call time and
+  persists via runtime_overrides (immutable *_ALL rosters as the base).
+- P1 EA max-loss guard used floating-only P/L (invariant 7) — realized legs
+  now tracked (refresh from deal history on volume drops) and included.
+- P2 hardening: guardrails survive snapshot-store write failures (no more
+  permanent HOLD), fresh-open reports no longer muted by a failed metadata
+  persist, NO_CHANGES accepted for SL/TP modifies (entry postcondition can
+  no longer market-close a healthy protected position), corrupt recovery
+  metadata quarantined to visible BLOCKED instead of a silent forever-
+  PENDING stall, WebRequestPost UTF-8 byte truncation fixed, TE naive
+  datetimes localized, /api/decision/refresh runs the LLM outside
+  decision_lock, /api/trade-executed requires `pair`.
+- Deferred (latent, unused in the live path): inverted FVG labels + fill
+  check in zone_analyzer.find_fvg — live entries consume only liquidity
+  pools; fix scheduled separately.
+
+Verification: full suite `582 passed` (19 new pinning tests);
+MetaEditor compile of the EA: `0 errors, 0 warnings`.
+
 ## Commit log
 
 - `docs: add staged GPT review plan` (`2fa29cb`)

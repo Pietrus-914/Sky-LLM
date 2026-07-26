@@ -8,7 +8,7 @@ import math
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from timeutil import utcnow
 from typing import Dict, Optional, List
 from dataclasses import dataclass, field, asdict
@@ -185,11 +185,22 @@ class PositionManager:
         if isinstance(value, (int, float)) or (
                 isinstance(value, str) and value.strip().isdigit()):
             try:
-                return datetime.fromtimestamp(
+                parsed = datetime.fromtimestamp(
                     float(value), tz=timezone.utc
                 ).replace(tzinfo=None)
             except (ValueError, OSError, OverflowError):
                 return fallback
+            # A broker-time epoch mislabeled as UTC lands HOURS in the
+            # future and would make minutes_open negative for the whole
+            # trade (time-based exits would never fire). An open_time
+            # in the future is always wrong — clamp to the fallback.
+            if parsed > utcnow() + timedelta(minutes=5):
+                logger.warning(
+                    f"open_time epoch {value} is in the future "
+                    "(broker-time epoch?) — using fallback time"
+                )
+                return fallback
+            return parsed
         if isinstance(value, str) and value:
             try:
                 parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -849,12 +860,26 @@ class PositionManager:
                     self.position is None or self.recovery_state != "ready"
                 )
             if needs_reconcile:
-                outcome = self.on_position_opened(
-                    data,
-                    decision_id=str(data.get("decision_id") or ""),
-                    forced=bool(data.get("forced", False)),
-                    recovered=True,
-                )
+                try:
+                    outcome = self.on_position_opened(
+                        data,
+                        decision_id=str(data.get("decision_id") or ""),
+                        forced=bool(data.get("forced", False)),
+                        recovered=True,
+                    )
+                except PositionPersistenceError as exc:
+                    # The snapshot write failing must not disable live
+                    # guardrails: the position IS tracked in memory, and a
+                    # raise here would turn EVERY report into HOLD (each
+                    # report carries reconcile:true and recovery_state stays
+                    # 'error'), silently skipping max-loss/max-hold/exit
+                    # management for the position's whole life. Persistence
+                    # failure blocks NEW entries, not the current trade.
+                    logger.error(
+                        f"Snapshot persist failed during reconcile ({exc}); "
+                        "continuing live guardrails on the in-memory position"
+                    )
+                    outcome = "reconciled" if self.position is not None else "conflict"
                 if outcome == "conflict":
                     return self._hold_response()
 

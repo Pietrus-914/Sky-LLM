@@ -114,6 +114,26 @@ ulong          g_currentTicket = 0;
 // an externally-closed position's deals are not yet queryable
 ulong          g_currentPositionId = 0;
 double         g_lastKnownProfit = 0.0;
+// Whole-trade accounting for the offline max-loss guard (invariant: guards
+// use floating + realized). Realized legs appear after partial closes;
+// refreshed from deal history whenever the broker volume drops.
+double         g_realizedPnL = 0.0;
+double         g_lastSeenLots = 0.0;
+
+// Re-read the booked (realized) legs of the ACTIVE position from deal
+// history. Incomplete history is fine here: the sum of the legs booked so
+// far is exactly what the whole-trade guard needs while the position lives.
+void RefreshRealizedPnL()
+{
+   ulong posId = (g_currentPositionId > 0) ? g_currentPositionId : g_currentTicket;
+   if(posId == 0)
+      return;
+   double bookedRealized = 0.0, bookedPrice = 0.0;
+   string bookedDetail;
+   bool bookedComplete = false;
+   if(GetRealizedPnL(posId, bookedRealized, bookedPrice, bookedDetail, bookedComplete))
+      g_realizedPnL = bookedRealized;
+}
 int            g_closeRetryCount = 0;
 
 // Smart exit state
@@ -293,7 +313,25 @@ bool RecoverClosedPositionReport()
    FileClose(handle);
    if(savedPositionId == 0
       || !LoadRecoveryMetadata(savedPositionId, false))
+   {
+      // Deterministic parse/validation failure (e.g. a row truncated by a
+      // power loss). Retrying every tick would stall this chart FOREVER in
+      // RECOVERY_PENDING with no panel indication and no signal polling.
+      // Quarantine the file and block visibly: operator attention required
+      // (one close may be missing from the daily P/L accounting).
+      string quarantined = fileName + ".invalid";
+      if(FileMove(fileName, FILE_COMMON, quarantined,
+                  FILE_COMMON | FILE_REWRITE))
+      {
+         g_recoveryState = RECOVERY_BLOCKED;
+         Print("CRITICAL: recovery metadata file is invalid and was ",
+               "quarantined as ", quarantined, ". A close report may be ",
+               "missing. New entries stay blocked until reviewed.");
+         if(g_panelCreated)
+            g_panel.SetStatus("Recovery file invalid", clrRed);
+      }
       return false;
+   }
 
    double realized = 0.0, closePrice = 0.0;
    string closeDetail;
@@ -314,6 +352,8 @@ bool RecoverClosedPositionReport()
          ClearRecoveryMetadata();
          g_currentTicket = 0;
          g_currentPositionId = 0;
+         g_realizedPnL = 0.0;
+         g_lastSeenLots = 0.0;
          g_recoveryState = RECOVERY_NONE;
          g_positionRecovered = false;
          return true;
@@ -383,7 +423,10 @@ void TryRecoverOpenPosition()
       }
       if(!RecoverClosedPositionReport())
       {
-         g_recoveryState = RECOVERY_PENDING;
+         // A quarantined-invalid metadata file sets BLOCKED (visible on the
+         // panel) — never downgrade it back to silent PENDING retries.
+         if(g_recoveryState != RECOVERY_BLOCKED)
+            g_recoveryState = RECOVERY_PENDING;
          return;
       }
       g_recoveryState = RECOVERY_NONE;
@@ -456,6 +499,11 @@ void TryRecoverOpenPosition()
    double currentLots = PositionGetDouble(POSITION_VOLUME);
    double currentSL = PositionGetDouble(POSITION_SL);
    double currentTP = PositionGetDouble(POSITION_TP);
+   // Rebuild whole-trade accounting for the adopted position: partial
+   // closes booked before the restart must count toward the max-loss guard.
+   g_realizedPnL = 0.0;
+   g_lastSeenLots = currentLots;
+   RefreshRealizedPnL();
    g_smartExit.OnRecoveredPosition(
       g_currentTicket, _Symbol, g_eventDirection, entryPrice,
       g_originalLots, currentLots, g_lastTradeTime, currentSL, currentTP
@@ -912,9 +960,14 @@ bool WebRequestPost(string url, string jsonBody, string &result)
    string headers = "Content-Type: application/json\r\n";
    string resultHeaders;
 
-   // Convert JSON body to char array
-   StringToCharArray(jsonBody, data, 0, StringLen(jsonBody), CP_UTF8);
-   ArrayResize(data, StringLen(jsonBody)); // Remove null terminator
+   // Convert JSON body to char array. Byte length MUST come from the UTF-8
+   // conversion itself: StringLen counts characters, and any non-ASCII
+   // character (event names, LLM reason text) encodes as 2+ bytes — resizing
+   // to StringLen would chop the tail and send malformed JSON.
+   StringToCharArray(jsonBody, data, 0, -1, CP_UTF8);
+   int bodyBytes = ArraySize(data);
+   if(bodyBytes > 0)
+      ArrayResize(data, bodyBytes - 1); // drop only the terminal 0
 
    ResetLastError();
 
@@ -1419,6 +1472,16 @@ bool ConfirmTradeRequest(bool submitted, string operation)
    return true;
 }
 
+// SL/TP modifications only: NO_CHANGES means the broker already holds the
+// requested levels — that is success, not failure. Treating it as failure
+// let the entry postcondition market-close a correctly protected position.
+bool ConfirmModifyRequest(bool submitted, string operation)
+{
+   if(submitted && trade.ResultRetcode() == TRADE_RETCODE_NO_CHANGES)
+      return true;
+   return ConfirmTradeRequest(submitted, operation);
+}
+
 bool SelectSingleOwnedPosition(string symbol, ulong &ticket, ulong &positionId,
                                string &direction, double &volume,
                                double &entryPrice, double &sl, double &tp)
@@ -1811,6 +1874,8 @@ void ExecuteEventTrade()
    g_lastTradeTime = TimeCurrent();
    g_originalLots = liveLots;
    g_lastKnownProfit = 0.0;
+   g_realizedPnL = 0.0;
+   g_lastSeenLots = liveLots;
    g_closeRetryCount = 0;
    g_tradeDecisionId = g_signalDecisionId;
    g_positionRecovered = false;
@@ -1926,6 +1991,8 @@ void ManageOpenPositions()
       g_currentTicket = 0;
       g_currentPositionId = 0;
       g_lastKnownProfit = 0.0;
+      g_realizedPnL = 0.0;
+      g_lastSeenLots = 0.0;
       g_closeRetryCount = 0;
       g_smartExit.OnPositionClosed();
       g_aiManagementActive = false;
@@ -1938,16 +2005,28 @@ void ManageOpenPositions()
    double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
    double profit = PositionGetDouble(POSITION_PROFIT);
    g_lastKnownProfit = profit;  // fallback if the close is only seen after the fact
+   double currentLots = PositionGetDouble(POSITION_VOLUME);
    long spreadPoints = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
    double spreadPips = SkySpreadPips(symbol);
 
+   // Volume dropped (server PARTIAL_CLOSE or a manual partial in MT5):
+   // refresh the realized component from deal history so the max-loss guard
+   // keeps seeing the WHOLE trade, not just the remaining leg's floating.
+   if(g_lastSeenLots > 0 && currentLots < g_lastSeenLots - 1e-8)
+      RefreshRealizedPnL();
+   g_lastSeenLots = currentLots;
+
    //--- EA-side safety guardrails (immediate, no server needed) ---
 
-   // Guardrail 1: Max loss in USD (risk budget delivered with the signal)
-   if(g_maxLossGuardEnabled && profit < -g_maxLossUSD)
+   // Guardrail 1: Max loss in USD (risk budget delivered with the signal).
+   // Whole trade = remaining leg's floating + realized partial-close legs.
+   double wholeTradePnL = profit + g_realizedPnL;
+   if(g_maxLossGuardEnabled && wholeTradePnL < -g_maxLossUSD)
    {
       Print("=== EA GUARDRAIL: MAX LOSS $", g_maxLossUSD, " ===");
-      Print("Current P/L: $", DoubleToString(profit, 2));
+      Print("Whole-trade P/L: $", DoubleToString(wholeTradePnL, 2),
+            " (floating $", DoubleToString(profit, 2),
+            " + realized $", DoubleToString(g_realizedPnL, 2), ")");
       ClosePosition("EA guardrail: max loss $" + DoubleToString(g_maxLossUSD, 0) + " exceeded");
       return;
    }
@@ -1970,10 +2049,13 @@ void ManageOpenPositions()
       return;
    }
 
-   // A recovered position without trusted persisted risk metadata is managed
+   // A RECOVERED position without trusted persisted risk metadata is managed
    // only by local max-hold/spread safety. Sending the default max-loss value
    // would let the server adopt a risk budget that never belonged to it.
-   if(!g_recoveryMetadataTrusted)
+   // A FRESH open is different: its risk budget is authoritative in memory
+   // (it arrived with the signal), so a failed metadata WRITE must not mute
+   // the server-owned exit management for the whole trade.
+   if(g_positionRecovered && !g_recoveryMetadataTrusted)
       return;
 
    //--- AI Position Management: report status and get command ---
@@ -1981,6 +2063,14 @@ void ManageOpenPositions()
    if(TimeCurrent() - g_lastPositionReport >= reportInterval)
    {
       g_lastPositionReport = TimeCurrent();
+      // Cheap persist retry (at most once per report interval) so a
+      // transient FILE_COMMON failure at open self-heals.
+      if(!g_recoveryMetadataTrusted)
+         g_recoveryMetadataTrusted = PersistRecoveryMetadata();
+      // Deal history can lag a partial-close fill; while a partial exists,
+      // periodically re-sync the realized component before reporting.
+      if(currentLots < g_originalLots - 1e-8)
+         RefreshRealizedPnL();
       ReportAndGetCommand(symbol, profit, spreadPips);
    }
 }
@@ -2018,6 +2108,11 @@ void ReportAndGetCommand(string symbol, double profit, double spreadPips)
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
 
    datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+   // POSITION_TIME is BROKER-server time; the server parses open_time as a
+   // UTC epoch. Sending it raw made minutes_open negative by the broker
+   // offset (~2-3h) for the trade's whole life, so server-side time-phased
+   // exits and max-hold never fired.
+   long openTimeUtc = (long)openTime - GetBrokerTimezoneOffset();
    string ticketText = StringFormat("%I64u", g_currentTicket);
    string positionIdText = StringFormat("%I64u", g_currentPositionId);
    string magicText = StringFormat("%I64d", g_magicNumber);
@@ -2032,7 +2127,7 @@ void ReportAndGetCommand(string symbol, double profit, double spreadPips)
       "\"entry_price\":%.5f,\"current_price\":%.5f,"
       "\"lots\":%.2f,\"remaining_lots\":%.2f,"
       "\"sl\":%.5f,\"tp\":%.5f,"
-      "\"profit_usd\":%.2f,\"tick_value\":%.4f,"
+      "\"profit_usd\":%.2f,\"realized_usd\":%.2f,\"tick_value\":%.4f,"
       "\"spread_pips\":%.1f,\"account_balance\":%.2f,"
       "\"zone_bias\":%.3f,\"nearest_resistance\":%.5f,\"nearest_support\":%.5f,"
       "\"max_loss_usd\":%.2f,\"open_time\":%I64d,"
@@ -2041,10 +2136,10 @@ void ReportAndGetCommand(string symbol, double profit, double spreadPips)
       entryPrice, currentPrice,
       g_originalLots, lots,
       sl, tp,
-      profit, tickValue,
+      profit, g_realizedPnL, tickValue,
       spreadPips, balance,
       g_zoneBias, g_nearestLiqHigh, g_nearestLiqLow,
-      g_maxLossUSD, openTime,
+      g_maxLossUSD, openTimeUtc,
       EscapeJson(g_currentEventName), EscapeJson(g_tradeDecisionId)
    );
 
@@ -2135,6 +2230,11 @@ void ProcessServerCommand(string response, string symbol)
             Print("AI: Partial close ", DoubleToString(closePercent, 0),
                   "% (", closedLots, " lots)");
             g_tp1Hit = true;
+            // Fold the just-realized leg into the whole-trade guard right
+            // away (the periodic re-sync covers any history lag).
+            RefreshRealizedPnL();
+            if(PositionSelectByTicket(g_currentTicket))
+               g_lastSeenLots = PositionGetDouble(POSITION_VOLUME);
          }
          else
          {
@@ -2167,6 +2267,9 @@ void NotifyPositionOpened()
    double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+   // Broker-time -> UTC before the server parses it as a UTC epoch (see
+   // ReportAndGetCommand note).
+   long openTimeUtc = (long)openTime - GetBrokerTimezoneOffset();
    string ticketText = StringFormat("%I64u", g_currentTicket);
    string positionIdText = StringFormat("%I64u", g_currentPositionId);
    string magicText = StringFormat("%I64d", g_magicNumber);
@@ -2182,7 +2285,7 @@ void NotifyPositionOpened()
       ticketText, positionIdText, magicText, symbol, g_eventDirection,
       entryPrice, lots, sl, tp,
       tickValue, balance,
-      g_maxLossUSD, openTime,
+      g_maxLossUSD, openTimeUtc,
       EscapeJson(g_currentEventName), EscapeJson(g_tradeDecisionId),
       g_positionRecovered ? "true" : "false"
    );
@@ -2327,18 +2430,24 @@ bool ModifyPositionSL(ulong ticket, double new_sl)
       return false;
    }
 
-   if(!ConfirmTradeRequest(
+   // Already at the requested stop (e.g. the broker attached it with the
+   // order and the entry postcondition raced its visibility): success. A
+   // blind re-modify would come back NO_CHANGES on many servers.
+   if(current_sl > 0 && MathAbs(current_sl - new_sl) <= tickSize * 1.1)
+      return true;
+
+   if(!ConfirmModifyRequest(
          trade.PositionModify(ticket, new_sl, current_tp),
          "Position SL modify"))
       return false;
 
-   for(int attempt = 0; attempt < 10; attempt++)
+   for(int attempt = 0; attempt < 30; attempt++)
    {
       if(PositionSelectByTicket(ticket)
          && MathAbs(PositionGetDouble(POSITION_SL) - new_sl)
             <= tickSize * 1.1)
          return true;
-      Sleep(50);
+      Sleep(100);
    }
    Print("Position SL modify failed postcondition");
    return false;
@@ -2360,18 +2469,21 @@ bool ModifyPositionTP(ulong ticket, double new_tp)
       return false;
    new_tp = NormalizeDouble(MathRound(new_tp / tickSize) * tickSize, digits);
 
-   if(!ConfirmTradeRequest(
+   if(MathAbs(PositionGetDouble(POSITION_TP) - new_tp) <= tickSize * 1.1)
+      return true;
+
+   if(!ConfirmModifyRequest(
          trade.PositionModify(ticket, current_sl, new_tp),
          "Position TP modify"))
       return false;
 
-   for(int attempt = 0; attempt < 10; attempt++)
+   for(int attempt = 0; attempt < 30; attempt++)
    {
       if(PositionSelectByTicket(ticket)
          && MathAbs(PositionGetDouble(POSITION_TP) - new_tp)
             <= tickSize * 1.1)
          return true;
-      Sleep(50);
+      Sleep(100);
    }
    Print("Position TP modify failed postcondition");
    return false;
@@ -2549,6 +2661,8 @@ void ClosePosition(string reason)
       g_currentTicket = 0;
       g_currentPositionId = 0;
       g_lastKnownProfit = 0.0;
+      g_realizedPnL = 0.0;
+      g_lastSeenLots = 0.0;
       g_closeRetryCount = 0;
       g_smartExit.OnPositionClosed();
       g_aiManagementActive = false;
