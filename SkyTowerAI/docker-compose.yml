@@ -17,9 +17,10 @@ services:
     environment:
       - SKYTOWER_HOST=0.0.0.0        # bind on all interfaces inside the container
       - TZ=UTC
-      # TEST MODE: force BUY/SELL, never SKIP. Demo account only!
-      # Remove this line (or set to false) before any live-account use.
-      - SKYTOWER_FORCE_DECISION=true
+      # TEST MODE (force BUY/SELL, never SKIP — DEMO ONLY) is opt-in via
+      # SKYTOWER_FORCE_DECISION=true in python/.env, same as the native run.
+      # Never hardcode it here: `environment:` overrides env_file, so a
+      # hardcoded value could not even be turned off from .env.
       # - SKYTOWER_PRELOAD_SECONDS=150
       # - SKYTOWER_CHECK_INTERVAL=15
     volumes:
