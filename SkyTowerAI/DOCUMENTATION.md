@@ -1,4 +1,8 @@
-# SkyTower-AI v4.0 - Dokumentacja Techniczna
+# SkyTower-AI 4.1 — Dokumentacja Techniczna
+
+> Stan: 27.07.2026 · serwer 4.1.0 · 588 testów zielonych. Operacje i uruchamianie:
+> [RUNBOOK.md](RUNBOOK.md) (autorytatywny). Mapa całej dokumentacji:
+> `../wiki/pages/documentation-map.md`.
 
 ## Spis treści
 1. [Przegląd systemu](#przegląd-systemu)
@@ -82,24 +86,22 @@ openai>=1.12.0     # opcjonalne
 ## Architektura
 
 ### Struktura plików
+
+Pełne, aktualne drzewo utrzymywane jest w [CLAUDE.md](CLAUDE.md) (sekcja
+"File Structure") — poniżej tylko rdzeń:
+
 ```
 SkyTowerAI/
-├── python/
-│   ├── config.py              # Konfiguracja globalna
-│   ├── calendar_fetcher.py    # Pobieranie kalendarza ekonomicznego
-│   ├── cot_analyzer.py        # Analiza danych COT z CFTC
-│   ├── sentiment_analyzer.py  # Analiza sentymentu retail
-│   ├── llm_decision_engine.py # Silnik decyzyjny (LLM/rule-based)
-│   ├── server.py              # REST API (Flask)
-│   ├── requirements.txt       # Zależności Python
-│   └── .env                   # Klucze API (lokalne)
-├── mt5/
-│   └── SkyTowerAI_EA.mq5     # Expert Advisor dla MT5
-├── logs/                      # Logi systemowe
-├── start_server.bat           # Skrypt uruchomieniowy
-├── test_system.bat            # Testy systemu
-├── README.md                  # Krótka dokumentacja
-└── DOCUMENTATION.md           # Ta dokumentacja
+├── python/           # serwer Flask + ~25 modułów (analiza, decyzje, learning loop)
+│   ├── config.py     # konfiguracja globalna (CZYTAJ NAJPIERW)
+│   ├── server.py     # REST API + updater w tle (~2100 linii)
+│   ├── knowledge/    # playbooki + learned stats (trackowane w git)
+│   ├── tools/        # narzędzia offline (serwer ich NIE importuje)
+│   └── .env          # OPENROUTER_API_KEY (gitignored)
+├── mt5/SkyTowerAI_EA.mq5   # Expert Advisor (~1950 linii)
+├── tests/            # 588 testów (pytest)
+├── START.bat         # główny launcher (serwer + MT5)
+└── RUNBOOK.md        # instrukcja operacyjna (autorytatywna)
 ```
 
 ### Moduły
@@ -128,8 +130,16 @@ Zbiera dane o pozycjonowaniu retail:
 
 #### 4. LLM Decision Engine (`llm_decision_engine.py`)
 Dwa tryby pracy:
-- **LLM Mode** - Anthropic Claude lub OpenAI GPT (wymaga API key)
-- **Rule-based Mode** - algorytm punktowy (bez API key)
+- **LLM Mode (podstawowy)** - panel modeli przez **OpenRouter**
+  (`SKYTOWER_ENSEMBLE_MODELS`; wymaga `OPENROUTER_API_KEY`)
+- **Rule-based Mode (fallback)** - algorytm punktowy (bez API key)
+
+#### 5. Pozostałe moduły (skrót)
+`exit_decision_engine.py` (wyjścia po stronie SERWERA), `position_manager.py`
+(pozycje + limity dzienne), `event_path_recorder.py` / `regime_tracker.py` /
+`calibration.py` (learning loop), `zone_analyzer.py` + `target_calculator.py`
+(strefy płynności i cele), `market_context.py` (dane rynkowe pushowane przez EA).
+Pełna lista z opisami: [CLAUDE.md](CLAUDE.md).
 
 ---
 
@@ -163,14 +173,15 @@ Skrypt automatycznie:
 ### Krok 3: Opcjonalne - klucze API
 Edytuj `python/.env`:
 ```env
-# Dla lepszych decyzji (opcjonalne)
-ANTHROPIC_API_KEY=sk-ant-xxxxx
-# lub
-OPENAI_API_KEY=sk-xxxxx
+# LLM przez OpenRouter (tryb podstawowy; bez klucza system działa rule-based)
+OPENROUTER_API_KEY=sk-or-xxxxx
 
 # Dla więcej źródeł kalendarza (opcjonalne)
 FINNHUB_API_KEY=xxxxx
 ```
+
+Pełna lista zmiennych środowiskowych (modele, ensemble, tryb testowy
+FORCE_DECISION): [CLAUDE.md](CLAUDE.md) → "Environment variables".
 
 ---
 
@@ -327,6 +338,10 @@ if spread > max_spread:
 
 ### Tryb Rule-based (bez API key)
 
+> Trybem podstawowym jest LLM (panel OpenRouter) — scoring poniżej to wyłącznie
+> fallback bez klucza API. W trybie LLM confidence/lot/exit zwraca model,
+> a pola liczbowe są clampowane po stronie serwera.
+
 System przyznaje punkty na podstawie:
 
 ```
@@ -395,6 +410,10 @@ Lot: 70%
 
 ## API Reference
 
+> Poniżej endpointy rdzeniowe. PEŁNA aktualna tabela (position/report,
+> position/status, regimes, calibration, config/risk, event-paths, targets…):
+> [CLAUDE.md](CLAUDE.md) → "API Reference".
+
 ### Base URL
 ```
 http://127.0.0.1:5555
@@ -408,7 +427,7 @@ Sprawdza status serwera.
 {
   "status": "ok",
   "timestamp": "2026-01-16T22:00:00",
-  "version": "4.0.0"
+  "version": "4.1.0"
 }
 ```
 
@@ -557,7 +576,7 @@ Rozwiązanie: Poczekaj na lepszą okazję lub dodaj klucz API dla lepszej analiz
 1. **ZAWSZE testuj na demo** - minimum 2-3 miesiące
 2. **Nigdy nie ryzykuj więcej niż 10%** kapitału na pozycję
 3. **Monitoruj spread** przed każdą transakcją
-4. **Ogranicz dzienny drawdown** - max 3 transakcje/dzień
+4. **Ogranicz dzienny drawdown** - limity (trady/dzień, strata dzienna) ustawiane w panelu; domyślnie 5 tradów i 300 USD/dzień
 5. **Nie traduj przed ważnymi świętami** (niska płynność)
 
 ### Znane ryzyka
@@ -696,6 +715,17 @@ EXIT_CONFIG = {
 
 ## Changelog
 
+### 4.1 (2026-02 → 2026-07) — wersja bieżąca
+(numeracja wróciła do wersji raportowanej przez serwer w `/health`: 4.1.0)
+- Wyjścia sterowane przez SERWER (`exit_decision_engine`); martwe inputy smart exit usunięte z EA (18.07)
+- Całe ryzyko w panelu (Risk & Daily Limits); `max_loss_usd` w każdym sygnale — EA odrzuca sygnał bez niego
+- LLM przez OpenRouter: panel modeli na wejściach (`SKYTOWER_ENSEMBLE_MODELS`), osobny model wyjść
+- Learning loop F0–F5: decision_id lineage, ścieżki wszystkich eventów, learned stats, kalibracja (per-model), reżimy walut, playbooki eventów
+- Tryb natywny Windows (`START.bat`) jako podstawowy; Docker legacy
+- Filtr eventów: wspólny predykat + switch `TRADE_ALL_EVENTS`; wypowiedzi bankierów nigdy nie handlowane
+- Statystyki dzienne trwałe (`trade_history.jsonl`), realized P/L z historii dealów
+- Branch gpt_review: Stage 1 (recovery pozycji) + Stage 2 (jednostki pip/volume, finalizacja SL, retcody)
+
 ### v5.0.0 (2026-01)
 - **Smart Exit System** - inteligentne wyjście z pozycji
 - Wykrywanie stref: Liquidity Pools, FVG, Order Blocks
@@ -716,5 +746,5 @@ EXIT_CONFIG = {
 
 ---
 
-*Dokumentacja wygenerowana dla SkyTower-AI v5.0*
+*Dokumentacja SkyTower-AI 4.1 (aktualizacja 27.07.2026)*
 *Bazuje na strategii SkyTower-FX V.3.0 + ICT/Smart Money Concepts*

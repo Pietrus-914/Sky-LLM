@@ -1,8 +1,9 @@
 # SkyTower-AI — Plan uruchomienia krok po kroku
 
-Stan na 18.07.2026: 379 testów zielonych, EA skompilowany (0 err/0 warn),
-learning loop F0-F4 wdrożony (rejestrator ścieżek, learned stats w prompcie,
-echo decision_id przez EA, ledger kalibracji, opcjonalny ensemble K).
+Stan na 27.07.2026: 588 testów zielonych, EA skompilowany (0 err/0 warn),
+learning loop F0-F5 wdrożony (rejestrator ścieżek, learned stats w prompcie,
+echo decision_id przez EA, ledger kalibracji per-model, panel modeli ensemble,
+epizody + refleksje). Branch gpt_review: Stage 1-2 zacommitowane (26.07).
 Tryb testowy FORCE_DECISION aktywny — **tylko konto DEMO**.
 **Tryb podstawowy: NATYWNY Python (START.bat). Docker = wariant zapasowy.**
 

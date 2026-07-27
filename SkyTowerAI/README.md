@@ -1,6 +1,9 @@
-# SkyTower-AI v4.0
+# SkyTower-AI 4.1
 
 ## AI-Enhanced News Trading System for MT5
+
+> Stan: 27.07.2026 · 588 testów · uruchamianie i operacje: [RUNBOOK.md](RUNBOOK.md) ·
+> pełny kontekst: [CLAUDE.md](CLAUDE.md)
 
 Automatyczny system tradingowy oparty o strategię SkyTower-FX z ulepszeniami AI.
 
@@ -10,7 +13,7 @@ Automatyczny system tradingowy oparty o strategię SkyTower-FX z ulepszeniami AI
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    SKYTOWER-AI V.4.0                        │
+│                    SKYTOWER-AI V.4.1                        │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
@@ -44,14 +47,12 @@ Automatyczny system tradingowy oparty o strategię SkyTower-FX z ulepszeniami AI
    - Zainstaluje zależności
    - Utworzy plik `.env`
 
-2. (Opcjonalnie) Dodaj klucze API do pliku `python/.env`:
+2. Dodaj klucz API do pliku `python/.env` (LLM przez OpenRouter):
    ```
-   ANTHROPIC_API_KEY=twoj_klucz
-   # lub
-   OPENAI_API_KEY=twoj_klucz
+   OPENROUTER_API_KEY=twoj_klucz
    ```
 
-   **Bez kluczy API system działa w trybie rule-based** (używa reguł zamiast AI)
+   **Bez klucza API system działa w trybie rule-based** (używa reguł zamiast AI)
 
 ### 3. Instalacja EA w MT5
 
@@ -75,8 +76,9 @@ Automatyczny system tradingowy oparty o strategię SkyTower-FX z ulepszeniami AI
 
 ### Tryb Automatyczny (Zalecany)
 
-1. Uruchom `start_server.bat`
-2. Uruchom MT5 z EA
+1. Kliknij `START.bat` — odpala serwer i MT5 jednym kliknięciem
+   (sam serwer: `start_server.bat`; szczegóły i weryfikacja: RUNBOOK.md)
+2. Upewnij się, że EA jest na wykresach NZDUSD/USDCAD/AUDUSD/GBPUSD
 3. System automatycznie:
    - Monitoruje nadchodzące wydarzenia
    - Analizuje dane COT, sentiment, prognozy
@@ -107,8 +109,8 @@ curl http://127.0.0.1:5555/api/signal
 ## Źródła Danych (Darmowe)
 
 ### Kalendarz Ekonomiczny
-- Investing.com (scraping)
-- Myfxbook (scraping)
+- ForexFactory feed (główne źródło; czasy w GMT!)
+- TradingEconomics (backup)
 - Finnhub API (opcjonalnie, wymaga darmowego klucza)
 
 ### COT (Commitments of Traders)
@@ -200,8 +202,8 @@ przekazuje `max_loss_usd` do EA z każdym sygnałem.
 ## Testowanie
 
 ```bash
-# Uruchom testy wszystkich komponentów
-test_system.bat
+# Pełny zestaw testów (588, ~12 s) — z katalogu SkyTowerAI/
+python\venv\Scripts\python.exe -m pytest -q
 ```
 
 ---
@@ -238,22 +240,9 @@ pip install -r requirements.txt
 
 ## Struktura Plików
 
-```
-SkyTowerAI/
-├── python/
-│   ├── config.py              # Konfiguracja
-│   ├── calendar_fetcher.py    # Pobieranie kalendarza
-│   ├── cot_analyzer.py        # Analiza COT
-│   ├── sentiment_analyzer.py  # Analiza sentymentu
-│   ├── llm_decision_engine.py # Silnik decyzyjny
-│   ├── server.py              # Flask API
-│   └── requirements.txt       # Zależności
-├── mt5/
-│   └── SkyTowerAI_EA.mq5     # Expert Advisor
-├── start_server.bat           # Uruchomienie serwera
-├── test_system.bat            # Testy
-└── README.md                  # Ta dokumentacja
-```
+Aktualne pełne drzewo: [CLAUDE.md](CLAUDE.md) → "File Structure". Rdzeń:
+`python/` (serwer Flask + ~25 modułów), `mt5/SkyTowerAI_EA.mq5`,
+`START.bat` (launcher), `RUNBOOK.md` (operacje), `tests/` (588 testów).
 
 ---
 
@@ -264,6 +253,12 @@ Prywatne użycie. Bazuje na strategii SkyTower-FX V.3.0.
 ---
 
 ## Changelog
+
+### 4.1 (2026-02 → 2026-07) — wersja bieżąca
+- Wyjścia sterowane przez serwer; całe ryzyko w panelu (Risk & Daily Limits)
+- LLM przez OpenRouter (panel modeli); learning loop F0–F5
+- Tryb natywny Windows (START.bat); Docker legacy
+- Szczegóły: DOCUMENTATION.md → Changelog
 
 ### v4.0.0 (2025-01)
 - Pełna automatyzacja

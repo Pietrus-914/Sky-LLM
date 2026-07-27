@@ -1,4 +1,4 @@
-# Sky Tower Project - Claude Code Context
+# Sky Tower Project - Codex Context
 
 ## Overview
 This is the root directory for the Sky Tower forex trading project. The main code is in the `SkyTowerAI/` subdirectory.
@@ -8,16 +8,14 @@ This is the root directory for the Sky Tower forex trading project. The main cod
 ```
 Sky tower/
 ├── SkyTowerAI/           # Main project directory
-│   ├── CLAUDE.md         # Detailed project context
+│   ├── CLAUDE.md         # Detailed project context (shared by all agents)
 │   ├── RUNBOOK.md        # Operations guide (PL) — start/verify/migrate
 │   ├── DOCUMENTATION.md  # Full technical documentation
 │   ├── config.py         # Configuration (READ FIRST!)
 │   ├── python/           # Python backend (Flask server)
 │   └── mt5/              # MetaTrader 5 Expert Advisor
-├── .claude/
-│   ├── commands/
-│   │   └── sky_tower.md  # /sky_tower slash command
-│   └── skills/           # MQL5 skills (manual load via /sky_tower skill)
+├── .agents/
+│   └── skills/           # Skills for Codex (read SKILL.md manually when needed)
 │       ├── mql5-indicator-patterns/  # Indicator development patterns
 │       ├── log-reader/               # MT5 log analysis
 │       ├── article-extractor/        # mql5.com article extraction
@@ -25,13 +23,14 @@ Sky tower/
 ├── wiki/                 # LLM-maintained documentation wiki (start: wiki/index.md)
 ├── instruction.md        # Token-preserving workflow rules
 ├── SkyTower-FX_V.3.0.pdf # Original strategy PDF (21MB - too large to read)
-└── CLAUDE.md             # THIS FILE
+└── AGENTS.md             # THIS FILE
 ```
 
 ## Documentation Wiki (wiki/)
 
 `wiki/` is an LLM-maintained knowledge wiki (Karpathy's LLM-wiki pattern:
-sources stay immutable, the LLM writes the wiki, the human reads it).
+sources stay immutable, the LLM writes the wiki, the human reads it). Shared by
+all agents (Claude Code and Codex alike).
 
 - Questions about how the system works or where a doc lives → start at `wiki/index.md`.
 - Conventions and the INGEST/QUERY/LINT workflows → `wiki/schema.md`.
@@ -40,20 +39,18 @@ sources stay immutable, the LLM writes the wiki, the human reads it).
 - `wiki/pages/documentation-map.md` maps every doc file, its freshness, and
   which file is authoritative for what.
 
-## Custom Slash Command
-
-Use `/sky_tower` to access the trading system:
+## Common Operations
 
 ```
-/sky_tower help              - Show all commands and skills
-/sky_tower status            - Check server health
-/sky_tower events            - List upcoming events
-/sky_tower decision          - Get trading signal
-/sky_tower start             - Start Python server
-/sky_tower test              - Run system tests
-/sky_tower config            - Show configuration
-/sky_tower skill [name]      - Load MQL5 skill (indicator/logs/articles/python)
+curl http://127.0.0.1:5555/health        - Check server health
+curl http://127.0.0.1:5555/api/events    - List upcoming events
+curl http://127.0.0.1:5555/api/decision  - Current decision
+START.bat                                - Start server + MT5 (in SkyTowerAI/)
+python\venv\Scripts\python.exe -m pytest -q   - Run tests (in SkyTowerAI/, 588 tests)
 ```
+
+(The `/sky_tower` slash command exists only for Claude Code in `.claude/`,
+which is local and gitignored — Codex uses the direct commands above.)
 
 ## What This System Does
 
@@ -68,7 +65,7 @@ SkyTower-AI is an **automated forex news trading system** that:
 ## Key Files to Read
 
 **Always read in this order:**
-1. `SkyTowerAI/CLAUDE.md` - Full context and quick reference
+1. `SkyTowerAI/CLAUDE.md` - Full context and quick reference (shared by all agents)
 2. `SkyTowerAI/python/config.py` - All configuration
 3. `instruction.md` - Token-preserving workflow
 4. `wiki/index.md` - documentation wiki (for docs/architecture questions)
@@ -101,13 +98,11 @@ SkyTower-AI is an **automated forex news trading system** that:
 
 ## MQL5 Skills (Manual Load)
 
-Skills are loaded on-demand via `/sky_tower skill [name]`:
+Read the relevant `SKILL.md` from `.agents/skills/` when the problem matches:
 
-| Command | Skill | Use When |
-|---------|-------|----------|
-| `/sky_tower skill indicator` | MQL5 Indicator Patterns | Creating indicators, blank window, buffer issues |
-| `/sky_tower skill logs` | MT5 Log Reader | Debugging EA, checking Print() output |
-| `/sky_tower skill articles` | Article Extractor | Need mql5.com documentation |
-| `/sky_tower skill python` | Python Workspace | Data export, indicator translation |
-
-**Skill Suggestions:** When you encounter MQL5 problems, I will suggest relevant skills to load.
+| Skill | Use When |
+|-------|----------|
+| `.agents/skills/mql5-indicator-patterns/` | Creating indicators, blank window, buffer issues |
+| `.agents/skills/log-reader/` | Debugging EA, checking Print() output |
+| `.agents/skills/article-extractor/` | Need mql5.com documentation |
+| `.agents/skills/python-workspace/` | Data export, indicator translation |
