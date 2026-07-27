@@ -9,6 +9,7 @@ This is the root directory for the Sky Tower forex trading project. The main cod
 Sky tower/
 ├── SkyTowerAI/           # Main project directory
 │   ├── CLAUDE.md         # Detailed project context
+│   ├── RUNBOOK.md        # Operations guide (PL) — start/verify/migrate
 │   ├── DOCUMENTATION.md  # Full technical documentation
 │   ├── config.py         # Configuration (READ FIRST!)
 │   ├── python/           # Python backend (Flask server)
@@ -21,10 +22,23 @@ Sky tower/
 │       ├── log-reader/               # MT5 log analysis
 │       ├── article-extractor/        # mql5.com article extraction
 │       └── python-workspace/         # MQL5-Python integration
+├── wiki/                 # LLM-maintained documentation wiki (start: wiki/index.md)
 ├── instruction.md        # Token-preserving workflow rules
 ├── SkyTower-FX_V.3.0.pdf # Original strategy PDF (21MB - too large to read)
 └── CLAUDE.md             # THIS FILE
 ```
+
+## Documentation Wiki (wiki/)
+
+`wiki/` is an LLM-maintained knowledge wiki (Karpathy's LLM-wiki pattern:
+sources stay immutable, the LLM writes the wiki, the human reads it).
+
+- Questions about how the system works or where a doc lives → start at `wiki/index.md`.
+- Conventions and the INGEST/QUERY/LINT workflows → `wiki/schema.md`.
+- After any significant architecture/behavior change → update the affected pages
+  and append an INGEST entry to `wiki/log.md` (part of "done", like tests).
+- `wiki/pages/documentation-map.md` maps every doc file, its freshness, and
+  which file is authoritative for what.
 
 ## Custom Slash Command
 
@@ -48,7 +62,7 @@ SkyTower-AI is an **automated forex news trading system** that:
 2. Analyzes COT data (institutional positions)
 3. Checks retail sentiment (used contrarian - trade against crowd)
 4. Compares forecast vs previous values
-5. Uses AI (Claude/GPT) or rule-based logic to decide BUY/SELL/SKIP
+5. Uses an LLM panel via OpenRouter (or rule-based fallback) to decide BUY/SELL/SKIP
 6. Sends signals to MT5 Expert Advisor via REST API
 
 ## Key Files to Read
@@ -57,6 +71,7 @@ SkyTower-AI is an **automated forex news trading system** that:
 1. `SkyTowerAI/CLAUDE.md` - Full context and quick reference
 2. `SkyTowerAI/python/config.py` - All configuration
 3. `instruction.md` - Token-preserving workflow
+4. `wiki/index.md` - documentation wiki (for docs/architecture questions)
 
 ## Important Rules
 
@@ -80,7 +95,7 @@ SkyTower-AI is an **automated forex news trading system** that:
 
 - **Python 3.10+** - Flask server, analysis logic
 - **MetaTrader 5** - Trade execution via Expert Advisor
-- **Anthropic Claude / OpenAI GPT** - Optional LLM for decisions
+- **LLM via OpenRouter** - model panel for entries + exit model (key in `python/.env`)
 - **CFTC** - COT data source
 - **ForexFactory** - Economic calendar
 
