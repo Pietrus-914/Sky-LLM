@@ -176,3 +176,46 @@ class TestTradeAllEventsSwitch:
         with patch.object(CalendarAggregator, "get_upcoming_events", return_value=events):
             nxt = agg.get_next_tradeable_event(event_keywords=["CPI"], currencies=["USD"])
         assert nxt is not None and nxt.source == "forexfactory"
+
+
+class TestRateDecisionNamesTradeable:
+    """Regresja z 29.07.2026: feed FF nazywa decyzje stóp per bank centralny
+    ("Federal Funds Rate", nie "Interest Rate Decision") — FOMC był niewidoczny
+    dla selekcji w trybie whitelisty i panel pokazywał GDP z jutra jako next."""
+
+    FF_RATE_DECISION_NAMES = [
+        "Federal Funds Rate",    # USD (FOMC)
+        "Official Bank Rate",    # GBP (BoE)
+        "Overnight Rate",        # CAD (BOC)
+        "Cash Rate",             # AUD (RBA)
+        "Official Cash Rate",    # NZD (RBNZ)
+    ]
+
+    def _next_tradeable(self, events):
+        agg = CalendarAggregator.__new__(CalendarAggregator)
+        keywords = list(cfg.TIER1_EVENTS_ALL) + list(cfg.TIER2_EVENTS_ALL)
+        with patch.object(CalendarAggregator, "get_upcoming_events", return_value=events):
+            return agg.get_next_tradeable_event(event_keywords=keywords,
+                                                currencies=["USD"])
+
+    def test_ff_rate_decision_names_match_default_whitelist(self, monkeypatch):
+        monkeypatch.setattr(cfg, "TRADE_ALL_EVENTS", False)
+        monkeypatch.delenv("SKYTOWER_TRADE_STATIC_EVENTS", raising=False)
+        for name in self.FF_RATE_DECISION_NAMES:
+            nxt = self._next_tradeable([make_event(name=name)])
+            assert nxt is not None and nxt.event_name == name, name
+
+    def test_fomc_decision_not_shadowed_by_later_gdp(self, monkeypatch):
+        """Scenariusz z buga: FOMC dziś + Advance GDP jutro — next musi być FOMC."""
+        monkeypatch.setattr(cfg, "TRADE_ALL_EVENTS", False)
+        monkeypatch.delenv("SKYTOWER_TRADE_STATIC_EVENTS", raising=False)
+        events = [make_event(name="Federal Funds Rate", hours_ahead=8),
+                  make_event(name="Advance GDP q/q", hours_ahead=27)]
+        nxt = self._next_tradeable(events)
+        assert nxt is not None and nxt.event_name == "Federal Funds Rate"
+
+    def test_fomc_press_conference_still_excluded(self, monkeypatch):
+        monkeypatch.setattr(cfg, "TRADE_ALL_EVENTS", False)
+        monkeypatch.delenv("SKYTOWER_TRADE_STATIC_EVENTS", raising=False)
+        assert self._next_tradeable(
+            [make_event(name="FOMC Press Conference")]) is None
