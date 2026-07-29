@@ -64,3 +64,18 @@ porządek, żeby nie było staroci i trzymamy się najnowszej wersji"):
   operator może dokończyć usunięcie sam.
 - Strony wiki zaktualizowane: `documentation-map.md` (nowe statusy),
   `system-overview.md` (588 testów).
+
+## 2026-07-29 INGEST | Bug: decyzja FOMC niewidoczna dla selekcji eventów
+
+- Zgłoszenie operatora: panel pokazywał „Advance GDP q/q" (30.07) jako next
+  event, mimo że 29.07 20:00 CEST była decyzja FOMC (Federal Funds Rate, HIGH).
+- Przyczyna: feed ForexFactory nazywa decyzje stóp per bank centralny, a
+  whitelist TIER1 w `config.py` znała tylko „Interest Rate Decision" /
+  „Cash Rate" / „Official Cash Rate" (pokrywały RBA/RBNZ, nie FOMC/BoE/BOC).
+  Przy `TRADE_ALL_EVENTS=false` event nie przechodził `_event_is_tradeable`.
+- Fix: do TIER1 dodane „Federal Funds Rate" (USD), „Official Bank Rate" (GBP),
+  „Overnight Rate" (CAD) + komentarz o nazewnictwie FF; 3 testy regresyjne w
+  `tests/unit/test_calendar_cache.py` (klasa `TestRateDecisionNamesTradeable`).
+  591 testów zielonych. „FOMC Statement" i „FOMC Press Conference" celowo poza
+  whitelistą (brak twardej liczby; decyzja o tej samej minucie jest handlowana).
+- Zaktualizowano: `pages/system-overview.md` (notka o nazewnictwie FF).

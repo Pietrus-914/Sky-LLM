@@ -102,8 +102,15 @@ DEFAULT_PAIRS = {
 # HIGH IMPACT EVENTS (per SkyTower-FX strategy)
 # =============================================================================
 # Tier 1 - Najlepsze reakcje, zawsze tradować
+# UWAGA: feed ForexFactory nazywa decyzje stóp per bank centralny, NIE
+# "Interest Rate Decision": USD = "Federal Funds Rate", GBP = "Official Bank
+# Rate", CAD = "Overnight Rate", AUD = "Cash Rate", NZD = "Official Cash Rate".
+# Brak tych nazw = FOMC niewidoczny dla selekcji (bug z 29.07.2026).
 TIER1_EVENTS = [
     "Interest Rate Decision",
+    "Federal Funds Rate",
+    "Official Bank Rate",
+    "Overnight Rate",
     "Cash Rate",
     "Official Cash Rate",
     "Non-Farm Payrolls",

@@ -21,6 +21,10 @@ legacy** (nieużywany od 10.07.2026). Szczegóły operacyjne: [RUNBOOK.md](../..
 
 1. Updater (skan co 15 s) wybiera nadchodzący tradeable event
    (`CalendarAggregator._event_is_tradeable`; wypowiedzi bankierów nigdy).
+   Uwaga: feed ForexFactory nazywa decyzje stóp per bank centralny — USD to
+   „Federal Funds Rate", GBP „Official Bank Rate", CAD „Overnight Rate" — te
+   nazwy muszą być na whitliście TIER1 w `config.py` (dodane 29.07.2026 po
+   tym, jak selekcja pominęła decyzję FOMC).
 2. ~150 s przed publikacją: analiza + decyzja LLM (COT, sentyment kontrariańsko,
    forecast vs previous, kontekst M1 z EA, playbooki, learned stats, kalibracja).
 3. EA na wykresie pary decyzji (NZDUSD/USDCAD/AUDUSD/GBPUSD) odbiera sygnał
