@@ -18,6 +18,7 @@ from sentiment_analyzer import SentimentAggregator
 from event_reaction_history import (EventReactionHistory, normalize_event_name,
                                     is_test_event_name)
 from decision_history import DecisionHistory
+from llm_util import openrouter_headers, reasoning_body
 from market_context import normalize_pair
 from config import (LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS,
                     HIGH_IMPACT_EVENTS, OPENROUTER_API_KEY, FORCE_DECISION,
@@ -1565,10 +1566,10 @@ decision in JSON format."""
                 max_tokens=LLM_CONFIG.get("max_tokens", 1500),
                 temperature=0.3,
                 timeout=60.0,  # 60 second timeout
-                extra_headers={
-                    "HTTP-Referer": "https://skytower-ai.local",
-                    "X-Title": "SkyTower-AI Trading"
-                }
+                extra_headers=openrouter_headers("entry",
+                                                 "SkyTower-AI Trading"),
+                extra_body=reasoning_body(
+                    LLM_CONFIG.get("reasoning_effort")),
             )
             logger.info(f"OpenRouter response received from {use_model}")
             return response.choices[0].message.content

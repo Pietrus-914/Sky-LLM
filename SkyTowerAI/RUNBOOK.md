@@ -1,6 +1,6 @@
 # SkyTower-AI — Plan uruchomienia krok po kroku
 
-Stan na 30.07.2026: 679 testów zielonych, EA skompilowany (0 err/0 warn),
+Stan na 30.07.2026: 691 testów zielonych, EA skompilowany (0 err/0 warn),
 learning loop F0-F5 wdrożony (rejestrator ścieżek, learned stats w prompcie,
 echo decision_id przez EA, ledger kalibracji per-model, panel modeli ensemble,
 epizody + refleksje). Branch gpt_review: Stage 1-2 zacommitowane (26.07).

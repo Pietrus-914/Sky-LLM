@@ -246,3 +246,57 @@ Deadlock w workerze (lock nie jest brany ponownie na ścieżce persist),
 niepoprawny kształt krotki po deadlinie, `max_retries=0` psujące inne wywołania
 (klient wejściowy nie jest dzielony), oraz teza o wyciekaniu szerokiego
 deviation do wejścia (jest przywracany bezwarunkowo przed każdym returnem).
+
+## 2026-07-30 INGEST | Budżet myślenia dla modeli reasoningowych + rozdzielenie kanałów OpenRoutera
+
+Kontekst: pierwszy event po wdrożeniu (Advance GDP q/q, 12:30 UTC) zakończył
+się zyskiem **+$57.28** i potwierdził działanie zmian z 8795b71/11beb1b —
+dashboard pokazał „PANEL DEGRADED 2/3 (no vote from
+google/gemini-3.1-pro-preview)", a model wyjściowy trzymał pozycję z
+uzasadnieniem „drawdown is small (7% of risk budget) and not material enough to
+cut" (sekcja RISK BUDGET) i zamknął ją dopiero na realnym spadku od szczytu,
+cytując trend z ostatnich 2 minut (sekcja RECENT TRAJECTORY). **Stary kod uciąłby
+ten trade po 5 minutach.**
+
+### Diagnoza brakującego głosu (korekta wcześniejszej hipotezy)
+Pierwsza teza — „model wycofany z OpenRoutera" — **była BŁĘDNA**; wynikła ze
+streszczenia ogromnego JSON-a katalogu, które pominęło wpis. Zapytanie o endpoint
+modelu wprost potwierdza dostępność (6 endpointów Vertex/AI Studio,
+`max_completion_tokens` 65 536). Log Generations operatora pokazuje wywołania
+Gemini **rozliczone**, w tym DWA wejściowe pod rząd (02:27 i 02:28) — czyli retry
+z poprzedniej rundy zadziałał i obie próby wróciły z odpowiedzią, której parser
+nie umiał użyć.
+
+Przyczyna: prompt wejściowy ~7,4k tokenów przy `max_tokens=1500`, a
+gemini-3.1-pro ma **wymuszony reasoning**, którego tokeny Google wlicza do
+`maxOutputTokens`. Myślenie zjadało budżet zanim padł pierwszy znak JSON-a →
+HTTP 200 z pustą/urwaną treścią → głos odrzucony. Wyjścia działały bez zarzutu,
+bo ich prompt ma 1,4–2,2k, limit 40 słów i mieści się w 900. Ten model
+prawdopodobnie **nigdy nie oddał udanego głosu wejściowego**.
+
+### Zmiany
+- `llm_util.reasoning_body()` — wspólny fragment `{"reasoning": {"effort": …}}`
+  (zagnieżdżone pole OpenRoutera; płaskie `reasoning_effort` to pisownia OpenAI,
+  ignorowana). Modele bez reasoningu degradują to po cichu, więc jest bezpieczne
+  dla całego panelu. Nieznana wartość cofa się do domyślnej dostawcy — literówka
+  w `.env` nie wysadzi calla na T-150s.
+- Domyślnie `low` na wejściu i wyjściu (`SKYTOWER_ENTRY_REASONING_EFFORT`,
+  `SKYTOWER_EXIT_REASONING_EFFORT`).
+- Budżety wyjścia: wejście 1500 → **4000**, wyjście 900 → **2000**
+  (`SKYTOWER_ENTRY_MAX_TOKENS`, `SKYTOWER_EXIT_MAX_TOKENS`). Niewykorzystany
+  zapas nic nie kosztuje.
+- `llm_util.openrouter_headers()` — **osobny `HTTP-Referer` per kanał**
+  (`/entry`, `/exit`, `/aux`). OpenRouter grupuje wiersze „App" po refererze, nie
+  po `X-Title`, więc jeden wspólny referer sklejał wszystkie kanały pod tytułem
+  zobaczonym jako pierwszy: głosy panelu wejściowego figurowały jako „Exit
+  Manager", co uniemożliwiało czytanie kosztu i latencji per kanał.
+- 12 nowych testów (`test_reasoning_effort.py`). **691 testów zielonych.**
+
+### Otwarte obserwacje
+- `GPT-5.6 Sol Pro` raportuje ~26 000 tokenów wejścia przy tym samym promptcie,
+  w którym pozostała dwójka ma ~7 400 — 3,5× i dominuje koszt panelu. Nie do
+  rozstrzygnięcia z tej strony; do sprawdzenia w szczegółach generacji.
+- Rozstrzygające dane są teraz w logach maszyny 24/7:
+  `grep "Ensemble vote DROPPED" logs/server.log` podaje powód i pierwsze 200
+  znaków nieparsowalnej odpowiedzi; pełne surowe odpowiedzi per model są w
+  `logs/decision_context/<decision_id>.json`.

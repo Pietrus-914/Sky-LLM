@@ -3,7 +3,7 @@
 ## Quick Summary
 SkyTower-AI is an automated forex trading system that trades high-impact economic news events. A Flask server analyzes each event (COT data, retail sentiment used contrarian, forecast vs previous, market context pushed by MT5) and decides BUY/SELL/SKIP via an LLM panel (OpenRouter) with a rule-based fallback. The MT5 Expert Advisor executes; **the server also manages the exit** (EA keeps only technical guardrails).
 
-State: server **4.1.0**, **679 tests green** (30.07.2026), running natively on Windows. Active branch `gpt_review` (see `GPT_REVIEW_PLAN.md`). Docs wiki: `../wiki/index.md`.
+State: server **4.1.0**, **691 tests green** (30.07.2026), running natively on Windows. Active branch `gpt_review` (see `GPT_REVIEW_PLAN.md`). Docs wiki: `../wiki/index.md`.
 
 ## Project Location
 `C:\Users\pietr\Documents\Sky tower\SkyTowerAI\`
@@ -65,7 +65,7 @@ SkyTowerAI/
 ├── mt5/
 │   ├── SkyTowerAI_EA.mq5         # Expert Advisor (~1950 lines — use offset/limit reads!)
 │   └── SkyTower_Zones.mq5        # Zone indicator
-├── tests/                        # 679 tests: unit/ integration/ e2e/ (pytest)
+├── tests/                        # 691 tests: unit/ integration/ e2e/ (pytest)
 ├── START.bat                     # PRIMARY launcher: server (auto-restart) + MT5, idempotent
 ├── start_server.bat              # Server only (creates venv on first run)
 ├── start_server_24_7.bat         # 24/7 variant with watchdog loop
@@ -88,6 +88,8 @@ LLM access is via **OpenRouter** (`OPENROUTER_API_KEY` in `python/.env` — NEVE
 - **Entry**: mixed panel `SKYTOWER_ENSEMBLE_MODELS` — anchor fable-5 + gpt-5.6-sol-pro + gemini-3.1-pro-preview (~$0.21/event). Empty panel falls back to `SKYTOWER_ENTRY_MODEL` × `SKYTOWER_ENSEMBLE_K` samples (K>1: unanimity = trade, split = SKIP).
 - **Exit**: `SKYTOWER_EXIT_MODEL` (code default sonnet-5; the 24/7 machine deliberately runs gemini-3.1-pro-preview).
 - Operator budget: ~$0.5–1/event.
+- **Reasoning models need a budget, not just a model id.** Thinking tokens count against the completion budget on some providers (Google does), so an under-sized `max_tokens` makes a mandatory-reasoning member answer 200 with an empty body — a vote lost silently at T-150s. Both channels now cap thinking (`reasoning: {"effort": …}`, OpenRouter's nested field — the flat `reasoning_effort` is OpenAI-only) and carry headroom. Unused headroom is free.
+- Each channel has its **own `HTTP-Referer`** (`/entry`, `/exit`, `/aux`): OpenRouter groups dashboard "App" rows by referer, so one shared value made entry panel votes show up as "Exit Manager" in Generations.
 
 ### Environment variables (python/.env)
 
@@ -102,6 +104,8 @@ LLM access is via **OpenRouter** (`OPENROUTER_API_KEY` in `python/.env` — NEVE
 | `SKYTOWER_TRADE_ALL_EVENTS` | `false` | ON = trade every event ≥ MIN_IMPACT (whitelist ignored); panel switch, persisted |
 | `SKYTOWER_ENTRY_MODEL` / `SKYTOWER_EXIT_MODEL` | see config | Model overrides |
 | `SKYTOWER_ENSEMBLE_K` / `SKYTOWER_ENSEMBLE_MODELS` | `1` / panel | Ensemble config (cost = K × entry price) |
+| `SKYTOWER_ENTRY_REASONING_EFFORT` / `SKYTOWER_EXIT_REASONING_EFFORT` | `low` / `low` | OpenRouter thinking budget (`max`…`none`). The panel runs on a wall clock, so a model that thinks past the deadline casts NO vote |
+| `SKYTOWER_ENTRY_MAX_TOKENS` / `SKYTOWER_EXIT_MAX_TOKENS` | `4000` / `2000` | Completion budget. Google counts thinking tokens against it — 1500 let a mandatory-reasoning panel member return an empty 200 and lose its vote silently |
 
 ## Trading Rules & Risk
 
@@ -181,7 +185,7 @@ EA confidence gate: `InpMinConfidence` (0.5); `forced:true` signals bypass it.
 ```powershell
 curl http://127.0.0.1:5555/health          # status
 # START.bat = server + MT5; start_server.bat = server only
-python\venv\Scripts\python.exe -m pytest -q   # run tests (679, ~18 s)
+python\venv\Scripts\python.exe -m pytest -q   # run tests (691, ~19 s)
 ```
 Add tradeable event names: `config.py` → TIER1/TIER2 or `SKYTOWER_EXTRA_EVENTS`.
 
