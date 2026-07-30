@@ -282,8 +282,30 @@ LLM_CONFIG = {
     "model": os.getenv("SKYTOWER_ENTRY_MODEL",
                        "anthropic/claude-opus-4.8").strip()
              or "anthropic/claude-opus-4.8",
-    "max_tokens": 1500,  # room for the ANALYSIS CHECKLIST reasoning
+    # Completion budget for one entry vote. Measured visible output is ~700
+    # tokens, so 1500 was ample for a NON-reasoning model — but Google counts
+    # thinking tokens against maxOutputTokens, so a mandatory-reasoning panel
+    # member (gemini-3.1-pro-preview) burned the budget before emitting any
+    # JSON and returned a 200 with unusable content. That is a vote silently
+    # lost at T-150s, which is how the panel kept degrading to 2/3. Unused
+    # headroom is free (only generated tokens are billed), so give it room and
+    # cap the thinking separately via reasoning_effort below.
+    "max_tokens": _env_int("SKYTOWER_ENTRY_MAX_TOKENS", 4000),
     "temperature": 0.3,  # Lower = more consistent decisions
+    # Thinking budget for reasoning models, sent to OpenRouter as
+    # {"reasoning": {"effort": ...}}. Accepted: max|xhigh|high|medium|low|
+    # minimal|none; OpenRouter silently maps or drops it for models that do
+    # not reason, so it is always safe to send.
+    #
+    # "low" on purpose. The entry panel runs against a WALL CLOCK: analysis
+    # starts at PRELOAD_SECONDS before the release and the deadline is
+    # T-20s, so a model that thinks for two minutes is not a slow vote, it is
+    # a MISSING vote (and providers that count reasoning against max_tokens
+    # return a 200 with an empty body — the silent drop this panel already
+    # had to learn to log). The schema wants short reasoning-first JSON, not
+    # a long private deliberation.
+    "reasoning_effort": os.getenv("SKYTOWER_ENTRY_REASONING_EFFORT",
+                                  "low").strip().lower() or "low",
 }
 
 # =============================================================================
@@ -316,6 +338,14 @@ POSITION_MANAGEMENT_CONFIG = {
     "exit_llm_model": os.getenv("SKYTOWER_EXIT_MODEL",
                                 "anthropic/claude-sonnet-5").strip()
                       or "anthropic/claude-sonnet-5",
+    # Thinking budget for the exit model (same OpenRouter field as the entry
+    # one). Even lower stakes for deliberation and higher stakes for latency:
+    # this runs 20-60x per trade against a 30s timeout, and the answer is a
+    # <=40-word reasoning plus one action — there is nothing here worth two
+    # minutes of private thought.
+    "exit_reasoning_effort": os.getenv("SKYTOWER_EXIT_REASONING_EFFORT",
+                                       "low").strip().lower() or "low",
+    "exit_max_tokens": _env_int("SKYTOWER_EXIT_MAX_TOKENS", 2000),
 }
 
 # =============================================================================

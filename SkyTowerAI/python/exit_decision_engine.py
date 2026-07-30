@@ -10,6 +10,7 @@ from loguru import logger
 import os
 
 from config import LLM_CONFIG, OPENROUTER_API_KEY, POSITION_MANAGEMENT_CONFIG
+from llm_util import openrouter_headers, reasoning_body
 from position_manager import OpenPosition, PositionCommand
 from trading_units import forex_pip_size
 
@@ -246,13 +247,20 @@ Respond with JSON only."""
                     {"role": "system", "content": EXIT_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=900,
+                # Same reason as the entry budget (config.LLM_CONFIG): with a
+                # mandatory-reasoning model, thinking tokens can eat the
+                # completion budget before the JSON appears. The exit prompt
+                # is small and its reasoning is capped at 40 words, which is
+                # why this call kept working while the entry vote did not —
+                # but the headroom costs nothing when unused.
+                max_tokens=POSITION_MANAGEMENT_CONFIG.get(
+                    "exit_max_tokens", 2000),
                 temperature=0.2,
                 timeout=30.0,
-                extra_headers={
-                    "HTTP-Referer": "https://skytower-ai.local",
-                    "X-Title": "SkyTower-AI Exit Manager"
-                }
+                extra_headers=openrouter_headers("exit",
+                                                 "SkyTower-AI Exit Manager"),
+                extra_body=reasoning_body(
+                    POSITION_MANAGEMENT_CONFIG.get("exit_reasoning_effort")),
             )
             response_text = response.choices[0].message.content
 
