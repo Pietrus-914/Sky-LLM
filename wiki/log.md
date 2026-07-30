@@ -79,3 +79,89 @@ porządek, żeby nie było staroci i trzymamy się najnowszej wersji"):
   591 testów zielonych. „FOMC Statement" i „FOMC Press Conference" celowo poza
   whitelistą (brak twardej liczby; decyzja o tej samej minucie jest handlowana).
 - Zaktualizowano: `pages/system-overview.md` (notka o nazewnictwie FF).
+
+## 2026-07-30 INGEST | Runda po incydencie FOMC: bloki B i C planu naprawczego
+
+Kontekst: po zagraniu FOMC 29.07 (panel 2/3 głosów → remis → tie-break regułowy
+→ USDCAD BUY 2.01 lota → −$360, zamknięte przez exit-LLM po ~5 min) operator
+zlecił wieloagentowy review i wdrożenie znalezisk. Review: 6 finderów + 9
+adwersaryjnych weryfikacji + weryfikacja ręczna. **661 testów zielonych, EA
+0 errors / 0 warnings.**
+
+### Blok B (blokujące przed live)
+- `config.py` + `server.py`: nowa `risk_limit_conflicts()` — per-trade
+  `max_loss_usd` NIE MOŻE przekraczać `max_daily_loss_usd` (wcześniej zakres
+  5..100 000 bez żadnej relacji między polami, więc jeden trade mógł wydać cały
+  dzienny budżet; limit dzienny blokuje tylko NASTĘPNE wejście). Panel odrzuca
+  taki zapis (400), import clampuje i zapisuje notkę, a start serwera loguje
+  **EFEKTYWNE limity ryzyka** (wartości z panelu nadpisują `.env` na stałe i do
+  tej pory nie zostawiały śladu w logu).
+- `position_manager.py`: wywołanie exit-LLM zeszło z wątku requestu na worker,
+  a komenda jest **kolejkowana w `pending_command`** i wydawana przy następnym
+  raporcie EA. Wcześniej komenda (także CLOSE) jechała TYLKO w odpowiedzi HTTP,
+  której EA porzucał po 10 s przy 30 s timeoucie modelu — cała warstwa
+  „wyjściem steruje serwer" mogła nie dostarczyć nic, a `WebRequest` blokował
+  wątek EA (tickowe guardraile stały). Silnik regułowy (bez `client`) dalej
+  odpowiada synchronicznie. Flagi `partial_closed`/`sl_moved_to_be` ustawiane są
+  teraz przy DOSTARCZENIU komendy, nie przy jej wyliczeniu.
+- `llm_decision_engine.py`: panel dostał **kworum** (`ENSEMBLE_MIN_QUORUM=2`),
+  **jeden retry** nieudanego głosu (gdy >90 s do publikacji), **logowanie każdego
+  odrzuconego głosu z nazwą modelu i powodem** (HTTP 200 z pustą treścią nie
+  zostawiał wcześniej ŻADNEGO śladu) oraz marker `degraded` + „PANEL DEGRADED
+  n/k" w reasoningu i `ensemble.failures`. W trybie force pojedynczy ocalały głos
+  nie jest już opisywany jako „majority … agreement 1.00", a jako „NO QUORUM".
+- `config.py`: `"votes"` w `NON_DATA_EVENT_MARKERS` — „MPC Official Bank Rate
+  Votes" zawiera podciąg TIER1 „Official Bank Rate", więc był handlowalny i mógł
+  przesłonić prawdziwą decyzję BoE z tej samej minuty (`regime_tracker` wykluczał
+  „votes" od dawna — brakowało symetrii w selekcji do handlu).
+- `SkyTowerAI_EA.mq5`: `ClosePosition` eskaluje deviation 1× → 3× → 6×
+  `InpSlippage` przy odrzuceniach cenowych (REQUOTE/PRICE_OFF/PRICE_CHANGED) i
+  przywraca wartość wejściową; wcześniej awaryjne zamknięcie ponawiało się
+  dopiero na następnym ticku z tym samym 5-pipsowym oknem.
+
+### Blok C
+- `exit_decision_engine.py`: zasada #10 promptu wyjścia **nie zamyka już po
+  samym czasie** — wymaga istotnej straty (~1/4 budżetu ryzyka) ORAZ braku
+  odbicia; prompt dostał sekcje **RISK BUDGET** (ile budżetu zjada obecne P/L) i
+  **RECENT TRAJECTORY** (próbki z raportów EA + jawna ocena „recovering" /
+  „no recovery yet"). Wcześniej instrukcja była ostrzejsza niż własny fallback
+  regułowy tego pliku (10 min I strata >$20). Fallback liczy teraz wszystkie
+  progi na **całościowym P/L** (floating + realized), zgodnie z guardrailami.
+- `position_manager.py`: `pnl_samples` (cap 12) zbierane z raportów i
+  odtwarzane ze snapshotu; realizacja częściowego zamknięcia bierze **dokładny
+  `realized_usd` z historii dealów EA** zamiast szacunku ze starego floatingu
+  (zero traktowane jako „historia jeszcze nie nadążyła" → szacunek + re-sync).
+- `forced` przeżywa restart: EA trzyma `g_tradeForced`, zapisuje go w metadanych
+  recovery (format v2, kolumna dopisana na końcu — v1 nadal się czyta) i wysyła
+  w raporcie; serwer ma `resolve_forced()` z fallbackiem do `decision_history`
+  po `decision_id`. Wcześniej rekoncyliacja rejestrowała demowy rzut monetą jako
+  PRAWDZIWY trade, obchodząc wszystkie filtry `forced`.
+- `is_test_event_name()` w `event_reaction_history.py` jako jedno źródło prawdy;
+  trade'y i refleksje z eventów FAKE TEST są filtrowane (`normalize_event_name`
+  obcina nawiasy, więc „CPI m/m (FAKE TEST EVENT)" trafiał do promptu jako
+  exact-match anegdota przed każdym prawdziwym CPI).
+- Panel ma **wall-clock deadline** (`_seconds_until − 20 s`, podłoga 10 s) — jeden
+  zawieszony vendor nie przesuwa już decyzji za publikację; klienci OpenAI mają
+  jawne `max_retries` (wejście 0, wyjście 1) zamiast domyślnych 2, które
+  potrajały timeout.
+- Updater **nie zabija eventu na pierwszym wyjątku**: zapis do `decision_history`
+  ma własny try/except (błąd audytu nie może wyrzucić opłaconej decyzji), a
+  ponowienia idą przez `_should_retry_analysis` (max 3 próby, min 60 s okna).
+- Awaryjny spread wymaga **potwierdzenia** (serwer: 2 kolejne raporty, EA: 3
+  kolejne ticki; ≥2× progu zamyka natychmiast) — próg wejścia i próg likwidacji
+  były praktycznie równe, więc rutynowy skok spreadu na publikacji zamykał
+  pozycję po najgorszej cenie sesji.
+- Linia CALIBRATION w prompcie jest **per (model, prompt_version)** — mówi „you
+  have been OVERCONFIDENT", a liczyła się z historii innych modeli; przy zmianie
+  modelu milczy do własnych n≥50 (karta na dashboardzie zostaje globalna).
+
+### Odrzucone przy weryfikacji
+- „Nieudany `/api/position/opened` zostawia pozycję niezarządzaną i pozwala na
+  drugą równoległą" — `ReportAndGetCommand` NIE jest bramkowany
+  `g_aiManagementActive`, a każdy raport okresowy nosi `reconcile:true`, więc
+  serwer rejestruje pozycję w ciągu jednego interwału (5-15 s). Zostaje znany,
+  świadomie zachowany efekt: trade policzony dwukrotnie do dziennego limitu
+  (kierunek konserwatywny).
+- „Tryb force łamie governance panelu" — SKIP jest tam wyłączony z definicji
+  (kontrakt trybu demo); realną luką było tylko traktowanie padniętego
+  wywołania jak głosu SKIP.

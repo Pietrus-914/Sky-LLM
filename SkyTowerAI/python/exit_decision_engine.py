@@ -30,7 +30,7 @@ POSITION MANAGEMENT PRINCIPLES:
 7. Max hold is 30 minutes - after that market returns to normal spread/volatility
 8. Use zone data: if price is approaching a liquidity pool, FVG, or order block - that's a natural take-profit area
 9. Zone bias: positive = bullish pressure (good for BUY), negative = bearish pressure (good for SELL)
-10. If position is losing and no signs of recovery after 5+ minutes, cut the loss
+10. Cutting losses: NEVER cut on elapsed time alone. A news spike routinely puts a fresh position underwater by the spread alone, and the broker stop loss already caps the worst case. Cut when BOTH are true: the loss is MATERIAL (roughly a quarter of the risk budget or worse - see RISK BUDGET) AND the RECENT TRAJECTORY shows no recovery from the max drawdown. A small drawdown at minute 5 on a delayed reaction is noise, not a failed thesis; closing it converts an open option into a certain loss.
 
 DECISION FRAMEWORK:
 - First minutes (0-3 min): Be patient, let the news reaction develop. Only act on extreme moves.
@@ -80,7 +80,11 @@ class ExitDecisionEngine:
                 from openai import OpenAI
                 self.client = OpenAI(
                     api_key=self.api_key,
-                    base_url="https://openrouter.ai/api/v1"
+                    base_url="https://openrouter.ai/api/v1",
+                    # One transport retry, not the SDK default of two: exits are
+                    # consulted every ~30s, so a call that keeps retrying past
+                    # the next check just delays position management.
+                    max_retries=1,
                 )
                 self.model = exit_model or LLM_CONFIG.get("model", "anthropic/claude-sonnet-4")
                 logger.info(f"ExitEngine: Initialized OpenRouter with model: {self.model}")
@@ -128,6 +132,24 @@ class ExitDecisionEngine:
         # Recent AI decisions (last 5)
         recent_decisions = pos.ai_decisions[-5:] if pos.ai_decisions else []
 
+        # RISK BUDGET: without it the model cannot tell a -$20 spread-noise
+        # drawdown (priced into the stop) from a -$90 near-budget failure, so
+        # the cut-loss principle degenerated into "negative at 5 min -> CLOSE".
+        budget = pos.max_loss_usd or POSITION_MANAGEMENT_CONFIG.get(
+            "max_loss_usd", 100.0)
+        total_pnl = pos.profit_usd + pos.realized_usd
+        used_pct = (abs(total_pnl) / budget * 100.0) if budget > 0 else 0.0
+        budget_line = (
+            f"- Risk budget for this trade: ${budget:.2f} "
+            f"(forced close at -${budget:.2f})\n"
+            f"- Current TOTAL P/L uses {used_pct:.0f}% of that budget"
+            + (" (LOSS)" if total_pnl < 0 else " (in profit)")
+        )
+
+        # RECENT TRAJECTORY: "signs of recovery" was unmeasurable from a single
+        # snapshot — the model only saw one P/L number and its own prior HOLDs.
+        trajectory = self._format_trajectory(pos)
+
         prompt = f"""CURRENT POSITION STATUS:
 - Symbol: {pos.symbol}
 - Direction: {pos.direction}
@@ -144,6 +166,12 @@ class ExitDecisionEngine:
 - Tick value: ${pos.tick_value:.2f} per tick
 - Current spread: {pos.spread_pips:.1f} pips
 - Account balance: ${pos.account_balance:.2f}
+
+RISK BUDGET:
+{budget_line}
+
+RECENT TRAJECTORY (oldest to newest, from EA reports):
+{trajectory}
 
 MARKET CONTEXT:
 - Zone bias: {pos.zone_bias:.2f} (positive=bullish, negative=bearish)
@@ -163,6 +191,29 @@ Based on this data, what should we do with this position RIGHT NOW?
 Respond with JSON only."""
 
         return prompt
+
+    @staticmethod
+    def _format_trajectory(pos: OpenPosition) -> str:
+        """Render the recorded price/P-L samples so "no signs of recovery" is
+        an observation instead of a guess. Samples are appended by
+        PositionManager on every EA report and capped there."""
+        samples = getattr(pos, "pnl_samples", None) or []
+        if not samples:
+            return "No samples yet (first report of this position)."
+        lines = []
+        for s in samples[-10:]:
+            lines.append(
+                f"  T+{s.get('minutes', 0):.1f}min  price {s.get('price', 0)}  "
+                f"TOTAL P/L ${s.get('pnl', 0):.2f}"
+            )
+        newest = samples[-1].get('pnl', 0.0)
+        worst = min(s.get('pnl', 0.0) for s in samples)
+        if newest > worst:
+            lines.append(f"  -> recovering: ${newest - worst:.2f} back from the "
+                         f"worst sample (${worst:.2f})")
+        elif newest < worst + 1e-9:
+            lines.append("  -> at or near its worst sample: no recovery yet")
+        return "\n".join(lines)
 
     def _llm_decision(self, pos: OpenPosition) -> PositionCommand:
         """Use LLM to make exit decision."""
@@ -257,8 +308,16 @@ Respond with JSON only."""
         """
         minutes_open = (utcnow() - pos.open_time).total_seconds() / 60
 
+        # WHOLE-TRADE P/L: floating on the remaining lots PLUS what partial
+        # closes already realized. profit_usd alone covers only the open leg,
+        # so after a losing partial close every threshold below read a trade
+        # that was doing far worse than it looked — the guardrails and the LLM
+        # prompt have always used the total, this fallback had drifted.
+        # Identical to profit_usd before any partial close (realized_usd = 0).
+        total_pnl = pos.profit_usd + pos.realized_usd
+
         # Rule 1: Move SL to break-even after $30+ profit
-        if pos.profit_usd > 30.0 and not pos.sl_moved_to_be:
+        if total_pnl > 30.0 and not pos.sl_moved_to_be:
             pip_size = forex_pip_size(pos.symbol)
             buffer = pip_size  # 1 pip buffer
 
@@ -268,7 +327,7 @@ Respond with JSON only."""
                     return PositionCommand(
                         action="MODIFY_SL",
                         sl_price=new_sl,
-                        reason=f"Rule: Move SL to BE after ${pos.profit_usd:.0f} profit",
+                        reason=f"Rule: Move SL to BE after ${total_pnl:.0f} profit",
                     )
             else:
                 new_sl = pos.entry_price - buffer
@@ -276,19 +335,19 @@ Respond with JSON only."""
                     return PositionCommand(
                         action="MODIFY_SL",
                         sl_price=new_sl,
-                        reason=f"Rule: Move SL to BE after ${pos.profit_usd:.0f} profit",
+                        reason=f"Rule: Move SL to BE after ${total_pnl:.0f} profit",
                     )
 
         # Rule 2: Partial close after $60+ profit (if not done)
-        if pos.profit_usd > 60.0 and not pos.partial_closed:
+        if total_pnl > 60.0 and not pos.partial_closed:
             return PositionCommand(
                 action="PARTIAL_CLOSE",
                 close_percent=50,
-                reason=f"Rule: Partial close 50% at ${pos.profit_usd:.0f} profit",
+                reason=f"Rule: Partial close 50% at ${total_pnl:.0f} profit",
             )
 
         # Rule 3: Trail SL to protect profits
-        if pos.profit_usd > 40.0 and pos.sl_moved_to_be:
+        if total_pnl > 40.0 and pos.sl_moved_to_be:
             pip_size = forex_pip_size(pos.symbol)
             trail_distance = pip_size * 10  # 10 pips
 
@@ -306,21 +365,21 @@ Respond with JSON only."""
                     return PositionCommand(
                         action="MODIFY_SL",
                         sl_price=potential_sl,
-                        reason=f"Rule: Trailing SL (profit ${pos.profit_usd:.0f})",
+                        reason=f"Rule: Trailing SL (profit ${total_pnl:.0f})",
                     )
 
         # Rule 4: Close if losing after 10 minutes with no recovery
-        if minutes_open > 10 and pos.profit_usd < -20.0:
+        if minutes_open > 10 and total_pnl < -20.0:
             return PositionCommand(
                 action="CLOSE",
-                reason=f"Rule: Losing ${pos.profit_usd:.0f} after {minutes_open:.0f}min, cutting loss",
+                reason=f"Rule: Losing ${total_pnl:.0f} after {minutes_open:.0f}min, cutting loss",
             )
 
         # Rule 5: Close in late phase if profit is small
-        if minutes_open > 20 and abs(pos.profit_usd) < 15.0:
+        if minutes_open > 20 and abs(total_pnl) < 15.0:
             return PositionCommand(
                 action="CLOSE",
-                reason=f"Rule: Late phase ({minutes_open:.0f}min), minimal P/L ${pos.profit_usd:.0f}",
+                reason=f"Rule: Late phase ({minutes_open:.0f}min), minimal P/L ${total_pnl:.0f}",
             )
 
         return PositionCommand(action="HOLD", reason="Rule: No action needed")

@@ -5,6 +5,7 @@ Tests guardrails, lifecycle, flag management, ticket validation.
 import pytest
 import sys
 import os
+import threading
 import time
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -97,14 +98,40 @@ class TestGuardrails:
         assert result["command"]["action"] == "CLOSE"
         assert "hold time" in result["command"]["reason"].lower()
 
-    def test_emergency_spread_triggers_close(self, pm_with_position):
-        """Spread >= 15 pips should trigger CLOSE."""
+    def test_emergency_spread_triggers_close_after_confirmation(
+            self, pm_with_position):
+        """Spread >= 15 pips closes — but only once a SECOND report confirms it.
+        Entry is blocked just under the same threshold and releases routinely
+        print a wide tick at T0, so closing on one sample liquidated the trade
+        at the worst quote of the session."""
+        first = pm_with_position.update_position(
+            make_report_data(spread_pips=16.0, profit_usd=10.0)
+        )
+        assert first["command"]["action"] == "HOLD"
+
         result = pm_with_position.update_position(
             make_report_data(spread_pips=16.0, profit_usd=10.0)
         )
         assert result["has_command"] is True
         assert result["command"]["action"] == "CLOSE"
         assert "spread" in result["command"]["reason"].lower()
+
+    def test_catastrophic_spread_closes_on_the_first_report(
+            self, pm_with_position):
+        """Past 2x the threshold, waiting for confirmation is the bigger risk."""
+        result = pm_with_position.update_position(
+            make_report_data(spread_pips=35.0, profit_usd=10.0)
+        )
+        assert result["command"]["action"] == "CLOSE"
+
+    def test_transient_spike_alone_does_not_close(self, pm_with_position):
+        """The case the debounce exists for: one wide tick, then normal."""
+        pm_with_position.update_position(
+            make_report_data(spread_pips=16.0, profit_usd=10.0))
+        back = pm_with_position.update_position(
+            make_report_data(spread_pips=3.0, profit_usd=10.0))
+        assert back["command"]["action"] == "HOLD"
+        assert pm_with_position._spread_breaches == 0
 
     def test_profit_protection_triggers_close(self, pm_with_position):
         """Profit drop >50% from peak should trigger CLOSE."""
@@ -414,10 +441,15 @@ class TestConsistentJSON:
 class TestLLMOutsideLock:
     """Test that LLM calls don't block the lock."""
 
-    def test_llm_decision_applied_after_call(self, pm):
-        """LLM decision should be applied correctly."""
-        # Create mock exit engine that returns CLOSE
-        mock_engine = MagicMock()
+    def test_llm_decision_queued_for_next_report(self, pm):
+        """A networked exit engine runs OFF the request thread: the triggering
+        report answers immediately and the command rides the next one.
+
+        This is the fix for the lost-command bug — the EA's POST timeout (10s)
+        is shorter than the exit LLM's (30s), so a decision delivered only in
+        the triggering response was silently dropped whenever the model was
+        slow, with no retry for another 30s."""
+        mock_engine = MagicMock()  # has .client -> treated as networked
         mock_engine.decide.return_value = PositionCommand(
             action="CLOSE", reason="AI: Take profit"
         )
@@ -426,11 +458,120 @@ class TestLLMOutsideLock:
         pm.on_position_opened(make_position_data())
         pm.last_llm_check = 0  # Force LLM check
 
-        result = pm.update_position(make_report_data(profit_usd=50.0))
+        dispatch = pm.update_position(make_report_data(profit_usd=50.0))
+        # The report that triggers the model must not wait for it. Had the EA
+        # timed out here, nothing would be lost.
+        assert dispatch["command"]["action"] == "HOLD"
 
+        assert pm.wait_for_exit_worker(timeout=5.0)
         assert mock_engine.decide.called
+
+        delivered = pm.update_position(make_report_data(profit_usd=50.0))
+        assert delivered["has_command"] is True
+        assert delivered["command"]["action"] == "CLOSE"
+
+    def test_queued_command_is_served_only_once(self, pm):
+        """Delivery pops the queue, so the EA cannot execute it twice."""
+        mock_engine = MagicMock()
+        mock_engine.decide.return_value = PositionCommand(
+            action="PARTIAL_CLOSE", reason="AI: bank half", close_percent=50
+        )
+        pm.exit_engine = mock_engine
+        pm.on_position_opened(make_position_data())
+        pm.last_llm_check = 0
+
+        pm.update_position(make_report_data(profit_usd=50.0))
+        assert pm.wait_for_exit_worker(timeout=5.0)
+
+        first = pm.update_position(make_report_data(profit_usd=50.0))
+        assert first["command"]["action"] == "PARTIAL_CLOSE"
+        pm.last_llm_check = time.time()  # keep the model out of this report
+        second = pm.update_position(make_report_data(profit_usd=50.0))
+        assert second["command"]["action"] == "HOLD"
+
+    def test_rule_based_engine_answers_inline(self, pm):
+        """An engine with no network client (the rule-based fallback) cannot
+        time out, so it keeps answering in the triggering response."""
+        inline_engine = MagicMock()
+        inline_engine.client = None
+        inline_engine.decide.return_value = PositionCommand(
+            action="CLOSE", reason="Rule: cut loss"
+        )
+
+        pm.exit_engine = inline_engine
+        pm.on_position_opened(make_position_data())
+        pm.last_llm_check = 0
+
+        result = pm.update_position(make_report_data(profit_usd=-30.0))
         assert result["has_command"] is True
         assert result["command"]["action"] == "CLOSE"
+
+    def test_guardrail_command_outranks_llm_decision(self, pm):
+        """A queued safety command must never be displaced by a strategy one."""
+        mock_engine = MagicMock()
+        mock_engine.decide.return_value = PositionCommand(
+            action="PARTIAL_CLOSE", reason="AI: bank half", close_percent=50
+        )
+        pm.exit_engine = mock_engine
+        pm.on_position_opened(make_position_data())
+        pm.last_llm_check = 0
+
+        pm.update_position(make_report_data(profit_usd=50.0))
+        # Guardrail fires (and queues its CLOSE) while the model is thinking
+        pm.pending_command = PositionCommand(
+            action="CLOSE", reason="Safety: max loss exceeded"
+        )
+        assert pm.wait_for_exit_worker(timeout=5.0)
+
+        assert pm.pending_command.action == "CLOSE"
+        assert "Safety" in pm.pending_command.reason
+
+    def test_reports_build_a_trajectory_for_the_exit_model(self, pm):
+        """The exit prompt's "signs of recovery" judgement needs a path, not a
+        single snapshot. Samples carry the TOTAL P/L (floating + realized)."""
+        pm.on_position_opened(make_position_data())
+        for pnl in (-40.0, -25.0, -5.0):
+            pm.update_position(make_report_data(profit_usd=pnl))
+
+        samples = pm.position.pnl_samples
+        assert [s["pnl"] for s in samples] == [-40.0, -25.0, -5.0]
+        assert all("minutes" in s and "price" in s for s in samples)
+
+    def test_trajectory_is_capped(self, pm):
+        from position_manager import PNL_SAMPLE_CAP
+        pm.on_position_opened(make_position_data())
+        for i in range(PNL_SAMPLE_CAP + 8):
+            pm.update_position(make_report_data(profit_usd=float(-i)))
+
+        samples = pm.position.pnl_samples
+        assert len(samples) == PNL_SAMPLE_CAP
+        # Oldest dropped, newest kept
+        assert samples[-1]["pnl"] == float(-(PNL_SAMPLE_CAP + 7))
+
+    def test_slow_model_is_not_dispatched_twice(self, pm):
+        """While one call is in flight the next report must not start another —
+        cost and rate limits aside, two answers would race on one position."""
+        release = threading.Event()
+        calls = []
+
+        def slow_decide(_pos):
+            calls.append(1)
+            release.wait(timeout=5.0)
+            return PositionCommand(action="HOLD", reason="AI: developing")
+
+        mock_engine = MagicMock()
+        mock_engine.decide.side_effect = slow_decide
+        pm.exit_engine = mock_engine
+        pm.on_position_opened(make_position_data())
+        pm.last_llm_check = 0
+
+        pm.update_position(make_report_data(profit_usd=10.0))
+        pm.last_llm_check = 0  # interval would allow another call
+        pm.update_position(make_report_data(profit_usd=10.0))
+
+        release.set()
+        assert pm.wait_for_exit_worker(timeout=5.0)
+        assert len(calls) == 1
 
     def test_llm_hold_returns_hold(self, pm):
         """LLM returning HOLD should result in HOLD response."""

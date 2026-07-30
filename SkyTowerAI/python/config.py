@@ -164,9 +164,10 @@ if MIN_IMPACT_LEVEL not in ("LOW", "MEDIUM", "HIGH"):
 # Gdy False: klasyczny filtr po nazwach (produkcja). Zmienialny w panelu.
 TRADE_ALL_EVENTS = _env_bool("SKYTOWER_TRADE_ALL_EVENTS", False)
 
-# "Prognozy / wypowiedzi" — eventy bez publikowanej twardej liczby, których
-# nie da się grać na zaskoczeniu actual-vs-forecast. Dopasowanie podciągiem,
-# case-insensitive. NIGDY nie handlowane, niezależnie od TRADE_ALL_EVENTS.
+# "Prognozy / wypowiedzi / zapisy głosowań" — eventy bez publikowanej twardej
+# liczby, na której da się grać zaskoczenie actual-vs-forecast. Dopasowanie
+# podciągiem, case-insensitive. NIGDY nie handlowane, niezależnie od
+# TRADE_ALL_EVENTS.
 NON_DATA_EVENT_MARKERS = [
     "speaks",
     "speech",
@@ -175,6 +176,13 @@ NON_DATA_EVENT_MARKERS = [
     "press conference",
     "q&a",
     "projections",
+    # "MPC Official Bank Rate Votes" publikuje rozkład głosów ("0-0-9"), nie
+    # stopę — parse_numeric czyta to jako 0 i UDAJE brak zmiany. Nazwa zawiera
+    # podciąg "Official Bank Rate" z TIER1, więc bez tego markera event byłby
+    # handlowalny i mógł PRZESŁONIĆ prawdziwą decyzję BoE z tej samej minuty
+    # (serwer ma jeden slot next_decision). regime_tracker wyklucza "votes"
+    # od dawna z tego samego powodu — tu brakowało symetrii.
+    "votes",
 ]
 
 # Eventy "odwrócone": WYŻSZA wartość jest NEGATYWNA dla waluty (bezrobocie,
@@ -447,7 +455,49 @@ def _apply_runtime_overrides():
                 pass
 
 
+def risk_limit_conflicts(cfg: dict) -> list:
+    """Cross-field sanity for the risk limits. Each field is range-checked in
+    isolation (max_loss_usd accepts 5..100_000), but the RELATION between them
+    was never checked: a per-trade cap ABOVE the daily cap lets a single trade
+    spend the whole day's budget, because the daily limit only blocks the NEXT
+    entry. max_loss_usd is also what the EA uses to size the lot, so an
+    oversized value inflates the position AND raises every guardrail that was
+    supposed to cap the loss.
+
+    Returns a list of human-readable conflicts (empty = consistent). Callers
+    decide the remedy: import-time clamps, the panel endpoint rejects.
+    """
+    conflicts = []
+    per_trade = cfg.get("max_loss_usd")
+    daily = cfg.get("max_daily_loss_usd")
+    if (isinstance(per_trade, (int, float))
+            and isinstance(daily, (int, float))
+            and per_trade > daily):
+        conflicts.append(
+            f"max_loss_usd (${per_trade:,.0f} per trade) exceeds "
+            f"max_daily_loss_usd (${daily:,.0f} per day) — one trade could "
+            f"spend the entire daily loss budget"
+        )
+    return conflicts
+
+
 _apply_runtime_overrides()
+
+def _clamp_risk_limits() -> list:
+    """Apply the cross-field rule at import so a stale runtime_overrides.json
+    can never arm a per-trade budget bigger than the whole day's. Returns the
+    notes for the server to log at startup — config.py has no logger, and a
+    silent clamp would be just as opaque as the silent override it fixes."""
+    notes = []
+    for conflict in risk_limit_conflicts(POSITION_MANAGEMENT_CONFIG):
+        clamped = float(POSITION_MANAGEMENT_CONFIG["max_daily_loss_usd"])
+        POSITION_MANAGEMENT_CONFIG["max_loss_usd"] = clamped
+        notes.append(f"{conflict}; clamped to ${clamped:,.0f}")
+        print(f"WARNING: {notes[-1]}")
+    return notes
+
+
+RISK_LIMIT_NOTES: list = _clamp_risk_limits()
 
 # =============================================================================
 # ENSEMBLE (F4): K-call self-consistency at entry

@@ -46,7 +46,7 @@ curl http://127.0.0.1:5555/health        - Check server health
 curl http://127.0.0.1:5555/api/events    - List upcoming events
 curl http://127.0.0.1:5555/api/decision  - Current decision
 START.bat                                - Start server + MT5 (in SkyTowerAI/)
-python\venv\Scripts\python.exe -m pytest -q   - Run tests (in SkyTowerAI/, 588 tests)
+python\venv\Scripts\python.exe -m pytest -q   - Run tests (in SkyTowerAI/, 661 tests)
 ```
 
 (The `/sky_tower` slash command exists only for Claude Code in `.claude/`,

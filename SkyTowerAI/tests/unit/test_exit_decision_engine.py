@@ -239,3 +239,70 @@ class TestLLMResponseParsing:
         cmd = engine._parse_llm_response(text)
         assert cmd.action == "PARTIAL_CLOSE"
         assert cmd.close_percent == 50.0
+
+
+# ============================================================================
+# Cut-loss context (gpt_review, 30.07.2026). The exit prompt's rule #10 was
+# unconditional on loss magnitude and the prompt carried neither the risk
+# budget nor any price path, so "no signs of recovery after 5+ minutes"
+# degenerated into "negative at minute 5 -> CLOSE" — more aggressive than the
+# engine's OWN rule fallback (10 min AND worse than -$20).
+# ============================================================================
+
+class TestCutLossPromptContext:
+    def test_system_prompt_ties_cut_loss_to_the_budget(self):
+        from exit_decision_engine import EXIT_SYSTEM_PROMPT
+        assert "NEVER cut on elapsed time alone" in EXIT_SYSTEM_PROMPT
+        assert "risk budget" in EXIT_SYSTEM_PROMPT
+
+    def test_prompt_states_budget_and_share_used(self, engine):
+        pos = make_open_position(profit_usd=-25.0, max_loss_usd=100.0)
+        prompt = engine._build_prompt(pos)
+        assert "RISK BUDGET" in prompt
+        assert "$100.00" in prompt
+        assert "25% of that budget" in prompt
+        assert "(LOSS)" in prompt
+
+    def test_prompt_falls_back_to_configured_budget(self, engine):
+        """A recovered position may carry no per-trade budget of its own."""
+        pos = make_open_position(profit_usd=-10.0, max_loss_usd=0.0)
+        assert "RISK BUDGET" in engine._build_prompt(pos)
+
+    def test_budget_share_counts_realized_partials(self, engine):
+        pos = make_open_position(profit_usd=-10.0, realized_usd=-30.0,
+                                 max_loss_usd=100.0)
+        assert "40% of that budget" in engine._build_prompt(pos)
+
+    def test_trajectory_absent_on_first_report(self, engine):
+        pos = make_open_position()
+        assert "No samples yet" in engine._format_trajectory(pos)
+
+    def test_trajectory_flags_recovery(self, engine):
+        pos = make_open_position(pnl_samples=[
+            {"minutes": 0.5, "price": 0.6190, "pnl": -60.0},
+            {"minutes": 1.5, "price": 0.6195, "pnl": -30.0},
+            {"minutes": 2.5, "price": 0.6205, "pnl": -5.0}])
+        text = engine._format_trajectory(pos)
+        assert "recovering" in text
+        assert "T+2.5min" in text
+
+    def test_trajectory_flags_no_recovery(self, engine):
+        pos = make_open_position(pnl_samples=[
+            {"minutes": 0.5, "price": 0.6205, "pnl": -10.0},
+            {"minutes": 2.5, "price": 0.6180, "pnl": -70.0}])
+        assert "no recovery yet" in engine._format_trajectory(pos)
+
+    def test_trajectory_reaches_the_prompt(self, engine):
+        pos = make_open_position(pnl_samples=[
+            {"minutes": 1.0, "price": 0.6195, "pnl": -20.0}])
+        prompt = engine._build_prompt(pos)
+        assert "RECENT TRAJECTORY" in prompt
+        assert "T+1.0min" in prompt
+
+    def test_trajectory_shows_only_the_last_ten_samples(self, engine):
+        pos = make_open_position(pnl_samples=[
+            {"minutes": float(i), "price": 0.62, "pnl": float(-i)}
+            for i in range(20)])
+        text = engine._format_trajectory(pos)
+        assert "T+19.0min" in text
+        assert "T+5.0min" not in text

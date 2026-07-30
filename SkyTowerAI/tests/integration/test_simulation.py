@@ -226,9 +226,16 @@ class TestEmergencySpreadSimulation:
         pm.update_position(make_report(ticket=88888, profit_usd=15.0, spread_pips=3.0))
         pm.update_position(make_report(ticket=88888, profit_usd=20.0, spread_pips=5.0))
 
-        # Spread spikes
-        result = pm.update_position(
+        # Spread spikes — a single wide sample only arms the guardrail; the
+        # exit needs confirmation on the next report (see the debounce in
+        # PositionManager._check_guardrails)
+        armed = pm.update_position(
             make_report(ticket=88888, profit_usd=18.0, spread_pips=16.0)
+        )
+        assert armed["command"]["action"] == "HOLD"
+
+        result = pm.update_position(
+            make_report(ticket=88888, profit_usd=18.0, spread_pips=17.0)
         )
 
         assert result["command"]["action"] == "CLOSE"

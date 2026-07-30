@@ -20,6 +20,18 @@ from loguru import logger
 from market_context import pip_size
 
 
+def is_test_event_name(name: str) -> bool:
+    """True for the SKYTOWER_FAKE_EVENT_IN_SECONDS dry-run event.
+
+    Single source of truth for the marker, because normalize_event_name strips
+    the parenthesized qualifier: "CPI m/m (FAKE TEST EVENT)" normalizes to
+    exactly "cpi m/m", so an unfiltered dry-run record becomes an EXACT-match
+    anecdote in front of every future real CPI release. Reactions and price
+    paths were already flagged; trades and reflections were not.
+    """
+    return "FAKE TEST" in (name or "").upper()
+
+
 def normalize_event_name(name: str) -> str:
     """
     Normalize an event name for matching across releases:
@@ -185,7 +197,7 @@ class EventReactionHistory:
             "recorded_at": utcnow().isoformat() + "Z",
             # Dry-run reactions must never surface as history for the real
             # event (the fake event's name normalizes identically to it)
-            "test": "FAKE TEST" in (reaction.get('event_name') or '').upper(),
+            "test": is_test_event_name(reaction.get('event_name')),
             "event_name": reaction.get('event_name', ''),
             "event_name_normalized": normalize_event_name(reaction.get('event_name', '')),
             "currency": (reaction.get('currency') or '').upper(),

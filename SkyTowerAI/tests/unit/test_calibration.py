@@ -28,12 +28,20 @@ def path_rec(name="cpi m/m", currency="USD", pair="USDCAD",
 
 def decision(name="CPI m/m", currency="USD", pair="USDCAD",
              time="2026-07-15T13:30", direction="BUY", confidence=0.6,
-             forced=False, ts="2026-07-15T13:28:00Z", decision_id="d1"):
+             forced=False, ts="2026-07-15T13:28:00Z", decision_id="d1",
+             model="test-model", prompt_version=None):
+    """A recorded decision row. `model` and `prompt_version` matter to the
+    ENGINE's prompt line, which is scoped to the running configuration so the
+    second-person verdict cannot be computed from another model's history."""
+    import llm_decision_engine as lde
     return {
         "timestamp": ts, "decision_id": decision_id, "event_name": name,
         "currency": currency, "pair": pair, "direction": direction,
         "confidence": confidence, "forced": forced,
         "event_datetime": time + ":00",
+        "model": model,
+        "prompt_version": (lde.ENTRY_PROMPT_VERSION if prompt_version is None
+                           else prompt_version),
     }
 
 
@@ -202,10 +210,21 @@ class TestEngineIntegration:
     def test_line_from_provider_data(self, tmp_path):
         decisions, paths = bulk_case(n=60)
         engine = self._engine(tmp_path, lambda: paths)
+        engine.model = "test-model"          # matches the recorded rows
         engine.decision_log = Mock()
         engine.decision_log.get_recent.return_value = decisions
         line = engine._calibration_line()
         assert line is not None and "CALIBRATION" in line
+
+    def test_no_line_from_another_models_history(self, tmp_path):
+        """The line says "you have been OVERCONFIDENT" — it must never be
+        computed from a different model's or prompt version's calls."""
+        decisions, paths = bulk_case(n=60)
+        engine = self._engine(tmp_path, lambda: paths)
+        engine.model = "some-other-model"
+        engine.decision_log = Mock()
+        engine.decision_log.get_recent.return_value = decisions
+        assert engine._calibration_line() is None
 
     def test_provider_exception_contained(self, tmp_path):
         def boom():

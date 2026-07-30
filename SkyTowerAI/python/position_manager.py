@@ -19,6 +19,19 @@ from position_store import PositionStore, PositionStoreError
 from trading_units import forex_pip_size
 
 
+# How many EA report samples the exit model gets to see. At the 5-15s report
+# cadence 12 samples cover roughly the first 1-3 minutes of a fresh position
+# and always the most recent stretch — enough to judge recovery, short enough
+# to keep the prompt (and the persisted snapshot) small.
+PNL_SAMPLE_CAP = 12
+
+# Consecutive reports whose spread must exceed emergency_spread_pips before the
+# server liquidates. Entry is capped just under the same threshold, so without
+# confirmation one spiked tick at the release closes the trade at the worst
+# price of the session. A spread at 2x the threshold still closes immediately.
+SPREAD_BREACHES_TO_CLOSE = 2
+
+
 class PositionConflictError(ValueError):
     """A lifecycle message refers to a different broker position."""
 
@@ -73,6 +86,10 @@ class OpenPosition:
     # only covers the still-open lots, so guardrails, peak tracking and the
     # exit prompt must work on profit_usd + realized_usd.
     realized_usd: float = 0.0
+    # Rolling (minutes, price, TOTAL P/L) samples from EA reports, newest last
+    # and capped at PNL_SAMPLE_CAP. The exit prompt used to show a single
+    # snapshot, which made its "no signs of recovery" rule unmeasurable.
+    pnl_samples: List[Dict] = field(default_factory=list)
 
     def to_dict(self) -> Dict:
         d = asdict(self)
@@ -111,7 +128,7 @@ class PositionManager:
     """
 
     def __init__(self, exit_engine=None, history_file: Optional[str] = None,
-                 state_file: Optional[str] = None):
+                 state_file: Optional[str] = None, forced_lookup=None):
         self.position: Optional[OpenPosition] = None
         self.pending_command: Optional[PositionCommand] = None
         self.lock = threading.Lock()
@@ -127,8 +144,27 @@ class PositionManager:
         self.last_llm_check: float = 0.0
         self.exit_engine = exit_engine  # ExitDecisionEngine instance
 
+        # Background exit-LLM dispatch. A networked exit engine must NEVER run
+        # inside the /api/position/report request: the EA's POST timeout is 10s
+        # while the exit LLM is allowed 30s, so a slow-but-valid CLOSE used to
+        # be written to a socket the EA had already abandoned — the command was
+        # lost, no retry for another 30s, and MQL5's synchronous WebRequest
+        # meant the EA processed no ticks (and ran no local guardrail) while it
+        # waited. Now the call runs on a worker and the result is QUEUED in
+        # pending_command for the next report, which is the same redelivery
+        # path the guardrail commands already used.
+        self._llm_thread: Optional[threading.Thread] = None
+        self._llm_inflight: bool = False
+
+        # Consecutive emergency-spread breaches on the current position
+        self._spread_breaches: int = 0
+
         # Config
         self.config = POSITION_MANAGEMENT_CONFIG
+
+        # decision_id -> was that entry decision forced? Used only when a
+        # reconcile report omits the flag (older EA build); see resolve_forced.
+        self.forced_lookup = forced_lookup
 
         # Trade history (for daily tracking)
         self.closed_trades: List[Dict] = []
@@ -377,6 +413,10 @@ class PositionManager:
             partial_closed=bool(data.get("partial_closed", False)),
             sl_moved_to_be=bool(data.get("sl_moved_to_be", False)),
             realized_usd=realized,
+            # Restored with the rest of the trail: after a mid-trade restart
+            # the exit model would otherwise see "no samples yet" and lose the
+            # recovery evidence its cut-loss rule depends on.
+            pnl_samples=list(data.get("pnl_samples") or [])[-PNL_SAMPLE_CAP:],
         )
 
     @staticmethod
@@ -624,6 +664,7 @@ class PositionManager:
                 self.daily_trades += 1
                 self.pending_command = None
                 self.last_llm_check = 0.0
+                self._spread_breaches = 0
                 self.recovery_state = "ready"
                 result = "opened"
 
@@ -864,7 +905,7 @@ class PositionManager:
                     outcome = self.on_position_opened(
                         data,
                         decision_id=str(data.get("decision_id") or ""),
-                        forced=bool(data.get("forced", False)),
+                        forced=self.resolve_forced(data),
                         recovered=True,
                     )
                 except PositionPersistenceError as exc:
@@ -909,14 +950,50 @@ class PositionManager:
             reported_lots = data.get("remaining_lots", self.position.remaining_lots)
             prev_lots = self.position.remaining_lots
             if prev_lots > 0 and reported_lots < prev_lots - 1e-9:
-                closed_fraction = 1.0 - (reported_lots / prev_lots)
-                realized_delta = self.position.profit_usd * closed_fraction
-                self.position.realized_usd += realized_delta
+                # PREFER the broker's own number. The EA sends realized_usd
+                # from the deal history (GetRealizedPnL) in every report, and
+                # it includes the actual fill, swap and commission. The
+                # fraction-of-previous-floating estimate below is up to one
+                # report cycle (5-15s) stale and pre-fill, so on a fast
+                # post-news move it could be tens of dollars off — and every
+                # intra-trade guardrail then runs on that error. After a
+                # restart the stale value can even be the pre-restart
+                # snapshot, making the estimate permanently wrong.
+                # A ZERO is not proof: MT5's deal history can lag the fill by a
+                # moment, so the first report after a partial may still carry
+                # 0.0. Estimate then, and adopt the broker figure as soon as it
+                # materializes (see the re-sync below).
+                broker_realized = self._safe_float(data.get("realized_usd"))
+                if (math.isfinite(broker_realized)
+                        and abs(broker_realized) > 1e-9):
+                    realized_delta = broker_realized - self.position.realized_usd
+                    self.position.realized_usd = broker_realized
+                    source = "broker deal history"
+                else:
+                    closed_fraction = 1.0 - (reported_lots / prev_lots)
+                    realized_delta = self.position.profit_usd * closed_fraction
+                    self.position.realized_usd += realized_delta
+                    source = "estimated from last floating P/L"
                 self.position.partial_closed = True
                 logger.info(f"Partial close detected: {prev_lots:.2f} -> "
-                            f"{reported_lots:.2f} lots | ~${realized_delta:.2f} "
-                            f"credited as realized (total realized: "
+                            f"{reported_lots:.2f} lots | ${realized_delta:.2f} "
+                            f"credited as realized ({source}; total realized: "
                             f"${self.position.realized_usd:.2f})")
+            elif self.position.partial_closed:
+                # Re-sync: the EA keeps refreshing realized_usd from the deal
+                # history while a partial exists, so replace any earlier
+                # estimate with the broker's number once it is available. Every
+                # guardrail below reads profit_usd + realized_usd.
+                broker_realized = self._safe_float(data.get("realized_usd"))
+                if (math.isfinite(broker_realized)
+                        and abs(broker_realized) > 1e-9
+                        and abs(broker_realized - self.position.realized_usd) > 0.01):
+                    logger.info(
+                        f"Realized P/L re-synced from broker history: "
+                        f"${self.position.realized_usd:.2f} -> "
+                        f"${broker_realized:.2f}"
+                    )
+                    self.position.realized_usd = broker_realized
 
             # Update position data from EA report
             self.position.current_price = data.get("current_price", self.position.current_price)
@@ -941,6 +1018,19 @@ class PositionManager:
             if total_pnl < self.position.max_drawdown_usd:
                 self.position.max_drawdown_usd = total_pnl
 
+            # Keep a short trajectory for the exit model. Peak/drawdown alone
+            # cannot distinguish "sliding away" from "climbing back", which is
+            # exactly the judgement its cut-loss rule depends on.
+            self.position.pnl_samples.append({
+                "minutes": round(
+                    (utcnow() - self.position.open_time).total_seconds() / 60, 1
+                ),
+                "price": self.position.current_price,
+                "pnl": round(total_pnl, 2),
+            })
+            if len(self.position.pnl_samples) > PNL_SAMPLE_CAP:
+                del self.position.pnl_samples[:-PNL_SAMPLE_CAP]
+
             # 1. Check safety guardrails (immediate, no LLM needed)
             guardrail_cmd = self._check_guardrails()
             if guardrail_cmd:
@@ -959,7 +1049,9 @@ class PositionManager:
             # 3. Determine if LLM call is needed — prepare snapshot UNDER lock
             now = time.time()
             llm_interval = self.config.get("llm_check_interval_seconds", 30)
-            if now - self.last_llm_check >= llm_interval and self.exit_engine is not None:
+            if (now - self.last_llm_check >= llm_interval
+                    and self.exit_engine is not None
+                    and not self._llm_inflight):
                 needs_llm = True
                 pos_snapshot = copy.copy(self.position)
                 snapshot_key = self._position_key(
@@ -968,9 +1060,27 @@ class PositionManager:
                 # Copy mutable list separately to avoid sharing reference
                 pos_snapshot.ai_decisions = list(self.position.ai_decisions)
                 self.last_llm_check = now
+                if self._exit_engine_is_networked():
+                    # Hand off and answer the EA immediately; the decision will
+                    # be queued for one of the next reports (5-15s away).
+                    self._llm_inflight = True
+                    self._llm_thread = threading.Thread(
+                        target=self._run_exit_llm,
+                        args=(pos_snapshot, snapshot_key),
+                        name="exit-llm",
+                        daemon=True,
+                    )
+                    # Phases 2-3 belong to the inline path only
+                    needs_llm = False
+                    pos_snapshot = None
+                    snapshot_key = ""
+                    self._llm_thread.start()
             self._persist_active_position(self.position)
 
-        # === PHASE 2: LLM call OUTSIDE lock (can take 10-60s) ===
+        # === PHASE 2: inline decision for a NON-networked engine ===
+        # The rule-based engine is pure arithmetic: it cannot time out, and
+        # running it inline keeps the fallback path deterministic (the same
+        # report that triggers it carries its command).
         llm_decision = None
         if needs_llm and pos_snapshot:
             try:
@@ -1009,6 +1119,106 @@ class PositionManager:
             self._persist_active_position(self.position)
             return self._hold_response()
 
+    def resolve_forced(self, data: Dict) -> bool:
+        """Forced marker for a report that REBUILDS server state. The EA sends
+        it (recovery metadata v2), but an older build omits the field entirely
+        — and defaulting to False re-registers a FORCE_DECISION coin flip as a
+        genuine trade, defeating every downstream forced filter (track record,
+        trade outcomes, calibration, reflections). When the flag is absent but
+        the lineage id is known, ask the decision row instead of guessing."""
+        if "forced" in data:
+            return bool(data.get("forced"))
+        decision_id = str(data.get("decision_id") or "")
+        if decision_id and self.forced_lookup:
+            try:
+                resolved = bool(self.forced_lookup(decision_id))
+                if resolved:
+                    logger.info(
+                        f"Reconcile report omitted 'forced'; decision "
+                        f"{decision_id} was forced — restored from history"
+                    )
+                return resolved
+            except Exception as e:
+                logger.warning(f"Forced-flag lookup failed for {decision_id}: {e}")
+        return False
+
+    def _exit_engine_is_networked(self) -> bool:
+        """True when an exit decision costs a network round trip (a real LLM
+        client), i.e. when it may outlive the EA's HTTP timeout. The
+        rule-based engine has no client and is dispatched inline."""
+        return getattr(self.exit_engine, "client", None) is not None
+
+    def _run_exit_llm(self, pos_snapshot: OpenPosition, snapshot_key: str) -> None:
+        """Worker body: ask the exit model, then queue the answer. Runs off the
+        request thread so the EA is never blocked waiting for a model."""
+        decision = None
+        try:
+            decision = self.exit_engine.decide(pos_snapshot)
+            if decision:
+                logger.info(f"AI exit decision: {decision.action} | {decision.reason}")
+        except Exception as e:
+            logger.error(f"LLM exit decision error: {e}")
+        finally:
+            with self.lock:
+                self._llm_inflight = False
+                try:
+                    self._queue_exit_decision(decision, snapshot_key)
+                except Exception as e:  # never let a worker die silently
+                    logger.error(f"Queueing exit decision failed: {e}")
+
+    def _queue_exit_decision(self, decision: Optional[PositionCommand],
+                             snapshot_key: str) -> None:
+        """Record the decision on the position and queue a non-HOLD command for
+        the next EA report. Must be called under self.lock.
+
+        Queuing instead of answering the in-flight request is the whole point:
+        the command now survives a timed-out or dropped HTTP response, exactly
+        like the guardrail commands. Flags are deliberately NOT updated here —
+        _update_flags_from_command runs when the command is actually DELIVERED
+        (step 2 of update_position), so a command that never reaches the EA
+        can no longer leave partial_closed/sl_moved_to_be lying about the
+        position's real state.
+        """
+        if decision is None:
+            return
+        if (self.recovery_state == "closing" or self.position is None
+                or (snapshot_key
+                    and self._position_key(self.position.to_dict()) != snapshot_key)):
+            logger.info(
+                f"Exit decision {decision.action} dropped: position changed "
+                f"while the model was thinking"
+            )
+            return
+
+        self.position.ai_decisions.append({
+            "time": utcnow().isoformat(),
+            "action": decision.action,
+            "reasoning": decision.reason,
+        })
+
+        if decision.action != "HOLD":
+            if self.pending_command is not None:
+                # A guardrail (or an earlier decision) is already waiting.
+                # Safety commands outrank strategy — never displace them.
+                logger.warning(
+                    f"Exit decision {decision.action} discarded: "
+                    f"{self.pending_command.action} already queued"
+                )
+            else:
+                self.pending_command = decision
+                logger.info(f"Exit command queued for next report: {decision.action}")
+        self._persist_active_position(self.position)
+
+    def wait_for_exit_worker(self, timeout: float = 10.0) -> bool:
+        """Block until the background exit-LLM call finishes. Only tests and
+        shutdown need this — in production the queued command is picked up by
+        the next EA report. Returns False if the worker is still running."""
+        thread = self._llm_thread
+        if thread is None:
+            return True
+        thread.join(timeout)
+        return not thread.is_alive()
+
     def _check_guardrails(self) -> Optional[PositionCommand]:
         """
         Check USD-based safety guardrails. Returns command if action needed.
@@ -1044,14 +1254,35 @@ class PositionManager:
                 reason=f"Safety: max hold time {max_hold}min reached ({minutes_open:.0f}min open)",
             )
 
-        # Emergency spread
+        # Emergency spread. Entry is already capped just under this same
+        # threshold, so there is almost no headroom between "too wide to enter"
+        # and "so wide we liquidate" — and this system's whole premise is that
+        # spread ALWAYS spikes at the release, i.e. exactly while the position
+        # exists. A single sampled tick used to market-close the trade at the
+        # spiked bid/ask, turning a transient quoting artifact into a realized
+        # loss. Require CONFIRMATION on a second consecutive report unless the
+        # spread is catastrophic (>= 2x), where waiting is the bigger risk.
         emergency_spread = self.config.get("emergency_spread_pips", 15)
         if pos.spread_pips >= emergency_spread:
-            logger.warning(f"GUARDRAIL: Emergency spread {pos.spread_pips} pips >= {emergency_spread}")
-            return PositionCommand(
-                action="CLOSE",
-                reason=f"Safety: emergency spread {pos.spread_pips:.1f} pips",
+            self._spread_breaches += 1
+            catastrophic = pos.spread_pips >= emergency_spread * 2
+            if catastrophic or self._spread_breaches >= SPREAD_BREACHES_TO_CLOSE:
+                logger.warning(
+                    f"GUARDRAIL: Emergency spread {pos.spread_pips} pips >= "
+                    f"{emergency_spread} "
+                    f"({'catastrophic' if catastrophic else f'{self._spread_breaches} consecutive reports'})"
+                )
+                return PositionCommand(
+                    action="CLOSE",
+                    reason=f"Safety: emergency spread {pos.spread_pips:.1f} pips",
+                )
+            logger.warning(
+                f"Spread {pos.spread_pips:.1f} pips >= {emergency_spread} — "
+                f"awaiting confirmation on the next report before closing "
+                f"(breach {self._spread_breaches}/{SPREAD_BREACHES_TO_CLOSE})"
             )
+        else:
+            self._spread_breaches = 0
 
         # Profit protection: close if the WHOLE trade's profit dropped >X%
         # from its peak. Comparing floating-only against the peak made every
