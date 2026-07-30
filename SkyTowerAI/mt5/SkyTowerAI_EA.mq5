@@ -161,10 +161,22 @@ double         g_currentConfidence = 0;
 // across a server restart. Empty from an old server — all consumers tolerate.
 string         g_signalDecisionId = "";  // id of the latest parsed signal
 string         g_tradeDecisionId = "";   // id bound to the OPEN position
+// FORCE_DECISION test-mode marker, carried with the trade the same way as
+// decision_id. The server owns this flag, but on a reconcile report the EA is
+// the only source of truth: without it a demo coin-flip trade re-entered the
+// learning data as a genuine outcome after a restart.
+bool           g_signalForced = false;   // forced flag of the latest signal
+bool           g_tradeForced = false;    // forced flag of the OPEN position
 
 // AI Position Management
 datetime       g_lastPositionReport = 0;    // Last time we reported to server
 bool           g_aiManagementActive = false; // AI is managing the position
+
+// Consecutive ticks whose spread exceeded InpEmergencySpreadPips. Debounces the
+// emergency-spread exit so one wide tick at the release cannot liquidate the
+// position at the worst quote of the session (see Guardrail 3).
+int            g_spreadBreachTicks = 0;
+#define SPREAD_BREACH_TICKS_TO_CLOSE 3
 
 // Multi-instance mode
 bool           g_pairRegistered = false;
@@ -217,8 +229,11 @@ bool PersistRecoveryMetadata()
       return false;
    }
 
+   // Version 2 appends the forced marker. Column ADDED at the end so a v1
+   // file written by an older build still parses (its missing field reads as
+   // empty = not forced), which is also why v1 stays acceptable on load.
    FileWrite(handle,
-             "1",
+             "2",
              StringFormat("%I64u", g_currentTicket),
              StringFormat("%I64u", g_currentPositionId),
              StringFormat("%I64d", g_magicNumber),
@@ -227,7 +242,8 @@ bool PersistRecoveryMetadata()
              DoubleToString(g_maxLossUSD, 2),
              DoubleToString(g_originalLots, 8),
              g_currentEventName,
-             g_tradeDecisionId);
+             g_tradeDecisionId,
+             g_tradeForced ? "1" : "0");
    FileFlush(handle);
    FileClose(handle);
    return true;
@@ -252,13 +268,14 @@ bool LoadRecoveryMetadata(ulong expectedPositionId, bool brokerSelected = true)
    string savedOriginalLots = FileReadString(handle);
    string savedEventName = FileReadString(handle);
    string savedDecisionId = FileReadString(handle);
+   string savedForced = FileIsEnding(handle) ? "" : FileReadString(handle);
    FileClose(handle);
 
    ulong positionId = (ulong)StringToInteger(savedPositionId);
    long magic = StringToInteger(savedMagic);
    double maxLoss = StringToDouble(savedMaxLoss);
    double originalLots = StringToDouble(savedOriginalLots);
-   if(version != "1"
+   if((version != "1" && version != "2")
       || positionId != expectedPositionId
       || magic != g_magicNumber
       || savedSymbol != _Symbol
@@ -283,6 +300,7 @@ bool LoadRecoveryMetadata(ulong expectedPositionId, bool brokerSelected = true)
    }
    g_currentEventName = savedEventName;
    g_tradeDecisionId = savedDecisionId;
+   g_tradeForced = (savedForced == "1");
    return true;
 }
 
@@ -463,6 +481,12 @@ void TryRecoverOpenPosition()
    g_lastKnownProfit = PositionGetDouble(POSITION_PROFIT);
    g_lastTradeTime = (datetime)PositionGetInteger(POSITION_TIME);
    g_closeRetryCount = 0;
+   // Every ADOPTION of a position starts the spread debounce from scratch.
+   // The counter is manager-global, not per-position: without this reset an
+   // adopted position inherits breaches counted on the PREVIOUS trade (or on
+   // the last ticks before it closed) and can be liquidated on its very first
+   // wide tick — exactly what the debounce exists to prevent.
+   g_spreadBreachTicks = 0;
    g_lastPositionReport = 0;
    g_waitingForEvent = false;
    g_positionRecovered = true;
@@ -473,6 +497,7 @@ void TryRecoverOpenPosition()
       // ambiguous. Its risk/lineage data is still available and can now be
       // persisted against the canonical POSITION_IDENTIFIER.
       g_tradeDecisionId = g_signalDecisionId;
+      g_tradeForced = g_signalForced;
       g_positionRecovered = false;
       g_recoveryMetadataTrusted = PersistRecoveryMetadata();
       g_pendingOpenOutcome = false;
@@ -1342,6 +1367,7 @@ void CheckForSignals()
    g_eventSLPips = slPips;  // SL in pips from LLM (0 if not provided)
    g_eventTPPips = tpPips;  // TP in pips from LLM (0 if not provided)
    g_signalDecisionId = decisionId;
+   g_signalForced = forcedSignal;
 
    //--- Arm post-event reaction tracking (snapshots at T0 / T+60s / T+300s)
    if(InpReportReactions)
@@ -1877,7 +1903,9 @@ void ExecuteEventTrade()
    g_realizedPnL = 0.0;
    g_lastSeenLots = liveLots;
    g_closeRetryCount = 0;
+   g_spreadBreachTicks = 0;
    g_tradeDecisionId = g_signalDecisionId;
+   g_tradeForced = g_signalForced;
    g_positionRecovered = false;
    g_recoveryState = RECOVERY_ACTIVE;
    g_recoveryMetadataTrusted = PersistRecoveryMetadata();
@@ -1994,6 +2022,7 @@ void ManageOpenPositions()
       g_realizedPnL = 0.0;
       g_lastSeenLots = 0.0;
       g_closeRetryCount = 0;
+      g_spreadBreachTicks = 0;
       g_smartExit.OnPositionClosed();
       g_aiManagementActive = false;
       ResetSmartExitState();
@@ -2041,12 +2070,27 @@ void ManageOpenPositions()
       return;
    }
 
-   // Guardrail 3: Emergency spread
+   // Guardrail 3: Emergency spread. Entry is already blocked just under this
+   // same threshold, and news releases routinely print a few wide ticks at T0
+   // — closing on ONE sample liquidated the trade at the spiked bid seconds
+   // after entry. Require consecutive breaching ticks; a spread at 2x the
+   // threshold still exits at once, where waiting is the bigger risk.
    if(spreadPips >= InpEmergencySpreadPips)
    {
-      Print("=== EA GUARDRAIL: EMERGENCY SPREAD ", DoubleToString(spreadPips, 1), " pips ===");
-      ClosePosition("EA guardrail: emergency spread " + DoubleToString(spreadPips, 1) + " pips");
-      return;
+      g_spreadBreachTicks++;
+      bool catastrophicSpread = (spreadPips >= InpEmergencySpreadPips * 2.0);
+      if(catastrophicSpread || g_spreadBreachTicks >= SPREAD_BREACH_TICKS_TO_CLOSE)
+      {
+         Print("=== EA GUARDRAIL: EMERGENCY SPREAD ", DoubleToString(spreadPips, 1),
+               " pips (", (catastrophicSpread ? "catastrophic" :
+               IntegerToString(g_spreadBreachTicks) + " consecutive ticks"), ") ===");
+         ClosePosition("EA guardrail: emergency spread " + DoubleToString(spreadPips, 1) + " pips");
+         return;
+      }
+   }
+   else
+   {
+      g_spreadBreachTicks = 0;
    }
 
    // A RECOVERED position without trusted persisted risk metadata is managed
@@ -2131,7 +2175,8 @@ void ReportAndGetCommand(string symbol, double profit, double spreadPips)
       "\"spread_pips\":%.1f,\"account_balance\":%.2f,"
       "\"zone_bias\":%.3f,\"nearest_resistance\":%.5f,\"nearest_support\":%.5f,"
       "\"max_loss_usd\":%.2f,\"open_time\":%I64d,"
-      "\"event_name\":\"%s\",\"decision_id\":\"%s\",\"reconcile\":true}",
+      "\"event_name\":\"%s\",\"decision_id\":\"%s\","
+      "\"forced\":%s,\"reconcile\":true}",
       ticketText, positionIdText, magicText, symbol, g_eventDirection,
       entryPrice, currentPrice,
       g_originalLots, lots,
@@ -2140,7 +2185,11 @@ void ReportAndGetCommand(string symbol, double profit, double spreadPips)
       spreadPips, balance,
       g_zoneBias, g_nearestLiqHigh, g_nearestLiqLow,
       g_maxLossUSD, openTimeUtc,
-      EscapeJson(g_currentEventName), EscapeJson(g_tradeDecisionId)
+      EscapeJson(g_currentEventName), EscapeJson(g_tradeDecisionId),
+      // A reconcile report REBUILDS server state after a restart, so the
+      // forced marker must travel with it or the trade is re-registered as
+      // genuine and pollutes track record, calibration and reflections.
+      (g_tradeForced ? "true" : "false")
    );
 
    string url = "http://" + InpServerHost + ":" + IntegerToString(InpServerPort) + "/api/position/report";
@@ -2281,12 +2330,18 @@ void NotifyPositionOpened()
       "\"tick_value\":%.4f,\"account_balance\":%.2f,"
       "\"max_loss_usd\":%.2f,\"open_time\":%I64d,"
       "\"event_name\":\"%s\",\"decision_id\":\"%s\","
-      "\"recovered\":%s,\"reconcile\":true}",
+      "\"forced\":%s,\"recovered\":%s,\"reconcile\":true}",
       ticketText, positionIdText, magicText, symbol, g_eventDirection,
       entryPrice, lots, sl, tp,
       tickValue, balance,
       g_maxLossUSD, openTimeUtc,
       EscapeJson(g_currentEventName), EscapeJson(g_tradeDecisionId),
+      // THIS is the endpoint used to re-adopt a position after a restart, so
+      // the forced marker matters here even more than in the periodic report:
+      // after a server restart the served-signal lineage is gone and this
+      // flag is the only thing that stops a demo coin flip from being
+      // recorded as a genuine trade.
+      (g_tradeForced ? "true" : "false"),
       g_positionRecovered ? "true" : "false"
    );
 
@@ -2587,9 +2642,42 @@ void ClosePosition(string reason)
    Print("Closing position - Reason: ", reason);
    Print("P/L: $", DoubleToString(profit, 2));
 
-   bool closeExecuted = ConfirmTradeRequest(
-      trade.PositionClose(g_currentTicket), "Position close"
-   );
+   // Emergency exits must not lose to a requote. InpSlippage is sized for
+   // ENTRY quality, but a guardrail close fires when the position is ALREADY
+   // past its risk budget — and a rejected attempt only retried on the next
+   // tick with the identical 5-pip window, letting the loss run while news
+   // prices moved pips per second. Escalate the price tolerance instead:
+   // 1x -> 3x -> 6x InpSlippage, and only for tolerance-class rejections
+   // (a disabled-trading or invalid-request rejection fails at any deviation).
+   int closeDeviations[3];
+   closeDeviations[0] = InpSlippage;
+   closeDeviations[1] = InpSlippage * 3;
+   closeDeviations[2] = InpSlippage * 6;
+   bool closeExecuted = false;
+   for(int attempt = 0; attempt < 3 && !closeExecuted; attempt++)
+   {
+      trade.SetDeviationInPoints(closeDeviations[attempt]);
+      closeExecuted = ConfirmTradeRequest(
+         trade.PositionClose(g_currentTicket),
+         "Position close (deviation " +
+         IntegerToString(closeDeviations[attempt]) + " pts)"
+      );
+      if(closeExecuted)
+         break;
+
+      uint closeRetcode = trade.ResultRetcode();
+      if(closeRetcode != TRADE_RETCODE_REQUOTE
+         && closeRetcode != TRADE_RETCODE_PRICE_OFF
+         && closeRetcode != TRADE_RETCODE_PRICE_CHANGED)
+         break;
+      if(attempt < 2)
+         Print("Close rejected on price tolerance (retcode ", closeRetcode,
+               ") - retrying with a wider deviation");
+   }
+   // Restore entry-grade tolerance: a wide window must never leak into the
+   // next ENTRY, where slippage is also part of the lot-sizing loss model.
+   trade.SetDeviationInPoints(InpSlippage);
+
    if(closeExecuted)
    {
       bool positionGone = false;
@@ -2664,6 +2752,7 @@ void ClosePosition(string reason)
       g_realizedPnL = 0.0;
       g_lastSeenLots = 0.0;
       g_closeRetryCount = 0;
+      g_spreadBreachTicks = 0;
       g_smartExit.OnPositionClosed();
       g_aiManagementActive = false;
       ResetEventWait();

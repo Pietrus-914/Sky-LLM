@@ -60,6 +60,15 @@ decision_lock = threading.Lock()
 # Tracks which events have been analyzed (SKIP) to avoid re-analyzing
 analyzed_events = {}  # {"event_key": datetime_analyzed}
 
+# Failed analysis attempts per event key. An exception used to retire the event
+# for 24h on the FIRST failure, so one transient error (network blip, full
+# disk) ended trading for that release even with most of the preload window
+# left. Bounded so a permanent error still cannot loop forever.
+_analysis_failures = {}  # {"event_key": (attempts, last_failure_utc)}
+MAX_ANALYSIS_ATTEMPTS = 3
+# Room needed before a retry is worth starting (a full panel plus serving)
+MIN_ANALYSIS_RETRY_SECONDS = 60
+
 # Multi-instance coordination
 # Structure: { "event_key": { "pair": {...data...}, "pair2": {...} }, ... }
 registered_pairs = {}
@@ -102,9 +111,16 @@ def init_services():
     zone_analyzer = ZoneAnalyzer(ZONE_CONFIG)
     target_calculator = TargetCalculator(ZONE_CONFIG)
     exit_engine = ExitDecisionEngine()
-    position_manager = PositionManager(exit_engine=exit_engine,
-                                       history_file=TRADE_HISTORY_FILE,
-                                       state_file=ACTIVE_POSITION_FILE)
+    position_manager = PositionManager(
+        exit_engine=exit_engine,
+        history_file=TRADE_HISTORY_FILE,
+        state_file=ACTIVE_POSITION_FILE,
+        # Recovers the forced marker from the decision row when a reconcile
+        # report arrives without it (older EA build after a restart)
+        forced_lookup=lambda did: any(
+            row.get("decision_id") == did and row.get("forced")
+            for row in decision_history.get_recent(200)
+        ))
     # Post-event price paths for ALL monitored events (traded or not) —
     # measured server-side from EA-pushed M1, the system's learning substrate
     path_recorder = EventPathRecorder(regime_provider=regime_tracker.get)
@@ -232,8 +248,20 @@ def config_risk():
             if not (lo <= value <= hi):
                 return jsonify({"status": "error",
                                 "message": f"{key}: must be between {lo} and {hi}"}), 400
-            cfg.POSITION_MANAGEMENT_CONFIG[key] = value
             updated[key] = value
+
+    # Cross-field check BEFORE mutating live config: a per-trade budget above
+    # the daily budget is always an operator mistake (the daily limit only
+    # blocks the NEXT entry, and max_loss_usd also sizes the EA's lot). Reject
+    # loudly here rather than clamping silently — the panel shows the message.
+    if updated:
+        prospective = dict(cfg.POSITION_MANAGEMENT_CONFIG)
+        prospective.update(updated)
+        conflicts = cfg.risk_limit_conflicts(prospective)
+        if conflicts:
+            return jsonify({"status": "error",
+                            "message": "; ".join(conflicts)}), 400
+        cfg.POSITION_MANAGEMENT_CONFIG.update(updated)
 
     if updated:
         cfg.save_runtime_overrides(updated)
@@ -1932,7 +1960,9 @@ def position_reconcile():
             registration = position_manager.on_position_opened(
                 data,
                 decision_id=str(data.get("decision_id") or ""),
-                forced=bool(data.get("forced", False)),
+                # Same reasoning as the reconcile path in update_position: a
+                # missing flag must not silently mean "genuine trade".
+                forced=position_manager.resolve_forced(data),
                 recovered=True,
             )
             status_code = 409 if registration == "conflict" else 200
@@ -1995,6 +2025,17 @@ def position_opened():
                 decision_id = decision_id or getattr(next_decision, 'decision_id', '')
                 entry_reasoning = next_decision.reasoning
                 forced_flag = getattr(next_decision, 'forced', False)
+
+        # forced is STICKY: any source that knows the entry was a
+        # FORCE_DECISION coin flip wins. This is the endpoint the EA actually
+        # uses to re-adopt a position after a restart, and after a server
+        # restart _last_served_signal and next_decision are both empty — so
+        # without the EA's own flag (and the decision_history fallback behind
+        # it) a demo coin flip re-registered as a genuine trade and every
+        # downstream forced filter was defeated for the rest of its life.
+        forced_flag = bool(forced_flag) or position_manager.resolve_forced(
+            dict(data, decision_id=decision_id)
+        )
 
         registration = position_manager.on_position_opened(
             data,
@@ -2454,6 +2495,34 @@ def _mark_decision_event_analyzed(decision) -> None:
         logger.debug(f"Could not mark decision event analyzed: {e}")
 
 
+def _should_retry_analysis(attempts: int, retry_room_seconds: int) -> bool:
+    """Whether a failed event analysis is worth another scan.
+
+    Retry while the preload window still has room for a full panel plus
+    serving, and only up to MAX_ANALYSIS_ATTEMPTS so a permanent fault (bad
+    config, unreachable provider) cannot spin every scan for 24h.
+    """
+    return (attempts < MAX_ANALYSIS_ATTEMPTS
+            and retry_room_seconds >= MIN_ANALYSIS_RETRY_SECONDS)
+
+
+def _cleanup_analysis_failures():
+    """Drop failure counters that can no longer influence anything, so a
+    long-running process cannot accumulate them (the 24/7 machine never
+    restarts).
+
+    Retiring on "the event is in analyzed_events" alone is not enough: an
+    event whose retry was scheduled but whose window then closed is never
+    analyzed, never marked, and simply falls out of the scan — its counter
+    would live forever. Age them out as well, on the same 24h horizon the
+    analyzed_events cleanup uses.
+    """
+    now = utcnow()
+    for key in [k for k, (_, seen) in _analysis_failures.items()
+                if k in analyzed_events or (now - seen).total_seconds() > 86400]:
+        del _analysis_failures[key]
+
+
 def _cleanup_analyzed_events():
     """Remove analyzed event records older than 24 hours."""
     now = utcnow()
@@ -2629,6 +2698,7 @@ def background_decision_updater():
             if time.time() - last_cleanup_time > CLEANUP_INTERVAL:
                 cleanup_stale_registrations()
                 _cleanup_analyzed_events()
+                _cleanup_analysis_failures()
                 _backfill_reaction_actuals()
                 _run_regime_scan()
                 last_cleanup_time = time.time()
@@ -2734,9 +2804,19 @@ def background_decision_updater():
                     new_decision = decision_engine.analyze_event(event_to_analyze, market_ctx)
                     elapsed = time.time() - start_time
 
-                    # Record ALL decisions to audit log
+                    # Record ALL decisions to audit log. Recording is an AUDIT
+                    # side effect and must NOT be able to discard a decision
+                    # the panel already paid for: a JSONL/disk failure here
+                    # used to land in the handler below, which marks the event
+                    # analyzed for 24h — a completed, actionable BUY/SELL was
+                    # silently thrown away while the dashboard stayed green.
                     if decision_history:
-                        decision_history.record(new_decision)
+                        try:
+                            decision_history.record(new_decision)
+                        except Exception as rec_err:
+                            logger.error(
+                                f"Could not record decision to history: {rec_err}"
+                            )
 
                     # === PHASE 3: Apply decision (under lock) ===
                     with decision_lock:
@@ -2757,8 +2837,38 @@ def background_decision_updater():
 
                 except Exception as e:
                     logger.error(f"Error analyzing event {event_to_analyze.event_name}: {e}")
-                    # Mark as analyzed to avoid infinite retry loop
-                    _mark_event_analyzed(event_to_analyze)
+                    # A TRANSIENT failure must not burn the event for the day.
+                    # Marking it analyzed on the first exception meant one
+                    # network blip or full disk ended trading for that release
+                    # even with 100+ seconds of preload window left. Retry on
+                    # the next scan; give up after MAX_ANALYSIS_ATTEMPTS (or
+                    # when no room is left) so a permanent error cannot loop.
+                    key = _analyzed_event_key(event_to_analyze)
+                    attempts = _analysis_failures.get(key, (0, utcnow()))[0] + 1
+                    _analysis_failures[key] = (attempts, utcnow())
+                    # Room must be measured NOW, not from the secs_until read
+                    # before the attempt: a failed analysis can burn 20-60s (or
+                    # the panel's whole deadline), so the pre-attempt value
+                    # overstates the window by the length of the failure and
+                    # would authorise a retry that lands after the entry
+                    # moment — paying for a panel whose answer /api/signal
+                    # refuses to serve.
+                    retry_room = int(
+                        (evt_time - utcnow()).total_seconds()
+                    ) - TRADING_CONFIG['entry_seconds_before']
+                    if not _should_retry_analysis(attempts, retry_room):
+                        logger.error(
+                            f"Giving up on {event_to_analyze.event_name} after "
+                            f"{attempts} attempt(s), {retry_room}s of entry "
+                            f"window left"
+                        )
+                        _mark_event_analyzed(event_to_analyze)
+                    else:
+                        logger.warning(
+                            f"Will retry {event_to_analyze.event_name} on the "
+                            f"next scan (attempt {attempts}/"
+                            f"{MAX_ANALYSIS_ATTEMPTS}, {retry_room}s left)"
+                        )
 
         except Exception as e:
             logger.error(f"Background updater error: {e}")
@@ -2798,6 +2908,24 @@ if __name__ == '__main__':
         logger.warning("Every analyzed event WILL produce a BUY/SELL signal.")
         logger.warning("Use this ONLY on a DEMO account.")
         logger.warning("=" * 60)
+
+    # EFFECTIVE risk limits, not the documented defaults. Panel values in
+    # logs/runtime_overrides.json outrank .env permanently and used to be
+    # applied without a single line of output — an operator could believe the
+    # per-trade budget was $100 while the EA was sizing lots against a value
+    # written weeks earlier. max_loss_usd is the number that both sizes the
+    # position and arms every max-loss guardrail, so it is logged at startup.
+    _risk = POSITION_MANAGEMENT_CONFIG
+    logger.info(
+        f"EFFECTIVE RISK LIMITS: max_loss_usd=${_risk.get('max_loss_usd'):,.0f}/trade | "
+        f"max_daily_loss_usd=${_risk.get('max_daily_loss_usd'):,.0f}/day | "
+        f"max_daily_trades={_risk.get('max_daily_trades')} | "
+        f"max_hold_minutes={_risk.get('max_hold_minutes')} "
+        f"(defaults < .env < dashboard panel)"
+    )
+    import config as _cfg
+    for _note in getattr(_cfg, "RISK_LIMIT_NOTES", []):
+        logger.warning(f"RISK LIMIT CORRECTED: {_note}")
 
     # Initialize services
     init_services()

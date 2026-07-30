@@ -188,6 +188,42 @@ class TestEligibility:
         assert not trade_eligible(dict(good,
                                        event_name="(position lost in restart)"))
 
+    def test_dry_run_trade_is_not_eligible(self):
+        """A FAKE TEST trade has forced=False when force mode is off, and its
+        name normalizes to the REAL event's ("cpi m/m"), so an unfiltered
+        reflection would be served as an exact-match anecdote before every
+        future real CPI release."""
+        fake = {"forced": False, "direction": "BUY",
+                "event_name": "CPI m/m (FAKE TEST EVENT)"}
+        assert not trade_eligible(fake)
+
+
+class TestTestEventMarker:
+    def test_marker_detection(self):
+        from event_reaction_history import is_test_event_name
+        assert is_test_event_name("CPI m/m (FAKE TEST EVENT)")
+        assert is_test_event_name("cpi m/m (fake test event)")
+        assert not is_test_event_name("CPI m/m")
+        assert not is_test_event_name(None)
+
+    def test_dry_run_trades_stay_out_of_recent_outcomes(self, tmp_path):
+        """RECENT TRADE OUTCOMES feeds the entry prompt as realized P/L."""
+        history = tmp_path / "trades.jsonl"
+        rows = [
+            {"symbol": "USDCAD", "event_name": "CPI m/m (FAKE TEST EVENT)",
+             "direction": "BUY", "profit_usd": -40.0, "forced": False},
+            {"symbol": "USDCAD", "event_name": "CPI m/m",
+             "direction": "SELL", "profit_usd": 55.0, "forced": False},
+        ]
+        with open(history, "w", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+
+        engine = LLMDecisionEngine(provider="rule-based",
+                                  trade_history_file=str(history))
+        kept = engine._trades_for_currency("CAD")
+        assert [t["event_name"] for t in kept] == ["CPI m/m"]
+
 
 class TestGeneration:
     def _trade(self):

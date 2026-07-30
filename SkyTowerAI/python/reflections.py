@@ -22,7 +22,7 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 from timeutil import utcnow
-from event_reaction_history import normalize_event_name
+from event_reaction_history import normalize_event_name, is_test_event_name
 
 # At most this many anecdotes reach the prompt
 MAX_PROMPT_REFLECTIONS = 2
@@ -135,11 +135,17 @@ def render_for_prompt(rows: List[Dict]) -> Optional[str]:
 
 
 def trade_eligible(trade: Dict) -> bool:
-    """Only real, completed trades reflect: forced demo coin-flips and
-    restart-orphaned stubs would journal noise."""
+    """Only real, completed trades reflect: forced demo coin-flips, dry-run
+    FAKE TEST trades and restart-orphaned stubs would journal noise.
+
+    The dry-run case is the subtle one — a fake event traded WITHOUT force mode
+    produces forced=False, and its name normalizes to the real event's, so the
+    reflection would be served as first-hand experience of a release that never
+    happened."""
     return (isinstance(trade, dict)
             and not trade.get('forced')
             and bool(trade.get('event_name'))
+            and not is_test_event_name(trade.get('event_name'))
             and trade.get('event_name') != "(position lost in restart)"
             and trade.get('direction') in ('BUY', 'SELL'))
 

@@ -1119,6 +1119,10 @@
                     is delivered to the EA with each trading signal — if a signal is
                     already armed (final ~3 min before an event), that one trade still
                     uses the value it was armed with.
+                    <b>"Max loss per trade" may not exceed "Max daily loss"</b> —
+                    such a save is rejected, because one trade would be able to
+                    spend the whole day's budget (the daily limit only blocks the
+                    NEXT entry). The effective limits are also logged at startup.
                 </div>
             </div>
 
@@ -1319,7 +1323,7 @@
                         <tr><td><b>Trade ALL events</b></td><td>ON: handlujemy każdy event od „Min. Impact Level" w górę, lista nazw Tier 1/Tier 2 jest ignorowana (nazwane eventy i tak są zwykle MEDIUM/HIGH). Wypowiedzi (Speaks/Testifies/Press Conference/Projections) zawsze pomijane. OFF: tylko nazwy z listy.</td><td>ON (faza testów)</td></tr>
                         <tr><td><b>Max trades per day</b></td><td>Globalny limit tradów dziennie (cały serwer, wszystkie pary razem). Po osiągnięciu serwer przestaje wydawać sygnały. Licznik zeruje się o północy UTC (02:00 czasu PL latem). <b>Jedyne miejsce ustawienia — EA nie ma już swojego limitu.</b></td><td>5</td></tr>
                         <tr><td><b>Max daily loss USD</b></td><td>Dzienny budżet straty. Po przekroczeniu serwer blokuje nowe wejścia do północy UTC.</td><td>300 (3% konta)</td></tr>
-                        <tr><td><b>Max loss per trade USD</b></td><td>Budżet ryzyka pojedynczego trade'u: <b>z tej kwoty EA liczy wielkość lota</b>, przy tej stracie pozycja jest zamykana (guardrail serwera + offline guardrail EA). Wysyłany do EA automatycznie z każdym sygnałem — <b>jedyne miejsce ustawienia</b>.</td><td>100 (1% konta)</td></tr>
+                        <tr><td><b>Max loss per trade USD</b></td><td>Budżet ryzyka pojedynczego trade'u: <b>z tej kwoty EA liczy wielkość lota</b>, przy tej stracie pozycja jest zamykana (guardrail serwera + offline guardrail EA). Wysyłany do EA automatycznie z każdym sygnałem — <b>jedyne miejsce ustawienia</b>. <b>Nie może być większy niż „Max daily loss"</b> — taki zapis serwer odrzuca (jeden trade mógłby wydać cały dzienny budżet, bo limit dzienny blokuje dopiero NASTĘPNE wejście). Efektywne limity są logowane przy starcie serwera — to jedyna pewna odpowiedź na pytanie „jaki budżet jest naprawdę uzbrojony?", bo wartości z panelu nadpisują `.env` na stałe.</td><td>100 (1% konta)</td></tr>
                         <tr><td><b>Tier 1 / Tier 2 / Currencies</b></td><td>Które typy eventów i waluty są aktywne.</td><td>bez zmian</td></tr>
                         <tr><td><b>Currency Regimes (auto)</b></td><td>Reżim polityki banku (hiking/cutting/hold) per waluta — etykieta do statystyk reakcji, <b>nie wpływa na ryzyko</b>. Aktualizuje się SAM z każdej zarejestrowanej decyzji o stopach (niejednoznaczny hold ocenia LLM po reakcji rynku). Dropdown = ręczny override do następnej decyzji banku. EUR/JPY/CHF nie mają par na wykresach, więc nie auto-aktualizują się — dla nich override ręczny.</td><td>auto</td></tr>
                     </tbody>
@@ -1421,6 +1425,20 @@
                     SL na breakeven, trailing 10 pipsów na reszcie. Dodatkowo AI ocenia pozycję co 30 s
                     i może zamknąć wcześniej. Twarde wyjścia: strata −"Max loss per trade" (panel), czas &gt;InpMaxHoldMinutes,
                     spread &gt;InpEmergencySpreadPips.
+                    <br><br>
+                    <b>Kiedy AI cięło stratę (zmiana 30.07.2026):</b> wcześniej prompt kazał zamykać
+                    stratną pozycję „po 5+ minutach bez oznak odbicia" bez względu na wielkość straty,
+                    więc realizował drobne straty na eventach z opóźnioną reakcją. Teraz model musi
+                    zobaczyć <b>istotną stratę</b> (~1/4 budżetu ryzyka) <b>oraz</b> brak odbicia na
+                    ścieżce ceny — prompt dostaje jawnie budżet ryzyka i ostatnie próbki P/L z raportów EA.
+                    <br><br>
+                    <b>Komendy AI przychodzą z jednym raportem opóźnienia</b> (5-15 s): model jest pytany
+                    w tle, a jego decyzja czeka w kolejce na następny raport EA. Wcześniej komenda jechała
+                    tylko w odpowiedzi HTTP, którą EA porzucał po 10 s — przy wolniejszym modelu przepadała.
+                    <br><br>
+                    <b>Wyjście na spreadzie wymaga potwierdzenia:</b> serwer 2 kolejnych raportów, EA 3
+                    kolejnych ticków (spread ≥2× progu zamyka natychmiast). Jeden szeroki tick na
+                    publikacji nie zamknie już pozycji po najgorszej cenie sesji.
                 </div>
             </div>
         </div>

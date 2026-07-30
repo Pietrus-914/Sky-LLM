@@ -91,6 +91,38 @@ def real_calendar_fetch(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_production_position_state(tmp_path_factory, monkeypatch):
+    """Tests must NEVER write the PRODUCTION active-position snapshot.
+
+    Same class of accident as _no_real_reflections below: a test POSTing
+    /api/position/opened persisted a fabricated ticket into the real
+    logs/active_position.json, a LATER run restored it ("waiting for MT5
+    reconciliation"), and on the operator's machine that snapshot blocks new
+    entries until it is reconciled or deleted. Point the paths at a per-session
+    tmp dir; any manager built from config picks them up, and a test that wants
+    to exercise persistence still passes its own state_file explicitly.
+    """
+    import config
+    state_dir = tmp_path_factory.mktemp("position_state")
+    monkeypatch.setattr(config, "ACTIVE_POSITION_FILE",
+                        str(state_dir / "active_position.json"),
+                        raising=False)
+    monkeypatch.setattr(config, "TRADE_HISTORY_FILE",
+                        str(state_dir / "trade_history.jsonl"),
+                        raising=False)
+    for mod_name in ("server", "python.server"):
+        mod = sys.modules.get(mod_name)
+        pm = getattr(mod, "position_manager", None) if mod else None
+        store = getattr(pm, "position_store", None)
+        if store is not None and getattr(store, "path", None):
+            monkeypatch.setattr(store, "path",
+                                str(state_dir / "active_position.json"))
+        if pm is not None and getattr(pm, "history_file", None):
+            monkeypatch.setattr(pm, "history_file",
+                                str(state_dir / "trade_history.jsonl"))
+
+
+@pytest.fixture(autouse=True)
 def _no_real_reflections(monkeypatch):
     """Tests must NEVER fire the real post-trade reflection worker: with the
     operator's .env key present, integration tests POSTing /api/position/

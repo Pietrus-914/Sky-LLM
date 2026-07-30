@@ -39,6 +39,7 @@ from market_context import (pip_size, normalize_pair,
                             infer_broker_offset_seconds, entry_age_seconds)
 from calendar_fetcher import is_non_data_event
 from event_reaction_history import (normalize_event_name,
+                                    is_test_event_name,
                                     apply_release_to_record,
                                     atomic_rewrite_jsonl)
 
@@ -394,7 +395,7 @@ class EventPathRecorder:
         return {
             "recorded_at": utcnow().isoformat() + "Z",
             "source": "server_m1",
-            "test": "FAKE TEST" in (entry["event_name"] or '').upper(),
+            "test": is_test_event_name(entry["event_name"]),
             "event_key": entry["event_key"],
             "event_name": entry["event_name"],
             "event_name_normalized": normalize_event_name(entry["event_name"]),

@@ -15,13 +15,14 @@ from position_manager import PositionManager, PositionCommand
 from exit_decision_engine import ExitDecisionEngine
 
 
-def make_report(ticket, profit_usd, spread_pips=2.5, current_price=0.6210):
+def make_report(ticket, profit_usd, spread_pips=2.5, current_price=0.6210,
+                sl=0.6170, remaining_lots=0.50):
     """Create position report dict."""
     return {
         "ticket": ticket,
         "current_price": current_price,
-        "remaining_lots": 0.50,
-        "sl": 0.6170,
+        "remaining_lots": remaining_lots,
+        "sl": sl,
         "tp": 0.0,
         "profit_usd": profit_usd,
         "tick_value": 10.0,
@@ -31,6 +32,43 @@ def make_report(ticket, profit_usd, spread_pips=2.5, current_price=0.6210):
         "nearest_resistance": 0.6250,
         "nearest_support": 0.6180,
     }
+
+
+class FakeEA:
+    """Minimal stand-in for the Expert Advisor: it EXECUTES the commands it is
+    given and reflects them in the next report, exactly like the real EA
+    reports live broker state on every tick.
+
+    This matters because the server now derives sl_moved_to_be and
+    partial_closed from what the broker REPORTS, not from having sent a
+    command. A fake EA that silently ignored commands would make the server
+    (correctly) keep re-asking, which is not the behaviour under test.
+    """
+
+    def __init__(self, ticket, sl=0.6170, lots=0.50):
+        self.ticket = ticket
+        self.sl = sl
+        self.lots = lots
+        self.closed = False
+        self.commands = []
+
+    def report(self, pm, profit_usd, spread_pips=2.5, current_price=0.6210):
+        result = pm.update_position(make_report(
+            ticket=self.ticket, profit_usd=profit_usd,
+            spread_pips=spread_pips, current_price=current_price,
+            sl=self.sl, remaining_lots=self.lots,
+        ))
+        cmd = result["command"]
+        self.commands.append(cmd["action"])
+        # Execute it, the way the EA would
+        if cmd["action"] == "MODIFY_SL" and cmd.get("sl_price", 0) > 0:
+            self.sl = cmd["sl_price"]
+        elif cmd["action"] == "PARTIAL_CLOSE":
+            self.lots = round(
+                self.lots * (1 - cmd.get("close_percent", 50) / 100.0), 2)
+        elif cmd["action"] == "CLOSE":
+            self.closed = True
+        return result
 
 
 class TestWinningTradeSimulation:
@@ -74,17 +112,18 @@ class TestWinningTradeSimulation:
         sl_moved = False
         partial_done = False
         position_closed = False
+        ea = FakeEA(ticket=55555)
 
         for i, profit in enumerate(profit_curve):
             if pm.position is None:
                 position_closed = True
                 break
 
-            result = pm.update_position(make_report(
-                ticket=55555,
+            result = ea.report(
+                pm,
                 profit_usd=profit,
                 current_price=0.6200 + profit * 0.0001,  # rough approximation
-            ))
+            )
 
             action = result["command"]["action"]
             actions_log.append({
@@ -226,9 +265,16 @@ class TestEmergencySpreadSimulation:
         pm.update_position(make_report(ticket=88888, profit_usd=15.0, spread_pips=3.0))
         pm.update_position(make_report(ticket=88888, profit_usd=20.0, spread_pips=5.0))
 
-        # Spread spikes
-        result = pm.update_position(
+        # Spread spikes — a single wide sample only arms the guardrail; the
+        # exit needs confirmation on the next report (see the debounce in
+        # PositionManager._check_guardrails)
+        armed = pm.update_position(
             make_report(ticket=88888, profit_usd=18.0, spread_pips=16.0)
+        )
+        assert armed["command"]["action"] == "HOLD"
+
+        result = pm.update_position(
+            make_report(ticket=88888, profit_usd=18.0, spread_pips=17.0)
         )
 
         assert result["command"]["action"] == "CLOSE"

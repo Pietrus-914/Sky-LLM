@@ -354,3 +354,152 @@ class TestMixedPanel:
         row = engine.decision_log.get_recent(5)[0]
         assert row["ensemble"]["anchor"] == "model-anchor"
         assert row["ensemble"]["votes"][1]["model"] == "model-b"
+
+
+# ============================================================================
+# Degraded panel: a vote that never ARRIVED is not an abstention. Retry once,
+# then say so loudly. The 29.07.2026 FOMC traded a 2-vote tie because a third
+# model's failure was indistinguishable from a SKIP vote.
+# ============================================================================
+
+def run_seq_panel(tmp_path, monkeypatch, script, force=False,
+                  seconds_to_event=1800):
+    """Like run_panel, but each model maps to a SEQUENCE of replies so retry
+    behaviour is observable. Values may be strings or Exceptions."""
+    engine = make_engine(tmp_path)
+    engine.provider = "openrouter"
+    monkeypatch.setattr(lde, "ENSEMBLE_K", 1)
+    monkeypatch.setattr(lde, "ENSEMBLE_MODELS", list(PANEL))
+    monkeypatch.setattr(lde, "FORCE_DECISION", force)
+    event = SimpleNamespace(
+        event_name="CPI m/m", currency="USD",
+        datetime_utc=datetime.utcnow() + timedelta(seconds=seconds_to_event),
+        impact="HIGH", forecast="0.3%", previous="0.2%")
+    routed = []
+
+    def fake_chat(prompt, model=None):
+        routed.append(model)
+        queue = script[model]
+        r = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    engine._chat = fake_chat
+    ctx = engine._gather_data(event, None)
+    return engine._llm_decision(event, ctx), routed
+
+
+class TestDegradedPanel:
+    def test_transient_failure_is_retried_and_recovers(self, tmp_path,
+                                                       monkeypatch):
+        d, routed = run_seq_panel(tmp_path, monkeypatch, {
+            "model-anchor": [reply("BUY", 0.8)],
+            "model-b": [reply("BUY", 0.7)],
+            "model-c": [RuntimeError("429 rate limited"), reply("BUY", 0.6)]})
+        assert routed.count("model-c") == 2      # retried
+        assert d.ensemble["valid"] == 3
+        assert "degraded" not in d.ensemble
+        assert "PANEL DEGRADED" not in d.reasoning
+        assert d.direction == "BUY"
+
+    def test_exhausted_vote_marks_panel_degraded(self, tmp_path, monkeypatch):
+        d, routed = run_seq_panel(tmp_path, monkeypatch, {
+            "model-anchor": [reply("BUY", 0.8)],
+            "model-b": [reply("BUY", 0.7)],
+            "model-c": [RuntimeError("timeout")]})
+        assert routed.count("model-c") == 2      # tried twice, then dropped
+        assert d.ensemble["degraded"] is True
+        assert d.ensemble["valid"] == 2
+        assert d.ensemble["failures"][0]["model"] == "model-c"
+        assert "timeout" in d.ensemble["failures"][0]["reason"]
+        # The trade may still go out (anchor + 1 confirm), but the reasoning
+        # must never present a 2-vote panel as a full committee.
+        assert "PANEL DEGRADED 2/3" in d.reasoning
+
+    def test_unparseable_200_reply_is_recorded_with_a_reason(self, tmp_path,
+                                                            monkeypatch):
+        """The silent case: HTTP 200 with an empty body (a reasoning model
+        burning max_tokens) used to vanish without a single log line."""
+        d, _ = run_seq_panel(tmp_path, monkeypatch, {
+            "model-anchor": [reply("BUY", 0.8)],
+            "model-b": [reply("BUY", 0.7)],
+            "model-c": [""]})
+        assert d.ensemble["degraded"] is True
+        assert "unparseable" in d.ensemble["failures"][0]["reason"]
+
+    def test_no_retry_when_event_is_too_close(self, tmp_path, monkeypatch):
+        """A retry is another full call — never at the cost of missing the
+        release (same 90s margin as the single-call path)."""
+        d, routed = run_seq_panel(tmp_path, monkeypatch, {
+            "model-anchor": [reply("BUY", 0.8)],
+            "model-b": [reply("BUY", 0.7)],
+            "model-c": [RuntimeError("timeout")]}, seconds_to_event=45)
+        assert routed.count("model-c") == 1
+        assert d.ensemble["degraded"] is True
+
+    def test_force_mode_tie_on_degraded_panel_says_so(self, tmp_path,
+                                                      monkeypatch):
+        """The exact FOMC shape: one model gone, the survivors split."""
+        d, _ = run_seq_panel(tmp_path, monkeypatch, {
+            "model-anchor": [reply("SELL", 0.5)],
+            "model-b": [reply("BUY", 0.61)],
+            "model-c": [RuntimeError("timeout")]}, force=True)
+        assert d.direction in ("BUY", "SELL")     # force mode never SKIPs
+        assert d.ensemble["degraded"] is True
+        assert "PANEL DEGRADED 2/3" in d.reasoning
+        assert "tie" in d.reasoning
+
+    def test_hung_vote_is_abandoned_at_the_deadline(self, tmp_path,
+                                                    monkeypatch):
+        """pool.map used to wait for the SLOWEST call, so one hung vendor could
+        push the decision past the release and the event was skipped even
+        though the others answered in seconds."""
+        import threading
+        monkeypatch.setattr(lde, "ENSEMBLE_MIN_WAIT_SECONDS", 0.3)
+        never = threading.Event()
+
+        engine = make_engine(tmp_path)
+        engine.provider = "openrouter"
+        monkeypatch.setattr(lde, "ENSEMBLE_K", 1)
+        monkeypatch.setattr(lde, "ENSEMBLE_MODELS", list(PANEL))
+        monkeypatch.setattr(lde, "FORCE_DECISION", False)
+        # Close enough that the deadline collapses to the floor, far enough
+        # that nothing else short-circuits
+        event = SimpleNamespace(
+            event_name="CPI m/m", currency="USD",
+            datetime_utc=datetime.utcnow() + timedelta(seconds=25),
+            impact="HIGH", forecast="0.3%", previous="0.2%")
+
+        def fake_chat(prompt, model=None):
+            if model == "model-c":
+                never.wait(timeout=10.0)      # hangs past the deadline
+                return reply("SELL", 0.9)
+            return reply("BUY", 0.8)
+
+        engine._chat = fake_chat
+        ctx = engine._gather_data(event, None)
+        try:
+            d = engine._llm_decision(event, ctx)
+        finally:
+            never.set()
+
+        # Anchor + one confirm arrived; the hung model is a FAILURE, not a veto
+        assert d.direction == "BUY"
+        assert d.ensemble["valid"] == 2
+        assert d.ensemble["degraded"] is True
+        assert "deadline" in d.ensemble["failures"][0]["reason"]
+        assert "PANEL DEGRADED 2/3" in d.reasoning
+
+    def test_force_mode_lone_survivor_is_not_called_a_majority(
+            self, tmp_path, monkeypatch):
+        """One vote is not a majority and its agreement is not 1.00."""
+        d, _ = run_seq_panel(tmp_path, monkeypatch, {
+            "model-anchor": [RuntimeError("timeout")],
+            "model-b": [reply("BUY", 0.9)],
+            "model-c": [RuntimeError("timeout")]}, force=True)
+        assert d.direction == "BUY"               # only opinion available
+        assert d.ensemble["valid"] == 1
+        assert "NO QUORUM 1/3" in d.reasoning
+        assert "majority" not in d.reasoning
+        assert "agreement 1.00" not in d.reasoning

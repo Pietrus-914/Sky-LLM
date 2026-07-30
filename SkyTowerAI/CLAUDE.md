@@ -3,7 +3,7 @@
 ## Quick Summary
 SkyTower-AI is an automated forex trading system that trades high-impact economic news events. A Flask server analyzes each event (COT data, retail sentiment used contrarian, forecast vs previous, market context pushed by MT5) and decides BUY/SELL/SKIP via an LLM panel (OpenRouter) with a rule-based fallback. The MT5 Expert Advisor executes; **the server also manages the exit** (EA keeps only technical guardrails).
 
-State: server **4.1.0**, **588 tests green** (27.07.2026), running natively on Windows. Active branch `gpt_review` (see `GPT_REVIEW_PLAN.md`). Docs wiki: `../wiki/index.md`.
+State: server **4.1.0**, **679 tests green** (30.07.2026), running natively on Windows. Active branch `gpt_review` (see `GPT_REVIEW_PLAN.md`). Docs wiki: `../wiki/index.md`.
 
 ## Project Location
 `C:\Users\pietr\Documents\Sky tower\SkyTowerAI\`
@@ -65,7 +65,7 @@ SkyTowerAI/
 ├── mt5/
 │   ├── SkyTowerAI_EA.mq5         # Expert Advisor (~1950 lines — use offset/limit reads!)
 │   └── SkyTower_Zones.mq5        # Zone indicator
-├── tests/                        # 588 tests: unit/ integration/ e2e/ (pytest)
+├── tests/                        # 679 tests: unit/ integration/ e2e/ (pytest)
 ├── START.bat                     # PRIMARY launcher: server (auto-restart) + MT5, idempotent
 ├── start_server.bat              # Server only (creates venv on first run)
 ├── start_server_24_7.bat         # 24/7 variant with watchdog loop
@@ -109,12 +109,15 @@ LLM access is via **OpenRouter** (`OPENROUTER_API_KEY` in `python/.env` — NEVE
 - **Pairs**: signal is served only to the EA asking about the decision's pair; EA runs on `DEFAULT_PAIRS` charts (NZDUSD, USDCAD, AUDUSD, GBPUSD; broker suffixes like `.pro` handled).
 - **Risk lives ONLY in the dashboard panel** (Risk & Daily Limits → `/api/config/risk`, persisted in `logs/runtime_overrides.json`; precedence default < env < panel). Defaults: max loss **$100/trade**, **$300/day** (block until midnight UTC), **5 trades/day**, **30 min** max hold. Every `/api/signal` carries `max_loss_usd` — **the EA REJECTS signals without it** (old server = no trading, by design). Daily limits are enforced server-side; closed trades persist in `logs/trade_history.jsonl` and counters rebuild after restart.
 - **Lot sizing (EA)**: from SL distance; budget = min(balance × `InpRiskPercent`%, `max_loss_usd`). Optional lot reductions (`InpUseConfidenceLot`, `InpUseSpreadLotReduction`) — operator prefers **false**. Spread ENTRY blocks always active (`InpMaxSpreadPips`; >15 pips never enter).
-- **Exit is server-owned**: `exit_decision_engine` returns MODIFY_SL / PARTIAL_CLOSE / CLOSE on `/api/position/report`. EA-side guardrails only: `InpMaxHoldMinutes` (default 30) + emergency spread. `InpUseZoneTargets` fetches `/api/targets` at open. On external close (SL/TP/manual) the EA computes realized P/L from deal history (`profit_source: history`).
-- Spread is ALWAYS high on events — expected; never bypass spread checks.
+- **Risk limits are cross-checked**: `max_loss_usd` may never exceed `max_daily_loss_usd` (`config.risk_limit_conflicts`) — the panel rejects such a write with 400, import clamps it, and startup logs the EFFECTIVE limits. Panel values outrank `.env` permanently, so that log line is the only reliable answer to "what budget is actually armed?".
+- **Exit is server-owned**: `exit_decision_engine` returns MODIFY_SL / PARTIAL_CLOSE / CLOSE on `/api/position/report`. The LLM call runs on a **background worker** and its command is **queued in `pending_command` for the next report** (5-15s later) — the EA's POST timeout (10s) is shorter than the model's (30s), so answering in the triggering response used to lose commands outright. The rule-based fallback has no network client and still answers inline. Delivery is **confirm-then-retire**: the served command is kept until a broker report shows its effect (volume drop / matching SL / further reports = a CLOSE did not execute), re-sent once if it is missing, and `PARTIAL_CLOSE` is **never** re-sent (`REDELIVERABLE_ACTIONS`) because a duplicate would close a second slice. `partial_closed` and `sl_moved_to_be` are derived from broker reports, never from having sent a command. EA-side guardrails only: `InpMaxHoldMinutes` (default 30) + emergency spread. `InpUseZoneTargets` fetches `/api/targets` at open. On external close (SL/TP/manual) the EA computes realized P/L from deal history (`profit_source: history`).
+- Spread is ALWAYS high on events — expected; never bypass spread checks. The **emergency-spread exit needs confirmation** (server: 2 consecutive reports, EA: 3 consecutive ticks; ≥2× the threshold exits at once) because entry is capped just under the same value.
 
 ## Decision Logic
 
-**Primary: LLM panel** (reasoning-FIRST response schema; numeric fields clamped: conf 0–1, lot ≤ 85, exit 5–15 min, SL 25–80, TP 30–120 pips). Prompt context includes: COT, contrarian sentiment, forecast vs previous, M1 tail (20 candles) + cross-pair picture, EVENT PLAYBOOK (`knowledge/event_playbooks.json`), learned stats, calibration line (from n≥50), currency regimes, liquidity-pool stop clusters, RECENT TRADE OUTCOMES (realized P/L; `forced` filtered out).
+**Primary: LLM panel** (reasoning-FIRST response schema; numeric fields clamped: conf 0–1, lot ≤ 85, exit 5–15 min, SL 25–80, TP 30–120 pips). Prompt context includes: COT, contrarian sentiment, forecast vs previous, M1 tail (20 candles) + cross-pair picture, EVENT PLAYBOOK (`knowledge/event_playbooks.json`), learned stats, calibration line (n≥50 **for the current model + prompt_version only** — it speaks in the second person, so it is never computed from another configuration's history), currency regimes, liquidity-pool stop clusters, RECENT TRADE OUTCOMES (realized P/L; `forced` and FAKE TEST rows filtered out).
+
+**Panel degradation is explicit**: a vote that fails or returns unparseable content is logged with the model name and reason, retried once (if >90s to the release), and — if still missing — marks the decision `ensemble.degraded` with `PANEL DEGRADED n/k` in the reasoning. Quorum is 2 valid votes (`ENSEMBLE_MIN_QUORUM`); in force mode a lone survivor trades but is labelled `NO QUORUM`, never "majority". The panel has a wall-clock deadline (`T-20s`, floor 10s) so one hung vendor cannot push the decision past the release.
 
 **Fallback: rule-based scoring** (no API key): forecast>previous +2, COT ±3, retail ≥70% contrarian ±2; BUY/SELL needs a 2-point margin, else SKIP.
 
@@ -178,7 +181,7 @@ EA confidence gate: `InpMinConfidence` (0.5); `forced:true` signals bypass it.
 ```powershell
 curl http://127.0.0.1:5555/health          # status
 # START.bat = server + MT5; start_server.bat = server only
-python\venv\Scripts\python.exe -m pytest -q   # run tests (588, ~12 s)
+python\venv\Scripts\python.exe -m pytest -q   # run tests (679, ~18 s)
 ```
 Add tradeable event names: `config.py` → TIER1/TIER2 or `SKYTOWER_EXTRA_EVENTS`.
 

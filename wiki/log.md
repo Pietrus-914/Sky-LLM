@@ -79,3 +79,170 @@ porządek, żeby nie było staroci i trzymamy się najnowszej wersji"):
   591 testów zielonych. „FOMC Statement" i „FOMC Press Conference" celowo poza
   whitelistą (brak twardej liczby; decyzja o tej samej minucie jest handlowana).
 - Zaktualizowano: `pages/system-overview.md` (notka o nazewnictwie FF).
+
+## 2026-07-30 INGEST | Runda po incydencie FOMC: bloki B i C planu naprawczego
+
+Kontekst: po zagraniu FOMC 29.07 (panel 2/3 głosów → remis → tie-break regułowy
+→ USDCAD BUY 2.01 lota → −$360, zamknięte przez exit-LLM po ~5 min) operator
+zlecił wieloagentowy review i wdrożenie znalezisk. Review: 6 finderów + 9
+adwersaryjnych weryfikacji + weryfikacja ręczna. **661 testów zielonych, EA
+0 errors / 0 warnings.**
+
+### Blok B (blokujące przed live)
+- `config.py` + `server.py`: nowa `risk_limit_conflicts()` — per-trade
+  `max_loss_usd` NIE MOŻE przekraczać `max_daily_loss_usd` (wcześniej zakres
+  5..100 000 bez żadnej relacji między polami, więc jeden trade mógł wydać cały
+  dzienny budżet; limit dzienny blokuje tylko NASTĘPNE wejście). Panel odrzuca
+  taki zapis (400), import clampuje i zapisuje notkę, a start serwera loguje
+  **EFEKTYWNE limity ryzyka** (wartości z panelu nadpisują `.env` na stałe i do
+  tej pory nie zostawiały śladu w logu).
+- `position_manager.py`: wywołanie exit-LLM zeszło z wątku requestu na worker,
+  a komenda jest **kolejkowana w `pending_command`** i wydawana przy następnym
+  raporcie EA. Wcześniej komenda (także CLOSE) jechała TYLKO w odpowiedzi HTTP,
+  której EA porzucał po 10 s przy 30 s timeoucie modelu — cała warstwa
+  „wyjściem steruje serwer" mogła nie dostarczyć nic, a `WebRequest` blokował
+  wątek EA (tickowe guardraile stały). Silnik regułowy (bez `client`) dalej
+  odpowiada synchronicznie. Flagi `partial_closed`/`sl_moved_to_be` ustawiane są
+  teraz przy DOSTARCZENIU komendy, nie przy jej wyliczeniu.
+- `llm_decision_engine.py`: panel dostał **kworum** (`ENSEMBLE_MIN_QUORUM=2`),
+  **jeden retry** nieudanego głosu (gdy >90 s do publikacji), **logowanie każdego
+  odrzuconego głosu z nazwą modelu i powodem** (HTTP 200 z pustą treścią nie
+  zostawiał wcześniej ŻADNEGO śladu) oraz marker `degraded` + „PANEL DEGRADED
+  n/k" w reasoningu i `ensemble.failures`. W trybie force pojedynczy ocalały głos
+  nie jest już opisywany jako „majority … agreement 1.00", a jako „NO QUORUM".
+- `config.py`: `"votes"` w `NON_DATA_EVENT_MARKERS` — „MPC Official Bank Rate
+  Votes" zawiera podciąg TIER1 „Official Bank Rate", więc był handlowalny i mógł
+  przesłonić prawdziwą decyzję BoE z tej samej minuty (`regime_tracker` wykluczał
+  „votes" od dawna — brakowało symetrii w selekcji do handlu).
+- `SkyTowerAI_EA.mq5`: `ClosePosition` eskaluje deviation 1× → 3× → 6×
+  `InpSlippage` przy odrzuceniach cenowych (REQUOTE/PRICE_OFF/PRICE_CHANGED) i
+  przywraca wartość wejściową; wcześniej awaryjne zamknięcie ponawiało się
+  dopiero na następnym ticku z tym samym 5-pipsowym oknem.
+
+### Blok C
+- `exit_decision_engine.py`: zasada #10 promptu wyjścia **nie zamyka już po
+  samym czasie** — wymaga istotnej straty (~1/4 budżetu ryzyka) ORAZ braku
+  odbicia; prompt dostał sekcje **RISK BUDGET** (ile budżetu zjada obecne P/L) i
+  **RECENT TRAJECTORY** (próbki z raportów EA + jawna ocena „recovering" /
+  „no recovery yet"). Wcześniej instrukcja była ostrzejsza niż własny fallback
+  regułowy tego pliku (10 min I strata >$20). Fallback liczy teraz wszystkie
+  progi na **całościowym P/L** (floating + realized), zgodnie z guardrailami.
+- `position_manager.py`: `pnl_samples` (cap 12) zbierane z raportów i
+  odtwarzane ze snapshotu; realizacja częściowego zamknięcia bierze **dokładny
+  `realized_usd` z historii dealów EA** zamiast szacunku ze starego floatingu
+  (zero traktowane jako „historia jeszcze nie nadążyła" → szacunek + re-sync).
+- `forced` przeżywa restart: EA trzyma `g_tradeForced`, zapisuje go w metadanych
+  recovery (format v2, kolumna dopisana na końcu — v1 nadal się czyta) i wysyła
+  w raporcie; serwer ma `resolve_forced()` z fallbackiem do `decision_history`
+  po `decision_id`. Wcześniej rekoncyliacja rejestrowała demowy rzut monetą jako
+  PRAWDZIWY trade, obchodząc wszystkie filtry `forced`.
+- `is_test_event_name()` w `event_reaction_history.py` jako jedno źródło prawdy;
+  trade'y i refleksje z eventów FAKE TEST są filtrowane (`normalize_event_name`
+  obcina nawiasy, więc „CPI m/m (FAKE TEST EVENT)" trafiał do promptu jako
+  exact-match anegdota przed każdym prawdziwym CPI).
+- Panel ma **wall-clock deadline** (`_seconds_until − 20 s`, podłoga 10 s) — jeden
+  zawieszony vendor nie przesuwa już decyzji za publikację; klienci OpenAI mają
+  jawne `max_retries` (wejście 0, wyjście 1) zamiast domyślnych 2, które
+  potrajały timeout.
+- Updater **nie zabija eventu na pierwszym wyjątku**: zapis do `decision_history`
+  ma własny try/except (błąd audytu nie może wyrzucić opłaconej decyzji), a
+  ponowienia idą przez `_should_retry_analysis` (max 3 próby, min 60 s okna).
+- Awaryjny spread wymaga **potwierdzenia** (serwer: 2 kolejne raporty, EA: 3
+  kolejne ticki; ≥2× progu zamyka natychmiast) — próg wejścia i próg likwidacji
+  były praktycznie równe, więc rutynowy skok spreadu na publikacji zamykał
+  pozycję po najgorszej cenie sesji.
+- Linia CALIBRATION w prompcie jest **per (model, prompt_version)** — mówi „you
+  have been OVERCONFIDENT", a liczyła się z historii innych modeli; przy zmianie
+  modelu milczy do własnych n≥50 (karta na dashboardzie zostaje globalna).
+
+### Odrzucone przy weryfikacji
+- „Nieudany `/api/position/opened` zostawia pozycję niezarządzaną i pozwala na
+  drugą równoległą" — `ReportAndGetCommand` NIE jest bramkowany
+  `g_aiManagementActive`, a każdy raport okresowy nosi `reconcile:true`, więc
+  serwer rejestruje pozycję w ciągu jednego interwału (5-15 s). Zostaje znany,
+  świadomie zachowany efekt: trade policzony dwukrotnie do dziennego limitu
+  (kierunek konserwatywny).
+- „Tryb force łamie governance panelu" — SKIP jest tam wyłączony z definicji
+  (kontrakt trybu demo); realną luką było tylko traktowanie padniętego
+  wywołania jak głosu SKIP.
+
+## 2026-07-30 INGEST | Niezależny review commita 8795b71 i naprawa 13 usterek
+
+Operator zlecił niezależny review poprzedniej rundy („chcę mieć pewność, że
+zadziała"). 6 recenzentów po wymiarach diffu + adwersaryjna weryfikacja
+każdego znaleziska (29 agentów): **13 potwierdzonych, 10 odrzuconych, 0
+niepewnych**. Wszystkie 13 naprawione. **679 testów zielonych, EA 0/0**,
+suite przechodzi też izolowanie per plik i przy odwróconej kolejności.
+
+### Najpoważniejsze (dostarczanie komend i flagi)
+- Komenda była zdejmowana z kolejki w momencie WPISANIA do odpowiedzi HTTP,
+  bez żadnego potwierdzenia — dostarczanie było „at-most-once", wbrew temu, co
+  twierdził komentarz. Teraz **potwierdź-albo-ponów**: serwer trzyma ostatnio
+  wysłaną komendę, aż raport brokera pokaże jej skutek (spadek wolumenu / SL na
+  żądanej cenie / dalsze raporty = CLOSE się nie wykonał), ponawia raz, a potem
+  odpuszcza. **PARTIAL_CLOSE nigdy nie jest ponawiany** (`REDELIVERABLE_ACTIONS`)
+  — gdyby pierwszy się wykonał, a my go jeszcze nie widzieli, drugi zamknąłby
+  kolejny kawałek (dwie połówki = 75% pozycji). Natychmiastowe ponowne pytanie
+  modelu tylko po nieodebranym CLOSE — inaczej odrzucany przez brokera SL
+  generowałby płatne wywołanie na każdym raporcie.
+- `partial_closed` i `sl_moved_to_be` ustawiane były na skutek WYSŁANIA komendy.
+  Teraz wynikają z obserwacji (`_sync_flags_from_broker`, detekcja spadku
+  wolumenu). Wcześniej zgubiona lub odrzucona komenda zostawiała flagę, która
+  kłamała, i blokowała regułę BE/partial do końca trade'u.
+- Reguła 1 fallbacku (SL na break-even) po przejściu na całościowe P/L mogła
+  wystawić stop **po złej stronie rynku**: zysk zrealizowany z partiala spełniał
+  próg, gdy otwarta noga była pod wodą. Dodane `pos.profit_usd > 0` oraz
+  `_stop_is_below_market` (także dla trailingu).
+
+### Wiring `forced` (3 znaleziska, jeden rdzeń)
+`forced` dodano tylko do raportu okresowego, a EA po restarcie re-adoptuje
+pozycję przez **`/api/position/opened`** — ten payload pola nie miał, a handler
+liczył flagę wyłącznie z `_last_served_signal`/`next_decision` (po restarcie
+serwera puste). Po rejestracji `needs_reconcile` jest już False, więc uczciwe
+`"forced":true` z kolejnych raportów nigdy nie było czytane. Teraz: pole jedzie
+też w `NotifyPositionOpened`, endpoint woła `resolve_forced`, a samo
+`resolve_forced` jest **sticky OR** — EA z metadanymi v1 raportuje uczciwe
+`false`, ale `decision_history` zna prawdę i wygrywa.
+
+### Pozostałe
+- `g_spreadBreachTicks` zerowany tylko w ścieżce sukcesu `ExecuteEventTrade` →
+  pozycja adoptowana po niejednoznacznym fillu dziedziczyła licznik i mogła
+  zostać zlikwidowana na pierwszym szerokim ticku. Reset dodany w ścieżce
+  adopcji i we wszystkich zamknięciach; po stronie serwera analogicznie w
+  gałęzi reconcile.
+- `_llm_inflight` był globalny dla managera i nie zwalniał się przy zmianie
+  pozycji → worker wiszący dla ZAMKNIĘTEJ pozycji blokował pierwszą konsultację
+  następnej (pierwsza minuta = faza szczytowa). Wprowadzona **generacja
+  dispatchu**: `_abandon_exit_worker` zwalnia slot, a spóźniony worker nie
+  wyczyści flagi należącej do nowszego wywołania. Nieudany `Thread.start()`
+  też zwalnia slot (wcześniej wyłączałby wyjścia LLM na cały proces).
+- Okno retry updatera liczone było z `secs_until` sprzed próby, więc „min 60 s"
+  nigdy nie obowiązywało — mierzone teraz od bieżącego czasu.
+- `_analysis_failures` wyciekało dla eventów, którym okno się zamknęło bez
+  wpisu do `analyzed_events` — wpisy mają timestamp i starzeją się po 24 h.
+- Sprzeczność w prompcie wyjścia: reguła #10 zabraniała cięcia po samym czasie,
+  a DECISION FRAMEWORK dwa akapity niżej nadal kazał zamykać w fazie fade/late
+  „jeśli nie ma znaczącego zysku". Framework przepisany na opis OKAZJI.
+- Dwa testy były vacuous (`test_llm_hold_returns_hold`,
+  `test_llm_error_falls_through_to_hold` — sprawdzały tylko odpowiedź
+  dispatchu, która zawsze jest HOLD) i dwa kolejne w
+  `TestCalibrationLineIsPerModel` (wiersze fixture'u nie mogły wyprodukować
+  linii ani przed, ani po poprawce — brak kontroli pozytywnej). Przepisane,
+  z jawną kontrolą pozytywną.
+
+### Higiena testów (znalezione przy weryfikacji, nie w diffie)
+`ensure_services()` woła się WEWNĄTRZ handlera i odbudowuje
+`server.position_manager`, jeśli serwisy nie były zainicjalizowane — mój nowy
+test przez to **zapisał zmyśloną pozycję (ticket 555) do prawdziwego
+`logs/active_position.json`**, a kolejny przebieg ją odtworzył. Na maszynie
+operatora taki snapshot blokuje nowe wejścia do rekoncyliacji. Plik usunięty
+(kopia w scratchpadzie), a w `conftest.py` doszła autouse-bariera
+`_no_production_position_state` kierująca `ACTIVE_POSITION_FILE` i
+`TRADE_HISTORY_FILE` na tmp — ta sama klasa wypadku co blokada refleksji z
+18.07 (87 fałszywych wpisów w produkcyjnym logu).
+
+### Odrzucone (10) — najważniejsze
+Deadlock w workerze (lock nie jest brany ponownie na ścieżce persist),
+niepoprawny kształt krotki po deadlinie, `max_retries=0` psujące inne wywołania
+(klient wejściowy nie jest dzielony), oraz teza o wyciekaniu szerokiego
+deviation do wejścia (jest przywracany bezwarunkowo przed każdym returnem).

@@ -40,12 +40,12 @@ def make_open_data(ticket=12345, symbol="NZDUSD", direction="BUY",
 
 
 def make_report(ticket=12345, profit_usd=0.0, spread_pips=2.5,
-                current_price=0.6210, remaining_lots=0.50):
+                current_price=0.6210, remaining_lots=0.50, sl=0.0):
     return {
         "ticket": ticket,
         "current_price": current_price,
         "remaining_lots": remaining_lots,
-        "sl": 0.0,
+        "sl": sl,
         "tp": 0.0,
         "profit_usd": profit_usd,
         "tick_value": 10.0,
@@ -55,6 +55,39 @@ def make_report(ticket=12345, profit_usd=0.0, spread_pips=2.5,
         "nearest_resistance": 0.6250,
         "nearest_support": 0.6180,
     }
+
+
+class HttpFakeEA:
+    """Stand-in EA that EXECUTES the server's commands and reflects them in the
+    next report, driven through the HTTP endpoints.
+
+    Required because the server now derives sl_moved_to_be/partial_closed from
+    what the broker REPORTS. An EA that ignored commands would make the server
+    correctly keep re-asking, which is not the behaviour these tests assert.
+    """
+
+    def __init__(self, client, ticket=12345, lots=0.50, sl=0.0):
+        self.client = client
+        self.ticket = ticket
+        self.lots = lots
+        self.sl = sl
+        self.actions = []
+
+    def report(self, profit_usd, spread_pips=2.5, current_price=0.6210):
+        resp = self.client.post('/api/position/report', json=make_report(
+            ticket=self.ticket, profit_usd=profit_usd,
+            spread_pips=spread_pips, current_price=current_price,
+            remaining_lots=self.lots, sl=self.sl,
+        ))
+        assert resp.status_code == 200
+        cmd = resp.get_json()['command']
+        self.actions.append(cmd['action'])
+        if cmd['action'] == "MODIFY_SL" and cmd.get('sl_price', 0) > 0:
+            self.sl = cmd['sl_price']
+        elif cmd['action'] == "PARTIAL_CLOSE":
+            self.lots = round(
+                self.lots * (1 - cmd.get('close_percent', 50) / 100.0), 2)
+        return resp
 
 
 def make_close_data(ticket=12345, profit=50.0, reason="Test close"):
@@ -173,16 +206,11 @@ class TestFullHTTPCycleSimulation:
             33, 30, 28, 25, 22, 20, 18,         # 23-29: fade
         ]
 
-        actions_seen = []
+        ea = HttpFakeEA(client)
         for i, profit in enumerate(profit_curve):
-            resp = client.post('/api/position/report', json=make_report(
-                profit_usd=profit,
-                current_price=0.6200 + profit * 0.0001,
-            ))
-            assert resp.status_code == 200
-            data = resp.get_json()
-            action = data['command']['action']
-            actions_seen.append(action)
+            ea.report(profit_usd=profit,
+                      current_price=0.6200 + profit * 0.0001)
+        actions_seen = ea.actions
 
         # 4. Verify key actions occurred
         assert "MODIFY_SL" in actions_seen, "SL should have been modified"
@@ -368,8 +396,10 @@ class TestLLMMockIntegration:
         assert data['command']['action'] == 'MODIFY_SL'
         assert data['command']['sl_price'] == 0.6210
 
-    def test_llm_partial_close_sets_flag(self, client_with_engine):
-        """After LLM returns PARTIAL_CLOSE, flag should be set."""
+    def test_llm_partial_close_sets_flag_once_the_volume_drops(
+            self, client_with_engine):
+        """PARTIAL_CLOSE is served, and the flag latches when the BROKER
+        reports the reduced volume — not merely because we asked."""
         client, mock_engine, pm = client_with_engine
 
         mock_engine.decide.return_value = PositionCommand(
@@ -379,13 +409,17 @@ class TestLLMMockIntegration:
         )
 
         client.post('/api/position/opened', json=make_open_data())
-        resp = client.post('/api/position/report', json=make_report(profit_usd=65.0))
+        ea = HttpFakeEA(client)
+        resp = ea.report(profit_usd=65.0)
         data = resp.get_json()
 
         assert data['command']['action'] == 'PARTIAL_CLOSE'
         assert data['command']['close_percent'] == 50
+        assert pm.position.partial_closed is False, \
+            "sending a command is not evidence it executed"
 
-        # Flag should be set (BUG-2 fix)
+        # The EA executed it; the next report carries the halved volume
+        ea.report(profit_usd=32.0)
         assert pm.position.partial_closed is True
 
     def test_llm_hold_doesnt_trigger_action(self, client_with_engine):
@@ -604,18 +638,30 @@ class TestStrategySimulation:
         pm.on_position_opened(make_open_data())
 
         actions = []
+        # The simulated EA must EXECUTE commands: flags are derived from broker
+        # reports now, so an EA that ignored them would keep the server stuck
+        # re-asking for the same break-even move.
+        ea_lots, ea_sl = 0.50, 0.0
         for i, profit in enumerate(profit_curve):
             if pm.position is None:
                 break
             result = pm.update_position(make_report(
                 profit_usd=profit,
                 current_price=0.6200 + profit * 0.0001,
+                remaining_lots=ea_lots,
+                sl=ea_sl,
             ))
+            cmd = result["command"]
+            if cmd["action"] == "MODIFY_SL" and cmd.get("sl_price", 0) > 0:
+                ea_sl = cmd["sl_price"]
+            elif cmd["action"] == "PARTIAL_CLOSE":
+                ea_lots = round(
+                    ea_lots * (1 - cmd.get("close_percent", 50) / 100.0), 2)
             actions.append({
                 "step": i,
                 "profit": profit,
-                "action": result["command"]["action"],
-                "reason": result["command"].get("reason", ""),
+                "action": cmd["action"],
+                "reason": cmd.get("reason", ""),
             })
         return actions
 
@@ -661,16 +707,25 @@ class TestStrategySimulation:
         assert close_seen, "Should cut slow bleed after 10+ minutes"
 
     def test_spike_and_fade(self):
-        """Quick spike to $90 then gradual fade.
-        Profit protection should trigger when profit drops >50% from peak.
+        """Quick spike then gradual fade. Profit protection triggers when the
+        WHOLE trade's profit drops >50% from its peak.
+
+        The fade has to go deeper than the raw floating curve suggests: the
+        rule engine banks a 50% partial around $60-75, and that realized money
+        counts toward the total. Peak total ends up near $127 (floating $90 +
+        ~$37 realized), so protection fires when the total falls under ~$64,
+        i.e. when the remaining leg is worth roughly $26 — not at $40. Judging
+        it on the floating value alone is exactly the bug that used to
+        force-close the runner right after every partial.
         """
-        curve = [0, 15, 35, 55, 75, 90, 85, 75, 60, 45, 40]
+        curve = [0, 15, 35, 55, 75, 90, 85, 75, 60, 45, 40, 32, 25]
         actions = self._run_scenario(curve)
 
-        # Should trigger profit protection around step 9-10
-        # Peak was $90, drop to $40 = 55% drop > 50% threshold
+        assert any(a["action"] == "PARTIAL_CLOSE" for a in actions), \
+            "the scenario relies on the partial being banked"
         close_actions = [a for a in actions if a["action"] == "CLOSE"]
         assert len(close_actions) > 0, "Profit protection should trigger on fade"
+        assert "profit dropped" in close_actions[0]["reason"]
 
     def test_choppy_sideways_no_overreaction(self):
         """Small oscillations around break-even.

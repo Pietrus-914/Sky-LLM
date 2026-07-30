@@ -15,7 +15,8 @@ import os
 from calendar_fetcher import CalendarAggregator, EconomicEvent
 from cot_analyzer import COTAnalyzer
 from sentiment_analyzer import SentimentAggregator
-from event_reaction_history import EventReactionHistory, normalize_event_name
+from event_reaction_history import (EventReactionHistory, normalize_event_name,
+                                    is_test_event_name)
 from decision_history import DecisionHistory
 from market_context import normalize_pair
 from config import (LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS,
@@ -27,6 +28,20 @@ from config import (LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS,
 # decision so calibration/replay can be grouped per prompt version — without
 # it, prompt edits silently mix regimes inside one calibration ledger.
 ENTRY_PROMPT_VERSION = "2026-07-26.1"
+
+# Minimum VALID votes for an ensemble result to be called a panel decision.
+# Below this the committee has silently shrunk (a vendor timed out, or replied
+# 200 with unusable content) and the outcome is one model's opinion. Normal
+# mode already refuses to trade there; FORCE_DECISION demo mode may not SKIP,
+# so it trades but labels the decision honestly (see _ensemble_decision).
+ENSEMBLE_MIN_QUORUM = 2
+
+# Wall-clock budget for the whole panel. Entry fires at T-15s, so the decision
+# must be recorded before that with a little room for aggregation and serving.
+ENSEMBLE_DEADLINE_MARGIN = 20
+# Floor, so a late-discovered event still gets a real chance to answer instead
+# of being abandoned instantly.
+ENSEMBLE_MIN_WAIT_SECONDS = 10
 
 
 @dataclass
@@ -246,7 +261,13 @@ confidence — do NOT inflate it just because a direction is required."""
                 from openai import OpenAI
                 self.client = OpenAI(
                     api_key=self.api_key,
-                    base_url="https://openrouter.ai/api/v1"
+                    base_url="https://openrouter.ai/api/v1",
+                    # The SDK default (2) silently TRIPLES the per-attempt
+                    # timeout, so a 60s call could hold a panel slot for ~180s
+                    # plus backoff — past the release. The ensemble does its own
+                    # smarter retry (it re-prompts for valid JSON), so transport
+                    # retries here only cost the decision its time budget.
+                    max_retries=0,
                 )
                 self.model = LLM_CONFIG.get("model", "anthropic/claude-opus-4")
                 logger.info(f"Initialized OpenRouter client with model: {self.model}")
@@ -581,13 +602,14 @@ confidence — do NOT inflate it just because a direction is required."""
 
     def _trades_for_currency(self, currency: str, limit: int = 5) -> List[Dict]:
         """Most recent closed trades whose symbol contains the currency
-        (base or quote), newest first. FORCE_DECISION test-mode trades are
-        excluded — the prompt tells the model to calibrate against these
-        outcomes, and demo coin-flips must not pose as real experience."""
+        (base or quote), newest first. FORCE_DECISION test-mode trades and
+        FAKE TEST dry-run trades are excluded — the prompt tells the model to
+        calibrate against these outcomes, and neither a demo coin-flip nor a
+        trade on a synthetic release may pose as real experience."""
         currency = (currency or '').upper()
         out = []
         for rec in reversed(self._load_recent_trades()):
-            if rec.get('forced'):
+            if rec.get('forced') or is_test_event_name(rec.get('event_name')):
                 continue
             pair = normalize_pair(str(rec.get('symbol') or ''))
             if len(pair) >= 6 and currency in (pair[:3], pair[3:6]):
@@ -893,18 +915,45 @@ confidence — do NOT inflate it just because a direction is required."""
                      + "; ".join(recap_parts))
         return "\n".join(lines), recap
 
+    def _current_model_signature(self) -> str:
+        """The `model` string a decision would be recorded under RIGHT NOW.
+        Must mirror how _llm_decision and _ensemble_decision stamp it, or the
+        calibration filter below would silently match nothing."""
+        panel = (ENSEMBLE_MODELS if len(ENSEMBLE_MODELS) >= 2
+                 and self.provider == "openrouter" else None)
+        if panel:
+            return "panel:" + ",".join(panel)
+        if ENSEMBLE_K >= 2:
+            return f"{self.model} x{ENSEMBLE_K}"
+        return str(self.model or "")
+
     def _calibration_line(self) -> Optional[str]:
         """Measured calibration of past directional calls vs recorded event
         paths (calibration.py). Needs the live recorder's records via
-        paths_provider — absent (tests / cold start), there is no line."""
+        paths_provider — absent (tests / cold start), there is no line.
+
+        Scoped to THIS model and THIS prompt version. The line speaks in the
+        second person ("you have been OVERCONFIDENT by N points — state lower
+        confidence"), so feeding it another model's or another prompt's history
+        tells the running configuration to correct an error it never made.
+        Decision rows carry `model` and `prompt_version` for exactly this
+        reason; the dashboard summary stays global and keeps its by_model
+        breakdown. Cost: after a model or prompt change the line goes quiet
+        until the new configuration has its own n>=50 — silence is the honest
+        state, a borrowed verdict is not."""
         if self._paths_provider is None:
             return None
         paths = self._paths_provider()
         if not paths:
             return None
         from calibration import build_summary, prompt_line
-        decisions = self.decision_log.get_recent(300)
-        return prompt_line(build_summary(decisions, paths))
+        signature = self._current_model_signature()
+        own = [d for d in self.decision_log.get_recent(300)
+               if d.get('model') == signature
+               and d.get('prompt_version') == ENTRY_PROMPT_VERSION]
+        if not own:
+            return None
+        return prompt_line(build_summary(own, paths))
 
     def _episodes_section(self, event, currency: str,
                           pair: str) -> Optional[str]:
@@ -1177,7 +1226,7 @@ decision in JSON format."""
         wins and agreement scales the reported confidence.
         Numeric fields of a traded decision are per-voter clamped medians;
         all raw replies go to the decision-context dump."""
-        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, wait
         panel = (ENSEMBLE_MODELS if len(ENSEMBLE_MODELS) >= 2
                  and self.provider == "openrouter" else None)
         k = len(panel) if panel else ENSEMBLE_K
@@ -1189,30 +1238,88 @@ decision in JSON format."""
                         f"({self.provider}/{self.model})...")
 
         def one_call(i):
-            call_model = panel[i] if panel else None
-            try:
-                text = (self._chat(prompt, call_model) if call_model
-                        else self._chat(prompt))
-                return text, self._parse_llm_response(text), call_model or self.model
-            except Exception as e:
-                logger.warning(f"Ensemble call {i + 1}/{k} "
-                               f"({call_model or self.model}) failed: {e}")
-                return "", {"_parse_failed": True}, call_model or self.model
+            """One panel vote. Failures are RETURNED, never raised, so one
+            flaky vendor cannot take the whole committee down — but every
+            drop is now logged with the model name and the reason, and is
+            retried once when the release is still far enough away.
 
+            Both failure modes matter and used to be indistinguishable: an
+            exception (timeout/429) was logged, while an HTTP 200 carrying
+            unusable content — a reasoning model burning max_tokens before
+            emitting any JSON — was dropped with NO trace at all. That is
+            how a 3-model panel silently became a 2-vote coin flip."""
+            call_model = panel[i] if panel else None
+            label = call_model or self.model
+            reason = ""
+            text = ""
+            for attempt in (1, 2):
+                try:
+                    text = (self._chat(prompt, call_model) if call_model
+                            else self._chat(prompt))
+                except Exception as e:
+                    text, reason = "", f"call raised: {e}"
+                else:
+                    parsed = self._parse_llm_response(text)
+                    if not parsed.get('_parse_failed'):
+                        if attempt == 2:
+                            logger.info(f"Ensemble vote {label}: recovered on retry")
+                        return text, parsed, label, ""
+                    reason = (f"unparseable reply ({len(text or '')} chars): "
+                              f"{(text or '')[:200]!r}")
+                # A retry is another full call — only when a 60s call still
+                # fits before the release, same margin as the single-call path
+                if attempt == 1 and self._seconds_until(event) > 90:
+                    logger.warning(f"Ensemble vote {label} failed ({reason}) "
+                                   f"— retrying once")
+                    continue
+                logger.warning(f"Ensemble vote DROPPED — {label}: {reason}")
+                return text or "", {"_parse_failed": True}, label, reason
+
+        # WALL-CLOCK DEADLINE. pool.map waited for the SLOWEST call, so a single
+        # hung vendor could push the whole decision past the release: the signal
+        # endpoint then answered "event has already passed" and the event was
+        # silently skipped even though the other models had replied in seconds.
+        # Aggregate whatever arrived in time instead of missing the trade.
+        deadline = max(self._seconds_until(event) - ENSEMBLE_DEADLINE_MARGIN,
+                       ENSEMBLE_MIN_WAIT_SECONDS)
+        pool = ThreadPoolExecutor(max_workers=k)
         try:
-            with ThreadPoolExecutor(max_workers=k) as pool:
-                results = list(pool.map(one_call, range(k)))
+            futures = [pool.submit(one_call, i) for i in range(k)]
+            wait(futures, timeout=deadline)
+            results = []
+            for i, f in enumerate(futures):
+                if not f.done():
+                    label = panel[i] if panel else self.model
+                    logger.warning(
+                        f"Ensemble vote ABANDONED — {label}: still running "
+                        f"after the {deadline:.0f}s deadline"
+                    )
+                    results.append(("", {"_parse_failed": True}, label,
+                                    f"no reply within {deadline:.0f}s deadline"))
+                    continue
+                try:
+                    results.append(f.result())
+                except Exception as e:
+                    label = panel[i] if panel else self.model
+                    logger.warning(f"Ensemble vote DROPPED — {label}: {e}")
+                    results.append(("", {"_parse_failed": True}, label, str(e)))
         except Exception as e:
             logger.error(f"Ensemble execution failed: {e}")
             return self._rule_based_decision(event, data_context)
+        finally:
+            # Never block on an abandoned call: cancel what has not started and
+            # let a running one die on its own HTTP timeout.
+            pool.shutdown(wait=False, cancel_futures=True)
 
-        votes, raws = [], []
-        for text, parsed, vote_model in results:
+        votes, raws, failures = [], [], []
+        for text, parsed, vote_model, fail_reason in results:
             # Label raw replies per model in panel mode — the context dump
             # is unreadable otherwise (three vendors, one blob)
             raws.append((f"[{vote_model}]\n" if panel else "")
                         + (text or "(call failed)"))
             if parsed.get('_parse_failed'):
+                failures.append({"model": vote_model,
+                                 "reason": fail_reason or "unknown"})
                 continue
             votes.append({
                 "direction": self._normalize_direction(parsed.get('direction')),
@@ -1224,6 +1331,18 @@ decision in JSON format."""
         if not votes:
             logger.warning("Ensemble: no parseable vote — rule-based fallback")
             return self._rule_based_decision(event, data_context)
+        # A vote that never arrived is NOT an abstention: the committee is
+        # smaller than configured and every downstream reader must be able
+        # to see that. `degraded` rides the decision into the dashboard, the
+        # context dump and the reasoning string.
+        degraded = bool(failures)
+        degraded_note = ""
+        if degraded:
+            lost = ", ".join(f["model"] for f in failures)
+            degraded_note = (f"PANEL DEGRADED {len(votes)}/{k} "
+                             f"(no vote from {lost}). ")
+            logger.warning(f"Ensemble panel degraded to {len(votes)}/{k} "
+                           f"valid votes — missing: {lost}")
 
         dirs = [v["direction"] for v in votes]
         counts = {d: dirs.count(d) for d in sorted(set(dirs))}
@@ -1235,6 +1354,9 @@ decision in JSON format."""
         if panel:
             meta["panel"] = list(panel)
             meta["anchor"] = panel[0]
+        if degraded:
+            meta["degraded"] = True
+            meta["failures"] = failures
 
         def _median(vals):
             vals = sorted(vals)
@@ -1310,17 +1432,32 @@ decision in JSON format."""
                     agreement = len(votes_for) / len(votes)
                     confidence = (sum(v["confidence"] for v in votes_for)
                                   / len(votes_for)) * agreement
-                    reasoning = (f"ENSEMBLE (force mode) votes {counts} -> "
-                                 f"majority {top}, agreement {agreement:.2f}. "
+                    # QUORUM: one surviving vote is not a "majority" and its
+                    # agreement is not 1.00 — that label made a panel of one
+                    # look like a panel of three. Force mode may never SKIP
+                    # (documented invariant), so the trade still goes out; it
+                    # is just described as the single opinion it really is.
+                    if len(votes) < ENSEMBLE_MIN_QUORUM:
+                        what = (f"NO QUORUM {len(votes)}/{k} — {top} is one "
+                                f"model's opinion, not a panel decision")
+                        logger.warning(f"Ensemble force-mode below quorum: "
+                                       f"{len(votes)}/{k} valid -> {top}")
+                    else:
+                        what = (f"votes {counts} -> majority {top}, "
+                                f"agreement {agreement:.2f}")
+                        logger.info(f"Ensemble force-mode majority: "
+                                    f"{counts} -> {top}")
+                    reasoning = (degraded_note
+                                 + f"ENSEMBLE (force mode) {what}. "
                                  + representative_reasoning(votes_for))
-                    logger.info(f"Ensemble force-mode majority: {counts} -> {top}")
                     return build(top, confidence, votes_for, reasoning)
                 # All-SKIP or a dead BUY/SELL tie: same resolver as the
                 # single-call force path (rule scores, not alphabet)
                 direction, note = self._forced_direction(data_context)
                 what = ("tie" if buysell
                         else f"all {len(votes)} votes SKIP")
-                reasoning = (f"ENSEMBLE (force mode): {what} ({counts}); {note}")
+                reasoning = (degraded_note
+                             + f"ENSEMBLE (force mode): {what} ({counts}); {note}")
                 return build(direction, min(v["confidence"] for v in votes),
                              votes, reasoning)
 
@@ -1342,7 +1479,11 @@ decision in JSON format."""
                     if confirms and not opposed:
                         votes_for = [anchor] + confirms
                         anchor_text = anchor["parsed"].get('reasoning')
-                        reasoning = (f"ENSEMBLE panel {len(votes_for)}/{k} {d} "
+                        # degraded_note matters most HERE: a model that never
+                        # answered cannot veto, so "no veto" is only as strong
+                        # as the number of models that actually voted.
+                        reasoning = (degraded_note
+                                     + f"ENSEMBLE panel {len(votes_for)}/{k} {d} "
                                      f"(anchor + {len(confirms)} confirm, no veto). "
                                      + (str(anchor_text) if anchor_text
                                         else 'LLM decision'))
@@ -1362,13 +1503,15 @@ decision in JSON format."""
                 return build('SKIP',
                              anchor["confidence"] if anchor
                              else _median([v["confidence"] for v in votes]),
-                             votes, f"ENSEMBLE SKIP: {why} ({counts}).")
+                             votes,
+                             degraded_note + f"ENSEMBLE SKIP: {why} ({counts}).")
 
-            unanimous = (len(votes) >= 2 and len(counts) == 1
+            unanimous = (len(votes) >= ENSEMBLE_MIN_QUORUM and len(counts) == 1
                          and dirs[0] in ('BUY', 'SELL'))
             if unanimous:
                 confidence = _median([v["confidence"] for v in votes])
-                reasoning = (f"ENSEMBLE {len(votes)}/{k} unanimous {dirs[0]} "
+                reasoning = (degraded_note
+                             + f"ENSEMBLE {len(votes)}/{k} unanimous {dirs[0]} "
                              f"(agreement gate passed). "
                              + representative_reasoning(votes))
                 logger.info(f"Ensemble unanimous: {len(votes)}/{k} {dirs[0]}")
@@ -1384,7 +1527,7 @@ decision in JSON format."""
                 why = f"votes split {counts} — no unanimity"
             logger.info(f"Ensemble SKIP: {why}")
             return build('SKIP', _median([v["confidence"] for v in votes]),
-                         votes, f"ENSEMBLE SKIP: {why}.")
+                         votes, degraded_note + f"ENSEMBLE SKIP: {why}.")
         except Exception as e:
             logger.error(f"Ensemble aggregation error: {e}")
             return self._rule_based_decision(event, data_context)
