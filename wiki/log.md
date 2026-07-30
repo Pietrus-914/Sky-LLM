@@ -165,3 +165,84 @@ adwersaryjnych weryfikacji + weryfikacja ręczna. **661 testów zielonych, EA
 - „Tryb force łamie governance panelu" — SKIP jest tam wyłączony z definicji
   (kontrakt trybu demo); realną luką było tylko traktowanie padniętego
   wywołania jak głosu SKIP.
+
+## 2026-07-30 INGEST | Niezależny review commita 8795b71 i naprawa 13 usterek
+
+Operator zlecił niezależny review poprzedniej rundy („chcę mieć pewność, że
+zadziała"). 6 recenzentów po wymiarach diffu + adwersaryjna weryfikacja
+każdego znaleziska (29 agentów): **13 potwierdzonych, 10 odrzuconych, 0
+niepewnych**. Wszystkie 13 naprawione. **679 testów zielonych, EA 0/0**,
+suite przechodzi też izolowanie per plik i przy odwróconej kolejności.
+
+### Najpoważniejsze (dostarczanie komend i flagi)
+- Komenda była zdejmowana z kolejki w momencie WPISANIA do odpowiedzi HTTP,
+  bez żadnego potwierdzenia — dostarczanie było „at-most-once", wbrew temu, co
+  twierdził komentarz. Teraz **potwierdź-albo-ponów**: serwer trzyma ostatnio
+  wysłaną komendę, aż raport brokera pokaże jej skutek (spadek wolumenu / SL na
+  żądanej cenie / dalsze raporty = CLOSE się nie wykonał), ponawia raz, a potem
+  odpuszcza. **PARTIAL_CLOSE nigdy nie jest ponawiany** (`REDELIVERABLE_ACTIONS`)
+  — gdyby pierwszy się wykonał, a my go jeszcze nie widzieli, drugi zamknąłby
+  kolejny kawałek (dwie połówki = 75% pozycji). Natychmiastowe ponowne pytanie
+  modelu tylko po nieodebranym CLOSE — inaczej odrzucany przez brokera SL
+  generowałby płatne wywołanie na każdym raporcie.
+- `partial_closed` i `sl_moved_to_be` ustawiane były na skutek WYSŁANIA komendy.
+  Teraz wynikają z obserwacji (`_sync_flags_from_broker`, detekcja spadku
+  wolumenu). Wcześniej zgubiona lub odrzucona komenda zostawiała flagę, która
+  kłamała, i blokowała regułę BE/partial do końca trade'u.
+- Reguła 1 fallbacku (SL na break-even) po przejściu na całościowe P/L mogła
+  wystawić stop **po złej stronie rynku**: zysk zrealizowany z partiala spełniał
+  próg, gdy otwarta noga była pod wodą. Dodane `pos.profit_usd > 0` oraz
+  `_stop_is_below_market` (także dla trailingu).
+
+### Wiring `forced` (3 znaleziska, jeden rdzeń)
+`forced` dodano tylko do raportu okresowego, a EA po restarcie re-adoptuje
+pozycję przez **`/api/position/opened`** — ten payload pola nie miał, a handler
+liczył flagę wyłącznie z `_last_served_signal`/`next_decision` (po restarcie
+serwera puste). Po rejestracji `needs_reconcile` jest już False, więc uczciwe
+`"forced":true` z kolejnych raportów nigdy nie było czytane. Teraz: pole jedzie
+też w `NotifyPositionOpened`, endpoint woła `resolve_forced`, a samo
+`resolve_forced` jest **sticky OR** — EA z metadanymi v1 raportuje uczciwe
+`false`, ale `decision_history` zna prawdę i wygrywa.
+
+### Pozostałe
+- `g_spreadBreachTicks` zerowany tylko w ścieżce sukcesu `ExecuteEventTrade` →
+  pozycja adoptowana po niejednoznacznym fillu dziedziczyła licznik i mogła
+  zostać zlikwidowana na pierwszym szerokim ticku. Reset dodany w ścieżce
+  adopcji i we wszystkich zamknięciach; po stronie serwera analogicznie w
+  gałęzi reconcile.
+- `_llm_inflight` był globalny dla managera i nie zwalniał się przy zmianie
+  pozycji → worker wiszący dla ZAMKNIĘTEJ pozycji blokował pierwszą konsultację
+  następnej (pierwsza minuta = faza szczytowa). Wprowadzona **generacja
+  dispatchu**: `_abandon_exit_worker` zwalnia slot, a spóźniony worker nie
+  wyczyści flagi należącej do nowszego wywołania. Nieudany `Thread.start()`
+  też zwalnia slot (wcześniej wyłączałby wyjścia LLM na cały proces).
+- Okno retry updatera liczone było z `secs_until` sprzed próby, więc „min 60 s"
+  nigdy nie obowiązywało — mierzone teraz od bieżącego czasu.
+- `_analysis_failures` wyciekało dla eventów, którym okno się zamknęło bez
+  wpisu do `analyzed_events` — wpisy mają timestamp i starzeją się po 24 h.
+- Sprzeczność w prompcie wyjścia: reguła #10 zabraniała cięcia po samym czasie,
+  a DECISION FRAMEWORK dwa akapity niżej nadal kazał zamykać w fazie fade/late
+  „jeśli nie ma znaczącego zysku". Framework przepisany na opis OKAZJI.
+- Dwa testy były vacuous (`test_llm_hold_returns_hold`,
+  `test_llm_error_falls_through_to_hold` — sprawdzały tylko odpowiedź
+  dispatchu, która zawsze jest HOLD) i dwa kolejne w
+  `TestCalibrationLineIsPerModel` (wiersze fixture'u nie mogły wyprodukować
+  linii ani przed, ani po poprawce — brak kontroli pozytywnej). Przepisane,
+  z jawną kontrolą pozytywną.
+
+### Higiena testów (znalezione przy weryfikacji, nie w diffie)
+`ensure_services()` woła się WEWNĄTRZ handlera i odbudowuje
+`server.position_manager`, jeśli serwisy nie były zainicjalizowane — mój nowy
+test przez to **zapisał zmyśloną pozycję (ticket 555) do prawdziwego
+`logs/active_position.json`**, a kolejny przebieg ją odtworzył. Na maszynie
+operatora taki snapshot blokuje nowe wejścia do rekoncyliacji. Plik usunięty
+(kopia w scratchpadzie), a w `conftest.py` doszła autouse-bariera
+`_no_production_position_state` kierująca `ACTIVE_POSITION_FILE` i
+`TRADE_HISTORY_FILE` na tmp — ta sama klasa wypadku co blokada refleksji z
+18.07 (87 fałszywych wpisów w produkcyjnym logu).
+
+### Odrzucone (10) — najważniejsze
+Deadlock w workerze (lock nie jest brany ponownie na ścieżce persist),
+niepoprawny kształt krotki po deadlinie, `max_retries=0` psujące inne wywołania
+(klient wejściowy nie jest dzielony), oraz teza o wyciekaniu szerokiego
+deviation do wejścia (jest przywracany bezwarunkowo przed każdym returnem).

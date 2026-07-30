@@ -124,6 +124,76 @@ class TestForcedFlagSurvivesReconcile:
         pm = self._pm(lookup=boom)
         assert pm.resolve_forced({"decision_id": "x"}) is False
 
+    def test_explicit_false_does_not_veto_the_decision_row(self):
+        """An EA that adopted a position from version-1 recovery metadata has
+        no stored marker and honestly reports False — decision_history still
+        holds the truth, so the flag is a STICKY OR, not a short circuit."""
+        pm = self._pm(lookup=lambda did: did == "was-forced")
+        assert pm.resolve_forced(
+            {"forced": False, "decision_id": "was-forced"}) is True
+        assert pm.resolve_forced(
+            {"forced": False, "decision_id": "genuine"}) is False
+
+    def test_position_opened_endpoint_honours_the_ea_flag(self, monkeypatch,
+                                                          tmp_path):
+        """/api/position/opened is the endpoint the EA actually uses to
+        re-adopt a position after a restart — the path where the served-signal
+        lineage is already gone."""
+        import server
+        from position_manager import PositionManager
+        # ensure_services() runs INSIDE the handler and rebuilds
+        # server.position_manager when services were never initialised, which
+        # would discard the patch below (and, before the conftest guard, wrote
+        # the real logs/active_position.json). Initialise first, then patch.
+        server.ensure_services()
+        pm = PositionManager(exit_engine=None,
+                             forced_lookup=lambda did: False,
+                             state_file=str(tmp_path / "active.json"))
+        monkeypatch.setattr(server, "position_manager", pm)
+        monkeypatch.setattr(server, "_last_served_signal", None)
+        monkeypatch.setattr(server, "next_decision", None)
+        server.app.config['TESTING'] = True
+
+        with server.app.test_client() as c:
+            resp = c.post('/api/position/opened', json={
+                "ticket": "555", "position_id": "555", "symbol": "USDCAD",
+                "direction": "BUY", "entry_price": 1.3700, "lots": 0.5,
+                "remaining_lots": 0.5, "max_loss_usd": 100.0,
+                "tick_value": 10.0, "decision_id": "abc",
+                "forced": True, "recovered": True,
+            })
+        assert resp.status_code == 200
+        assert pm.position is not None
+        assert pm.position.forced is True
+
+    def test_position_opened_endpoint_falls_back_to_history(self, monkeypatch,
+                                                            tmp_path):
+        """Old EA build: no forced field in the payload at all."""
+        import server
+        from position_manager import PositionManager
+        # ensure_services() runs INSIDE the handler and rebuilds
+        # server.position_manager when services were never initialised, which
+        # would discard the patch below (and, before the conftest guard, wrote
+        # the real logs/active_position.json). Initialise first, then patch.
+        server.ensure_services()
+        pm = PositionManager(exit_engine=None,
+                             forced_lookup=lambda did: did == "abc",
+                             state_file=str(tmp_path / "active.json"))
+        monkeypatch.setattr(server, "position_manager", pm)
+        monkeypatch.setattr(server, "_last_served_signal", None)
+        monkeypatch.setattr(server, "next_decision", None)
+        server.app.config['TESTING'] = True
+
+        with server.app.test_client() as c:
+            resp = c.post('/api/position/opened', json={
+                "ticket": "556", "position_id": "556", "symbol": "USDCAD",
+                "direction": "BUY", "entry_price": 1.3700, "lots": 0.5,
+                "remaining_lots": 0.5, "max_loss_usd": 100.0,
+                "tick_value": 10.0, "decision_id": "abc", "recovered": True,
+            })
+        assert resp.status_code == 200
+        assert pm.position.forced is True
+
     def test_reconcile_report_marks_the_position_forced(self):
         from datetime import datetime, timezone
         pm = self._pm()

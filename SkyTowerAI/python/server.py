@@ -64,7 +64,7 @@ analyzed_events = {}  # {"event_key": datetime_analyzed}
 # for 24h on the FIRST failure, so one transient error (network blip, full
 # disk) ended trading for that release even with most of the preload window
 # left. Bounded so a permanent error still cannot loop forever.
-_analysis_failures = {}  # {"event_key": attempts}
+_analysis_failures = {}  # {"event_key": (attempts, last_failure_utc)}
 MAX_ANALYSIS_ATTEMPTS = 3
 # Room needed before a retry is worth starting (a full panel plus serving)
 MIN_ANALYSIS_RETRY_SECONDS = 60
@@ -2026,6 +2026,17 @@ def position_opened():
                 entry_reasoning = next_decision.reasoning
                 forced_flag = getattr(next_decision, 'forced', False)
 
+        # forced is STICKY: any source that knows the entry was a
+        # FORCE_DECISION coin flip wins. This is the endpoint the EA actually
+        # uses to re-adopt a position after a restart, and after a server
+        # restart _last_served_signal and next_decision are both empty — so
+        # without the EA's own flag (and the decision_history fallback behind
+        # it) a demo coin flip re-registered as a genuine trade and every
+        # downstream forced filter was defeated for the rest of its life.
+        forced_flag = bool(forced_flag) or position_manager.resolve_forced(
+            dict(data, decision_id=decision_id)
+        )
+
         registration = position_manager.on_position_opened(
             data,
             entry_reasoning=entry_reasoning,
@@ -2496,10 +2507,19 @@ def _should_retry_analysis(attempts: int, retry_room_seconds: int) -> bool:
 
 
 def _cleanup_analysis_failures():
-    """Drop failure counters for events that are no longer candidates, so a
+    """Drop failure counters that can no longer influence anything, so a
     long-running process cannot accumulate them (the 24/7 machine never
-    restarts). Keyed the same way as analyzed_events."""
-    for key in [k for k in _analysis_failures if k in analyzed_events]:
+    restarts).
+
+    Retiring on "the event is in analyzed_events" alone is not enough: an
+    event whose retry was scheduled but whose window then closed is never
+    analyzed, never marked, and simply falls out of the scan — its counter
+    would live forever. Age them out as well, on the same 24h horizon the
+    analyzed_events cleanup uses.
+    """
+    now = utcnow()
+    for key in [k for k, (_, seen) in _analysis_failures.items()
+                if k in analyzed_events or (now - seen).total_seconds() > 86400]:
         del _analysis_failures[key]
 
 
@@ -2824,9 +2844,18 @@ def background_decision_updater():
                     # the next scan; give up after MAX_ANALYSIS_ATTEMPTS (or
                     # when no room is left) so a permanent error cannot loop.
                     key = _analyzed_event_key(event_to_analyze)
-                    attempts = _analysis_failures.get(key, 0) + 1
-                    _analysis_failures[key] = attempts
-                    retry_room = secs_until - TRADING_CONFIG['entry_seconds_before']
+                    attempts = _analysis_failures.get(key, (0, utcnow()))[0] + 1
+                    _analysis_failures[key] = (attempts, utcnow())
+                    # Room must be measured NOW, not from the secs_until read
+                    # before the attempt: a failed analysis can burn 20-60s (or
+                    # the panel's whole deadline), so the pre-attempt value
+                    # overstates the window by the length of the failure and
+                    # would authorise a retry that lands after the entry
+                    # moment — paying for a panel whose answer /api/signal
+                    # refuses to serve.
+                    retry_room = int(
+                        (evt_time - utcnow()).total_seconds()
+                    ) - TRADING_CONFIG['entry_seconds_before']
                     if not _should_retry_analysis(attempts, retry_room):
                         logger.error(
                             f"Giving up on {event_to_analyze.event_name} after "

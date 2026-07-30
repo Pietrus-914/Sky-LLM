@@ -278,59 +278,66 @@ class TestPositionLifecycle:
 # ============================================================================
 
 class TestFlagManagement:
-    """Test that position flags are set correctly after commands."""
+    """Flags follow the BROKER, not our intentions.
 
-    def test_sl_moved_to_be_flag_set_after_modify_sl(self, pm):
-        """MODIFY_SL close to entry should set sl_moved_to_be flag."""
+    sl_moved_to_be enables trailing and disables the break-even rule;
+    partial_closed disables the partial rule and is shown to the exit model.
+    Setting them because a command was SENT made them lie whenever it did not
+    execute — a lost response, a broker rejection, a stop on the wrong side of
+    the market — and the server then never re-tried.
+    """
+
+    def test_sl_flag_needs_the_broker_to_confirm_the_stop(self, pm):
         pm.on_position_opened(make_position_data(entry_price=0.6200))
-
-        # Simulate a MODIFY_SL command close to entry price
-        cmd = PositionCommand(
+        pm.pending_command = PositionCommand(
             action="MODIFY_SL",
             sl_price=0.6201,  # 1 pip above entry — within 2-pip tolerance
         )
-        pm.pending_command = cmd
 
-        # update_position should consume pending command and set the flag
-        pm.update_position(make_report_data(profit_usd=35.0))
+        # Command served, but the EA still reports the ORIGINAL stop
+        pm.update_position(make_report_data(profit_usd=35.0, sl=0.6170))
+        assert pm.position.sl_moved_to_be is False
+
+        # Now the broker reports the stop at break-even
+        pm.update_position(make_report_data(profit_usd=35.0, sl=0.6201))
         assert pm.position.sl_moved_to_be is True
 
     def test_be_tolerance_stops_at_two_pips(self, pm):
         pm.on_position_opened(make_position_data(entry_price=0.6200))
-        pm._update_flags_from_command(
-            PositionCommand(action="MODIFY_SL", sl_price=0.6202)
-        )
+        pm.update_position(make_report_data(profit_usd=35.0, sl=0.6202))
         assert pm.position.sl_moved_to_be is True
 
-        pm.position.sl_moved_to_be = False
-        pm._update_flags_from_command(
-            PositionCommand(action="MODIFY_SL", sl_price=0.62021)
-        )
+    def test_stop_short_of_break_even_does_not_latch(self, pm):
+        """A stop still on the loss side of entry is not break-even."""
+        pm.on_position_opened(make_position_data(entry_price=0.6200))
+        pm.update_position(make_report_data(profit_usd=35.0, sl=0.61975))
         assert pm.position.sl_moved_to_be is False
+
+    def test_stop_past_break_even_latches(self, pm):
+        """The EA or an operator may trail beyond entry before we look."""
+        pm.on_position_opened(make_position_data(entry_price=0.6200))
+        pm.update_position(make_report_data(profit_usd=60.0, sl=0.6230))
+        assert pm.position.sl_moved_to_be is True
 
     def test_jpy_be_tolerance_uses_quote_currency(self, pm):
         pm.on_position_opened(
             make_position_data(symbol="USDJPY", entry_price=150.00)
         )
-        pm._update_flags_from_command(
-            PositionCommand(action="MODIFY_SL", sl_price=150.02)
-        )
+        pm.update_position(make_report_data(profit_usd=35.0, sl=150.02))
         assert pm.position.sl_moved_to_be is True
 
-        pm.position.sl_moved_to_be = False
-        pm._update_flags_from_command(
-            PositionCommand(action="MODIFY_SL", sl_price=150.021)
-        )
-        assert pm.position.sl_moved_to_be is False
+    def test_partial_closed_flag_follows_the_reported_volume(self, pm):
+        """The volume drop IS the evidence; the command alone is not."""
+        pm.on_position_opened(make_position_data(lots=0.50))
+        pm.pending_command = PositionCommand(action="PARTIAL_CLOSE",
+                                             close_percent=50)
 
-    def test_partial_closed_flag_set_after_partial_close(self, pm):
-        """PARTIAL_CLOSE command should set partial_closed flag."""
-        pm.on_position_opened(make_position_data())
+        pm.update_position(make_report_data(profit_usd=65.0,
+                                            remaining_lots=0.50))
+        assert pm.position.partial_closed is False
 
-        cmd = PositionCommand(action="PARTIAL_CLOSE", close_percent=50)
-        pm.pending_command = cmd
-
-        pm.update_position(make_report_data(profit_usd=65.0))
+        pm.update_position(make_report_data(profit_usd=65.0,
+                                            remaining_lots=0.25))
         assert pm.position.partial_closed is True
 
     def test_rule_based_no_repeat_sl_move_after_flag_set(self, pm):
@@ -573,8 +580,11 @@ class TestLLMOutsideLock:
         assert pm.wait_for_exit_worker(timeout=5.0)
         assert len(calls) == 1
 
-    def test_llm_hold_returns_hold(self, pm):
-        """LLM returning HOLD should result in HOLD response."""
+    def test_llm_hold_is_recorded_but_never_queued(self, pm):
+        """A HOLD must be journalled on the position yet never become a
+        command — queueing it would hand the EA a no-op with has_command=true
+        on the next report. Asserting only the dispatch response would pass
+        for ANY model answer, since the dispatch always answers HOLD."""
         mock_engine = MagicMock()
         mock_engine.decide.return_value = PositionCommand(
             action="HOLD", reason="AI: Let it run"
@@ -586,9 +596,17 @@ class TestLLMOutsideLock:
 
         result = pm.update_position(make_report_data(profit_usd=20.0))
         assert result["command"]["action"] == "HOLD"
+        assert pm.wait_for_exit_worker(timeout=5.0)
 
-    def test_llm_error_falls_through_to_hold(self, pm):
-        """LLM error should not crash — returns HOLD."""
+        assert pm.pending_command is None
+        assert pm.position.ai_decisions[-1]["action"] == "HOLD"
+        nxt = pm.update_position(make_report_data(profit_usd=20.0))
+        assert nxt["has_command"] is False
+
+    def test_llm_error_releases_the_worker_slot(self, pm):
+        """A raising model must not leave _llm_inflight set: that would block
+        every later exit consultation. Again, the dispatch response alone
+        cannot show this."""
         mock_engine = MagicMock()
         mock_engine.decide.side_effect = RuntimeError("API timeout")
 
@@ -598,6 +616,47 @@ class TestLLMOutsideLock:
 
         result = pm.update_position(make_report_data(profit_usd=20.0))
         assert result["command"]["action"] == "HOLD"
+        assert pm.wait_for_exit_worker(timeout=5.0)
+
+        assert pm._llm_inflight is False
+        assert pm.pending_command is None
+        # ...and the next due report can consult the model again
+        pm.last_llm_check = 0
+        pm.update_position(make_report_data(profit_usd=20.0))
+        assert pm.wait_for_exit_worker(timeout=5.0)
+        assert mock_engine.decide.call_count == 2
+
+    def test_worker_slot_is_freed_when_the_position_changes(self, pm):
+        """A worker still waiting on the model for a CLOSED position must not
+        block the next position's first consultation — the exit prompt calls
+        the first minute the peak phase."""
+        release = threading.Event()
+        seen = []
+
+        def slow_decide(_pos):
+            seen.append(_pos.ticket)
+            release.wait(timeout=5.0)
+            return PositionCommand(action="HOLD", reason="AI: developing")
+
+        mock_engine = MagicMock()
+        mock_engine.decide.side_effect = slow_decide
+        pm.exit_engine = mock_engine
+
+        pm.on_position_opened(make_position_data(ticket=111))
+        pm.last_llm_check = 0
+        pm.update_position(make_report_data(ticket=111, profit_usd=10.0))
+
+        # Position A closes and B opens while A's worker is still blocked
+        pm.on_position_closed({"ticket": 111, "profit": -5.0,
+                               "close_price": 0.6190, "reason": "SL"})
+        pm.on_position_opened(make_position_data(ticket=222))
+        assert pm._llm_inflight is False
+
+        pm.last_llm_check = 0
+        pm.update_position(make_report_data(ticket=222, profit_usd=10.0))
+        release.set()
+        assert pm.wait_for_exit_worker(timeout=5.0)
+        assert 222 in seen, "the new position must get its own consultation"
 
 
 # ============================================================================

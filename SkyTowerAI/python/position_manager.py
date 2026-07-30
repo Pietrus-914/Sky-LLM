@@ -31,6 +31,18 @@ PNL_SAMPLE_CAP = 12
 # price of the session. A spread at 2x the threshold still closes immediately.
 SPREAD_BREACHES_TO_CLOSE = 2
 
+# How many times one command may be written into an EA response before the
+# server gives up on it and re-consults the exit model. 2 = the original
+# delivery plus a single retry for a lost response; more would keep pushing a
+# decision made against stale market state.
+MAX_COMMAND_DELIVERIES = 2
+
+# Commands whose effect is IDEMPOTENT, so re-sending one after a lost response
+# cannot do damage: closing an already-closed position is a no-op, and setting
+# the same stop twice is the same stop. PARTIAL_CLOSE is deliberately absent —
+# executing it twice would close a second slice of the position.
+REDELIVERABLE_ACTIONS = ("CLOSE", "MODIFY_SL", "MODIFY_TP")
+
 
 class PositionConflictError(ValueError):
     """A lifecycle message refers to a different broker position."""
@@ -155,9 +167,24 @@ class PositionManager:
         # path the guardrail commands already used.
         self._llm_thread: Optional[threading.Thread] = None
         self._llm_inflight: bool = False
+        # Generation of the dispatch that owns _llm_inflight. A worker only
+        # clears the flag if it is still the current dispatch, so abandoning a
+        # stale worker (position closed / new position opened) can free the
+        # slot immediately without the stale worker later clearing a flag that
+        # now belongs to a NEWER dispatch — which would allow two concurrent
+        # exit calls on one position.
+        self._llm_generation: int = 0
 
         # Consecutive emergency-spread breaches on the current position
         self._spread_breaches: int = 0
+
+        # Last command written into an EA response, kept until the next report
+        # shows whether it executed. Delivery is confirm-then-retire rather
+        # than fire-and-forget: an HTTP response can be lost after the server
+        # already handled the request, and an exit command that evaporates is
+        # exactly the failure this path exists to prevent.
+        self._served_command: Optional[PositionCommand] = None
+        self._served_attempts: int = 0
 
         # Config
         self.config = POSITION_MANAGEMENT_CONFIG
@@ -646,6 +673,10 @@ class PositionManager:
                 if decision_id and not self.position.decision_id:
                     self.position.decision_id = decision_id
                 self.position.forced = self.position.forced or forced
+                # Same reset as the fresh-open branch: the debounce counter is
+                # manager-scoped, so a reconciled position must not inherit
+                # breaches counted before the reconnect.
+                self._spread_breaches = 0
                 self.recovery_state = "ready"
                 result = "reconciled"
                 logger.info(
@@ -663,8 +694,11 @@ class PositionManager:
                 )
                 self.daily_trades += 1
                 self.pending_command = None
+                self._served_command = None
+                self._served_attempts = 0
                 self.last_llm_check = 0.0
                 self._spread_breaches = 0
+                self._abandon_exit_worker()
                 self.recovery_state = "ready"
                 result = "opened"
 
@@ -855,6 +889,10 @@ class PositionManager:
             self.recent_trades = self.recent_trades[-50:]
             self.position = None
             self.pending_command = None
+            self._served_command = None
+            self._served_attempts = 0
+            self._spread_breaches = 0
+            self._abandon_exit_worker()
 
             try:
                 self.position_store.clear()
@@ -1031,20 +1069,68 @@ class PositionManager:
             if len(self.position.pnl_samples) > PNL_SAMPLE_CAP:
                 del self.position.pnl_samples[:-PNL_SAMPLE_CAP]
 
+            # Flags follow the BROKER, not our intentions (see
+            # _sync_flags_from_broker) — do this before anything reads them.
+            self._sync_flags_from_broker(data)
+
+            # 0. Settle whatever we served last time. A command that provably
+            # executed is retired; one whose effect is absent is re-served
+            # once, because the previous HTTP response can simply have been
+            # lost (EA POST timeout, terminal restart) and an exit command
+            # that evaporates is the failure this whole path exists to avoid.
+            # Re-delivery is gated on "the effect did NOT happen", so a
+            # duplicate PARTIAL_CLOSE is impossible.
+            if self._served_command is not None:
+                served = self._served_command
+                if self._command_effect_observed(served, data):
+                    logger.info(f"Command {served.action} confirmed by the "
+                                f"broker report")
+                    self._served_command = None
+                    self._served_attempts = 0
+                elif (self._served_attempts >= MAX_COMMAND_DELIVERIES
+                        or served.action not in REDELIVERABLE_ACTIONS):
+                    # Either we already retried, or the command is one that
+                    # must never be sent twice. PARTIAL_CLOSE is the latter: if
+                    # the first one DID execute and we simply cannot see it
+                    # yet, a second would close another slice (two 50% legs =
+                    # 75% of the position). Re-consulting the model with fresh
+                    # state is strictly safer than guessing.
+                    how = (f"after {self._served_attempts} deliveries"
+                           if served.action in REDELIVERABLE_ACTIONS
+                           else "and must not be re-sent")
+                    logger.warning(
+                        f"Command {served.action} not observed {how} — dropping it"
+                    )
+                    self._served_command = None
+                    self._served_attempts = 0
+                    # Only an undelivered CLOSE justifies paying for an
+                    # immediate extra model call. Forcing one after every
+                    # unobserved MODIFY_SL would bill a fresh exit call on
+                    # EVERY report (5-15s) whenever a broker keeps rejecting a
+                    # stop — the periodic interval is the right cadence there.
+                    if served.action == "CLOSE":
+                        self.last_llm_check = 0.0
+                elif self.pending_command is None:
+                    logger.warning(
+                        f"Command {served.action} had no observable effect — "
+                        f"re-serving (attempt {self._served_attempts + 1}/"
+                        f"{MAX_COMMAND_DELIVERIES})"
+                    )
+                    self.pending_command = served
+
             # 1. Check safety guardrails (immediate, no LLM needed)
             guardrail_cmd = self._check_guardrails()
             if guardrail_cmd:
                 self.pending_command = guardrail_cmd
                 self._persist_active_position(self.position)
-                return self._format_command_response(guardrail_cmd)
+                return self._serve_command(guardrail_cmd)
 
             # 2. Check if we already have a pending command (from previous LLM call)
             if self.pending_command:
                 cmd = self.pending_command
                 self.pending_command = None
-                self._update_flags_from_command(cmd)
                 self._persist_active_position(self.position)
-                return self._format_command_response(cmd)
+                return self._serve_command(cmd)
 
             # 3. Determine if LLM call is needed — prepare snapshot UNDER lock
             now = time.time()
@@ -1063,10 +1149,12 @@ class PositionManager:
                 if self._exit_engine_is_networked():
                     # Hand off and answer the EA immediately; the decision will
                     # be queued for one of the next reports (5-15s away).
+                    self._llm_generation += 1
+                    generation = self._llm_generation
                     self._llm_inflight = True
                     self._llm_thread = threading.Thread(
                         target=self._run_exit_llm,
-                        args=(pos_snapshot, snapshot_key),
+                        args=(pos_snapshot, snapshot_key, generation),
                         name="exit-llm",
                         daemon=True,
                     )
@@ -1074,7 +1162,15 @@ class PositionManager:
                     needs_llm = False
                     pos_snapshot = None
                     snapshot_key = ""
-                    self._llm_thread.start()
+                    try:
+                        self._llm_thread.start()
+                    except RuntimeError as e:
+                        # Thread could not start (resource exhaustion). Free
+                        # the slot, or exit decisions would be disabled for
+                        # the whole process lifetime with nothing logged.
+                        self._llm_inflight = False
+                        self._llm_thread = None
+                        logger.error(f"Could not start the exit-LLM worker: {e}")
             self._persist_active_position(self.position)
 
         # === PHASE 2: inline decision for a NON-networked engine ===
@@ -1112,32 +1208,36 @@ class PositionManager:
                 })
 
                 if llm_decision.action != "HOLD":
-                    self._update_flags_from_command(llm_decision)
                     self._persist_active_position(self.position)
-                    return self._format_command_response(llm_decision)
+                    return self._serve_command(llm_decision)
 
             self._persist_active_position(self.position)
             return self._hold_response()
 
     def resolve_forced(self, data: Dict) -> bool:
-        """Forced marker for a report that REBUILDS server state. The EA sends
-        it (recovery metadata v2), but an older build omits the field entirely
-        — and defaulting to False re-registers a FORCE_DECISION coin flip as a
-        genuine trade, defeating every downstream forced filter (track record,
-        trade outcomes, calibration, reflections). When the flag is absent but
-        the lineage id is known, ask the decision row instead of guessing."""
-        if "forced" in data:
-            return bool(data.get("forced"))
+        """Forced marker for a report that REBUILDS server state, resolved as
+        a STICKY OR over every source that could know.
+
+        Defaulting to False re-registers a FORCE_DECISION coin flip as a
+        genuine trade and defeats every downstream forced filter (track
+        record, trade outcomes, calibration, reflections) for the rest of that
+        trade's life. The EA's own flag is not authoritative enough to veto:
+        an EA that adopted a position from version-1 recovery metadata has no
+        stored marker and honestly reports False, while decision_history still
+        holds the truth for that decision_id. So an explicit True from EITHER
+        side wins, and only the absence of evidence everywhere means False.
+        """
+        if bool(data.get("forced")):
+            return True
         decision_id = str(data.get("decision_id") or "")
         if decision_id and self.forced_lookup:
             try:
-                resolved = bool(self.forced_lookup(decision_id))
-                if resolved:
+                if self.forced_lookup(decision_id):
                     logger.info(
-                        f"Reconcile report omitted 'forced'; decision "
-                        f"{decision_id} was forced — restored from history"
+                        f"Report did not mark the trade forced, but decision "
+                        f"{decision_id} was — restored from history"
                     )
-                return resolved
+                    return True
             except Exception as e:
                 logger.warning(f"Forced-flag lookup failed for {decision_id}: {e}")
         return False
@@ -1148,7 +1248,8 @@ class PositionManager:
         rule-based engine has no client and is dispatched inline."""
         return getattr(self.exit_engine, "client", None) is not None
 
-    def _run_exit_llm(self, pos_snapshot: OpenPosition, snapshot_key: str) -> None:
+    def _run_exit_llm(self, pos_snapshot: OpenPosition, snapshot_key: str,
+                      generation: int) -> None:
         """Worker body: ask the exit model, then queue the answer. Runs off the
         request thread so the EA is never blocked waiting for a model."""
         decision = None
@@ -1160,24 +1261,45 @@ class PositionManager:
             logger.error(f"LLM exit decision error: {e}")
         finally:
             with self.lock:
-                self._llm_inflight = False
+                # Only release the slot if this dispatch still owns it —
+                # otherwise a stale worker would clear a flag that now belongs
+                # to a newer dispatch and two exit calls could run at once.
+                if generation == self._llm_generation:
+                    self._llm_inflight = False
                 try:
                     self._queue_exit_decision(decision, snapshot_key)
                 except Exception as e:  # never let a worker die silently
                     logger.error(f"Queueing exit decision failed: {e}")
+
+    def _abandon_exit_worker(self) -> None:
+        """Free the exit-model slot on a position transition. Must be called
+        under self.lock. A worker still running for the OLD position keeps
+        going (its answer is dropped by the snapshot_key check), but it no
+        longer blocks the new position from being consulted — that block used
+        to cost the first minute of the next trade, the phase the exit prompt
+        itself calls the peak."""
+        if self._llm_inflight:
+            logger.info("Abandoning the in-flight exit-model call: the "
+                        "position it was asked about is gone")
+        self._llm_generation += 1
+        self._llm_inflight = False
 
     def _queue_exit_decision(self, decision: Optional[PositionCommand],
                              snapshot_key: str) -> None:
         """Record the decision on the position and queue a non-HOLD command for
         the next EA report. Must be called under self.lock.
 
-        Queuing instead of answering the in-flight request is the whole point:
-        the command now survives a timed-out or dropped HTTP response, exactly
-        like the guardrail commands. Flags are deliberately NOT updated here —
-        _update_flags_from_command runs when the command is actually DELIVERED
-        (step 2 of update_position), so a command that never reaches the EA
-        can no longer leave partial_closed/sl_moved_to_be lying about the
-        position's real state.
+        Queuing instead of answering the in-flight request is what makes the
+        command survive the timeout of the request that TRIGGERED the model —
+        the EA abandons its POST after 10s while the model is allowed 30s.
+        Delivery itself is then confirm-then-retire (see _serve_command and
+        _command_effect_observed): a command whose effect never shows up in a
+        broker report is re-served once, and flags are derived from the broker
+        rather than from having sent something.
+
+        NOTE this is NOT the same guarantee as the guardrail commands, which
+        are recomputed from position state on every report and are therefore
+        self-healing by construction.
         """
         if decision is None:
             return
@@ -1306,30 +1428,87 @@ class PositionManager:
 
         return None
 
-    def _update_flags_from_command(self, cmd: PositionCommand) -> None:
-        """
-        BUG-2 FIX: Update position flags after processing a command.
-        Must be called under self.lock.
+    def _serve_command(self, cmd: PositionCommand) -> Dict:
+        """Write a command into the response and remember it, so the NEXT
+        report can tell whether the EA actually executed it. Must be called
+        under self.lock."""
+        if cmd.action != "HOLD":
+            if self._served_command is not cmd:
+                self._served_attempts = 0
+            self._served_command = cmd
+            self._served_attempts += 1
+        return self._format_command_response(cmd)
+
+    def _sync_flags_from_broker(self, data: Dict) -> None:
+        """Derive the position flags from what the BROKER reports, not from
+        what we asked for. Must be called under self.lock.
+
+        These flags gate real behaviour — sl_moved_to_be enables trailing and
+        disables the break-even rule, partial_closed disables the partial rule
+        and shows up in the exit prompt. Setting them when a command was SENT
+        made them lie whenever the command did not execute (a lost response, a
+        broker rejection, a stop on the wrong side of the market): the server
+        then believed the trade was break-even-protected or already halved
+        while nothing had happened, and never re-tried.
+
+        partial_closed is set by the volume-drop detection in update_position,
+        which is an observation by construction; this method covers the stop.
         """
         if self.position is None:
             return
 
-        if cmd.action == "MODIFY_SL" and cmd.sl_price > 0:
-            # Check if SL was moved close to entry price (break-even)
-            pip_size = forex_pip_size(self.position.symbol)
-            be_tolerance = pip_size * 2  # 2 pips tolerance
-            if (
-                abs(cmd.sl_price - self.position.entry_price)
-                <= be_tolerance + pip_size * 1e-9
-            ):
-                self.position.sl_moved_to_be = True
-                logger.debug(f"Flag set: sl_moved_to_be = True "
-                             f"(SL {cmd.sl_price} ≈ entry {self.position.entry_price})")
+        reported_sl = self._safe_float(data.get("sl", self.position.sl))
+        if reported_sl <= 0 or not math.isfinite(reported_sl):
+            return
+        pip_size = forex_pip_size(self.position.symbol)
+        be_tolerance = pip_size * 2  # 2 pips tolerance
+        at_break_even = (
+            abs(reported_sl - self.position.entry_price)
+            <= be_tolerance + pip_size * 1e-9
+        )
+        # Only ever latches ON: past break-even the stop keeps trailing away
+        # from entry, and that must not un-set the flag.
+        if at_break_even and not self.position.sl_moved_to_be:
+            self.position.sl_moved_to_be = True
+            logger.info(f"Broker confirms SL at break-even "
+                        f"({reported_sl} ~ entry {self.position.entry_price})")
+        elif not self.position.sl_moved_to_be and self._stop_beyond_break_even(
+                reported_sl):
+            self.position.sl_moved_to_be = True
+            logger.info(f"Broker confirms SL past break-even ({reported_sl})")
 
-        elif cmd.action == "PARTIAL_CLOSE":
-            self.position.partial_closed = True
-            logger.debug(f"Flag set: partial_closed = True "
-                         f"(close_percent={cmd.close_percent})")
+    def _stop_beyond_break_even(self, sl_price: float) -> bool:
+        """True when the reported stop is already better than entry (the EA or
+        an operator may have trailed it past break-even before we noticed)."""
+        pos = self.position
+        if pos is None:
+            return False
+        if pos.direction == "BUY":
+            return sl_price > pos.entry_price
+        return sl_price < pos.entry_price
+
+    def _command_effect_observed(self, cmd: PositionCommand, data: Dict) -> bool:
+        """Did the EA actually carry out the command we served last time?
+
+        Evidence comes from fields the EA already sends, so this needs no
+        protocol change:
+          * PARTIAL_CLOSE — the reported volume dropped (the volume-drop
+            branch of update_position has already booked it);
+          * MODIFY_SL — the reported stop matches the one we asked for;
+          * CLOSE — receiving ANOTHER report for this position is proof it did
+            NOT execute (a real close arrives on /api/position/closed).
+        """
+        if self.position is None:
+            return True
+        if cmd.action == "PARTIAL_CLOSE":
+            return bool(self.position.partial_closed)
+        if cmd.action == "MODIFY_SL":
+            reported_sl = self._safe_float(data.get("sl", self.position.sl))
+            pip_size = forex_pip_size(self.position.symbol)
+            return abs(reported_sl - cmd.sl_price) <= pip_size + pip_size * 1e-9
+        if cmd.action == "CLOSE":
+            return False
+        return True
 
     @staticmethod
     def _hold_response() -> Dict:

@@ -481,6 +481,12 @@ void TryRecoverOpenPosition()
    g_lastKnownProfit = PositionGetDouble(POSITION_PROFIT);
    g_lastTradeTime = (datetime)PositionGetInteger(POSITION_TIME);
    g_closeRetryCount = 0;
+   // Every ADOPTION of a position starts the spread debounce from scratch.
+   // The counter is manager-global, not per-position: without this reset an
+   // adopted position inherits breaches counted on the PREVIOUS trade (or on
+   // the last ticks before it closed) and can be liquidated on its very first
+   // wide tick — exactly what the debounce exists to prevent.
+   g_spreadBreachTicks = 0;
    g_lastPositionReport = 0;
    g_waitingForEvent = false;
    g_positionRecovered = true;
@@ -2016,6 +2022,7 @@ void ManageOpenPositions()
       g_realizedPnL = 0.0;
       g_lastSeenLots = 0.0;
       g_closeRetryCount = 0;
+      g_spreadBreachTicks = 0;
       g_smartExit.OnPositionClosed();
       g_aiManagementActive = false;
       ResetSmartExitState();
@@ -2323,12 +2330,18 @@ void NotifyPositionOpened()
       "\"tick_value\":%.4f,\"account_balance\":%.2f,"
       "\"max_loss_usd\":%.2f,\"open_time\":%I64d,"
       "\"event_name\":\"%s\",\"decision_id\":\"%s\","
-      "\"recovered\":%s,\"reconcile\":true}",
+      "\"forced\":%s,\"recovered\":%s,\"reconcile\":true}",
       ticketText, positionIdText, magicText, symbol, g_eventDirection,
       entryPrice, lots, sl, tp,
       tickValue, balance,
       g_maxLossUSD, openTimeUtc,
       EscapeJson(g_currentEventName), EscapeJson(g_tradeDecisionId),
+      // THIS is the endpoint used to re-adopt a position after a restart, so
+      // the forced marker matters here even more than in the periodic report:
+      // after a server restart the served-signal lineage is gone and this
+      // flag is the only thing that stops a demo coin flip from being
+      // recorded as a genuine trade.
+      (g_tradeForced ? "true" : "false"),
       g_positionRecovered ? "true" : "false"
    );
 
@@ -2739,6 +2752,7 @@ void ClosePosition(string reason)
       g_realizedPnL = 0.0;
       g_lastSeenLots = 0.0;
       g_closeRetryCount = 0;
+      g_spreadBreachTicks = 0;
       g_smartExit.OnPositionClosed();
       g_aiManagementActive = false;
       ResetEventWait();

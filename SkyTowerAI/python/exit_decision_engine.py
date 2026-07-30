@@ -32,11 +32,11 @@ POSITION MANAGEMENT PRINCIPLES:
 9. Zone bias: positive = bullish pressure (good for BUY), negative = bearish pressure (good for SELL)
 10. Cutting losses: NEVER cut on elapsed time alone. A news spike routinely puts a fresh position underwater by the spread alone, and the broker stop loss already caps the worst case. Cut when BOTH are true: the loss is MATERIAL (roughly a quarter of the risk budget or worse - see RISK BUDGET) AND the RECENT TRAJECTORY shows no recovery from the max drawdown. A small drawdown at minute 5 on a delayed reaction is noise, not a failed thesis; closing it converts an open option into a certain loss.
 
-DECISION FRAMEWORK:
+DECISION FRAMEWORK (phases describe the OPPORTUNITY, they are not close triggers on their own - principle 10 governs losing positions in every phase):
 - First minutes (0-3 min): Be patient, let the news reaction develop. Only act on extreme moves.
 - Peak phase (3-10 min): This is where most profit is made. Trail SL to protect gains.
-- Fade phase (10-20 min): Momentum fading. If not already in significant profit, consider closing.
-- Late phase (20-30 min): Close unless there's a very strong reason to hold.
+- Fade phase (10-20 min): Momentum fading. Bank or protect PROFIT here. A position that is merely underwater without a material loss is not a reason to close - the stop loss already caps it.
+- Late phase (20-30 min): Wind the trade down; max hold ends it anyway. Still do not realize a small loss just because time passed.
 
 AVAILABLE ACTIONS:
 - HOLD: Do nothing, let position run. Use when position is developing favorably.
@@ -53,6 +53,24 @@ Keep reasoning under 40 words - the response must NEVER be cut off before "actio
     "close_percent": 0,
     "action": "HOLD"
 }"""
+
+
+def _stop_is_below_market(pos: OpenPosition, sl_price: float,
+                          margin: float) -> bool:
+    """True when sl_price is on the LOSS side of the current price, i.e. a
+    stop the broker can actually accept (below the bid for a BUY, above the
+    ask for a SELL), with a small margin so a stop is not placed right on top
+    of the market. Named for the BUY case; the SELL branch is mirrored.
+
+    A stop on the wrong side is not merely rejected: the server marks the
+    command applied on delivery, so the position would be recorded as
+    break-even-protected while its real stop never moved.
+    """
+    if not pos.current_price or pos.current_price <= 0:
+        return False
+    if pos.direction == "BUY":
+        return sl_price < pos.current_price - margin
+    return sl_price > pos.current_price + margin
 
 
 class ExitDecisionEngine:
@@ -316,14 +334,20 @@ Respond with JSON only."""
         # Identical to profit_usd before any partial close (realized_usd = 0).
         total_pnl = pos.profit_usd + pos.realized_usd
 
-        # Rule 1: Move SL to break-even after $30+ profit
-        if total_pnl > 30.0 and not pos.sl_moved_to_be:
+        # Rule 1: Move SL to break-even after $30+ profit.
+        # `pos.profit_usd > 0` is NOT redundant with the total: realized profit
+        # from an earlier partial can satisfy the total while the REMAINING leg
+        # is underwater, and an entry+buffer stop is only a valid stop while
+        # price is on the profitable side of entry. Without it a break-even
+        # order lands on the wrong side of the market, the broker rejects it,
+        # and the server still marks the position break-even-protected.
+        if total_pnl > 30.0 and not pos.sl_moved_to_be and pos.profit_usd > 0:
             pip_size = forex_pip_size(pos.symbol)
             buffer = pip_size  # 1 pip buffer
 
             if pos.direction == "BUY":
                 new_sl = pos.entry_price + buffer
-                if new_sl > pos.sl:
+                if new_sl > pos.sl and _stop_is_below_market(pos, new_sl, buffer):
                     return PositionCommand(
                         action="MODIFY_SL",
                         sl_price=new_sl,
@@ -331,7 +355,8 @@ Respond with JSON only."""
                     )
             else:
                 new_sl = pos.entry_price - buffer
-                if new_sl < pos.sl or pos.sl == 0:
+                if ((new_sl < pos.sl or pos.sl == 0)
+                        and _stop_is_below_market(pos, new_sl, buffer)):
                     return PositionCommand(
                         action="MODIFY_SL",
                         sl_price=new_sl,
@@ -353,15 +378,17 @@ Respond with JSON only."""
 
             if pos.direction == "BUY":
                 potential_sl = pos.current_price - trail_distance
-                if potential_sl > pos.sl:
+                if (potential_sl > pos.sl
+                        and _stop_is_below_market(pos, potential_sl, pip_size)):
                     return PositionCommand(
                         action="MODIFY_SL",
                         sl_price=potential_sl,
-                        reason=f"Rule: Trailing SL (profit ${pos.profit_usd:.0f})",
+                        reason=f"Rule: Trailing SL (profit ${total_pnl:.0f})",
                     )
             else:
                 potential_sl = pos.current_price + trail_distance
-                if potential_sl < pos.sl or pos.sl == 0:
+                if ((potential_sl < pos.sl or pos.sl == 0)
+                        and _stop_is_below_market(pos, potential_sl, pip_size)):
                     return PositionCommand(
                         action="MODIFY_SL",
                         sl_price=potential_sl,

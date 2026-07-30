@@ -22,7 +22,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'python'))
 
 from exit_decision_engine import ExitDecisionEngine
-from position_manager import (PositionManager, OpenPosition,
+from position_manager import (PositionManager, OpenPosition, PositionCommand,
                               SPREAD_BREACHES_TO_CLOSE)
 
 
@@ -80,9 +80,38 @@ class TestFallbackUsesWholeTradePnl:
         assert "Losing" in cmd.reason
 
     def test_break_even_move_counts_realized_profit(self, engine):
-        pos = make_position(profit_usd=5.0, realized_usd=40.0)
+        """Whole-trade threshold, but the OPEN leg must still be in profit and
+        price above entry — otherwise an entry+1pip stop lands on the wrong
+        side of the market."""
+        pos = make_position(profit_usd=5.0, realized_usd=40.0,
+                            current_price=1.3730)   # BUY, entry 1.3700
         cmd = engine._rule_based_decision(pos)
         assert cmd.action == "MODIFY_SL"
+        assert cmd.sl_price < pos.current_price
+
+    def test_no_break_even_move_while_the_open_leg_is_underwater(self, engine):
+        """Realized profit from a partial can satisfy the total while the
+        remaining leg is losing — a break-even stop would then be placed above
+        the market for a BUY, be rejected, and the server would still record
+        the position as break-even-protected."""
+        pos = make_position(profit_usd=-5.0, realized_usd=40.0,
+                            current_price=1.3699)   # below entry 1.3700
+        cmd = engine._rule_based_decision(pos)
+        assert cmd.action != "MODIFY_SL"
+
+    def test_no_break_even_move_when_price_sits_on_entry(self, engine):
+        """Price exactly at entry leaves no room for a stop plus buffer."""
+        pos = make_position(profit_usd=1.0, realized_usd=40.0,
+                            current_price=1.3700)
+        assert engine._rule_based_decision(pos).action != "MODIFY_SL"
+
+    def test_sell_break_even_move_respects_the_market(self, engine):
+        pos = make_position(direction="SELL", entry_price=1.3700,
+                            current_price=1.3670, profit_usd=5.0,
+                            realized_usd=40.0, sl=1.3740)
+        cmd = engine._rule_based_decision(pos)
+        assert cmd.action == "MODIFY_SL"
+        assert cmd.sl_price > pos.current_price
 
 
 class TestEmergencySpreadDebounce:
@@ -127,6 +156,31 @@ class TestEmergencySpreadDebounce:
         """A confirmation window of a couple of reports (5-15s each) must not
         turn into minutes of exposure."""
         assert 2 <= SPREAD_BREACHES_TO_CLOSE <= 3
+
+    def test_reconciled_position_does_not_inherit_breaches(self):
+        """The counter is manager-scoped: a position adopted after a reconnect
+        must not be liquidated on its first wide tick because of breaches
+        counted before it existed."""
+        pm = PositionManager(exit_engine=None)
+        snapshot = {
+            "ticket": 4242, "position_id": "4242", "symbol": "USDCAD",
+            "direction": "BUY", "entry_price": 1.3700, "lots": 1.0,
+            "remaining_lots": 1.0, "max_loss_usd": 100.0, "tick_value": 10.0,
+        }
+        pm.on_position_opened(snapshot)
+        pm._spread_breaches = SPREAD_BREACHES_TO_CLOSE - 1
+
+        pm.on_position_opened(snapshot, recovered=True)   # reconcile branch
+
+        assert pm._spread_breaches == 0
+
+    def test_new_position_does_not_inherit_breaches(self):
+        pm = PositionManager(exit_engine=None)
+        pm.position = make_position()
+        pm._spread_breaches = SPREAD_BREACHES_TO_CLOSE - 1
+        pm.on_position_closed({"ticket": 4242, "profit": -5.0,
+                               "close_price": 1.3690, "reason": "SL"})
+        assert pm._spread_breaches == 0
 
 
 class TestPartialCloseUsesBrokerRealized:
@@ -222,24 +276,175 @@ class TestTransientAnalysisFailureIsRetried:
 
     def test_failure_counters_are_dropped_once_the_event_retires(self):
         import server
+        from timeutil import utcnow
         server._analysis_failures.clear()
         server.analyzed_events.clear()
-        server._analysis_failures["USD_CPI_20260730_1230"] = 2
-        server._analysis_failures["USD_NFP_20260731_1230"] = 1
-        server.analyzed_events["USD_CPI_20260730_1230"] = datetime.utcnow()
+        server._analysis_failures["USD_CPI_20260730_1230"] = (2, utcnow())
+        server._analysis_failures["USD_NFP_20260731_1230"] = (1, utcnow())
+        server.analyzed_events["USD_CPI_20260730_1230"] = utcnow()
 
         server._cleanup_analysis_failures()
 
         assert "USD_CPI_20260730_1230" not in server._analysis_failures
-        assert server._analysis_failures["USD_NFP_20260731_1230"] == 1
+        assert server._analysis_failures["USD_NFP_20260731_1230"][0] == 1
         server._analysis_failures.clear()
         server.analyzed_events.clear()
+
+    def test_stale_counters_age_out_even_without_a_give_up(self):
+        """An event whose retry was scheduled but whose window then closed is
+        never marked analyzed, so "present in analyzed_events" alone would
+        leak its counter forever on the 24/7 machine."""
+        import server
+        from datetime import timedelta
+        from timeutil import utcnow
+        server._analysis_failures.clear()
+        server.analyzed_events.clear()
+        server._analysis_failures["GBP_OLD_20260728_1100"] = (
+            1, utcnow() - timedelta(hours=30))
+        server._analysis_failures["GBP_NEW_20260730_1100"] = (1, utcnow())
+
+        server._cleanup_analysis_failures()
+
+        assert "GBP_OLD_20260728_1100" not in server._analysis_failures
+        assert "GBP_NEW_20260730_1100" in server._analysis_failures
+        server._analysis_failures.clear()
+
+
+class TestCommandDeliveryIsConfirmed:
+    """A command written into an HTTP response is not proof the EA executed
+    it: the response can be lost after the server handled the request. The
+    server keeps the last served command until a broker report shows its
+    effect, re-sends it once if the effect is missing — but only for actions
+    that are safe to repeat."""
+
+    def _pm(self):
+        pm = PositionManager(exit_engine=None)
+        pm.on_position_opened({
+            "ticket": 4242, "position_id": "4242", "symbol": "USDCAD",
+            "direction": "BUY", "entry_price": 1.3700, "lots": 1.0,
+            "remaining_lots": 1.0, "max_loss_usd": 100.0, "tick_value": 10.0,
+        })
+        return pm
+
+    def _report(self, **over):
+        data = {"ticket": 4242, "position_id": "4242", "symbol": "USDCAD",
+                "remaining_lots": 1.0, "profit_usd": 0.0, "sl": 1.3660,
+                "current_price": 1.3710}
+        data.update(over)
+        return data
+
+    def test_unobserved_close_is_re_served_once(self):
+        pm = self._pm()
+        pm.pending_command = PositionCommand(action="CLOSE", reason="AI: out")
+
+        first = pm.update_position(self._report())
+        assert first["command"]["action"] == "CLOSE"
+
+        # Still receiving reports => the close did not happen
+        second = pm.update_position(self._report())
+        assert second["command"]["action"] == "CLOSE"
+
+        # After the retry it is dropped, and the model is consulted at once
+        third = pm.update_position(self._report())
+        assert third["command"]["action"] == "HOLD"
+        assert pm._served_command is None
+        assert pm.last_llm_check == 0.0
+
+    def test_partial_close_is_never_re_served(self):
+        """If it DID execute and we simply cannot see it yet, a second one
+        would close another slice (two 50% legs = 75% of the position)."""
+        pm = self._pm()
+        pm.pending_command = PositionCommand(action="PARTIAL_CLOSE",
+                                             close_percent=50)
+
+        first = pm.update_position(self._report())
+        assert first["command"]["action"] == "PARTIAL_CLOSE"
+
+        second = pm.update_position(self._report(remaining_lots=1.0))
+        assert second["command"]["action"] == "HOLD"
+        assert pm._served_command is None
+
+    def test_observed_partial_close_is_retired(self):
+        pm = self._pm()
+        pm.pending_command = PositionCommand(action="PARTIAL_CLOSE",
+                                             close_percent=50)
+        pm.update_position(self._report())
+
+        pm.update_position(self._report(remaining_lots=0.5))
+        assert pm._served_command is None
+        assert pm.position.partial_closed is True
+
+    def test_observed_modify_sl_is_retired(self):
+        pm = self._pm()
+        pm.pending_command = PositionCommand(action="MODIFY_SL",
+                                             sl_price=1.3701)
+        pm.update_position(self._report())
+
+        pm.update_position(self._report(sl=1.3701))
+        assert pm._served_command is None
+        assert pm.position.sl_moved_to_be is True
+
+    def test_unobserved_modify_sl_does_not_burn_an_extra_model_call(self):
+        """A broker that keeps rejecting a stop must not bill a fresh exit
+        consultation on every single report."""
+        pm = self._pm()
+        pm.last_llm_check = 12345.0
+        pm.pending_command = PositionCommand(action="MODIFY_SL",
+                                             sl_price=1.3701)
+        pm.update_position(self._report())
+        pm.update_position(self._report())      # re-served
+        pm.update_position(self._report())      # dropped
+        assert pm._served_command is None
+        assert pm.last_llm_check == 12345.0
 
 
 class TestCalibrationLineIsPerModel:
     """The line says "you have been OVERCONFIDENT by N points — state lower
     confidence". Computed across models or prompt versions, it tells the
-    running configuration to correct an error it never made."""
+    running configuration to correct an error it never made.
+
+    Every negative case below is paired with the POSITIVE control that uses
+    identical data with a matching signature — without it the assertions would
+    hold for any reason at all (e.g. rows too sparse to score), and the filter
+    could be deleted with the suite still green."""
+
+    MODEL = "test/current-model"
+
+    def _rows(self, n=60, model=None, prompt_version=None):
+        """Scorable decision rows: each needs currency/event_name/pair and a
+        distinct event_datetime, or build_summary cannot join them to a path
+        and dedup collapses them to one."""
+        import llm_decision_engine as lde
+        rows = []
+        for i in range(n):
+            when = f"2026-{i % 12 + 1:02d}-{i // 12 + 1:02d}T13:30:00"
+            rows.append({
+                "timestamp": f"2026-07-15T13:28:{i % 60:02d}Z",
+                "decision_id": f"d{i}",
+                "event_name": "CPI m/m", "currency": "USD", "pair": "USDCAD",
+                "direction": "BUY", "confidence": 0.9, "forced": False,
+                "event_datetime": when,
+                "model": model or self.MODEL,
+                "prompt_version": (prompt_version
+                                   or lde.ENTRY_PROMPT_VERSION),
+            })
+        return rows
+
+    def _paths(self, n=60):
+        """Measured path records in the shape calibration.index_paths expects
+        (event_name_normalized + event_time are the join key, not
+        event_datetime)."""
+        paths = []
+        for i in range(n):
+            when = f"2026-{i % 12 + 1:02d}-{i // 12 + 1:02d}T13:30:00"
+            paths.append({
+                "test": False, "currency": "USD",
+                "event_name": "CPI m/m", "event_name_normalized": "cpi m/m",
+                "event_time": when, "pair": "USDCAD",
+                # alternate hit/miss so the summary has a real hit rate
+                "move_5min_pips": 20.0 if i % 2 else -20.0,
+            })
+        return paths
 
     def _engine(self, tmp_path, paths, decisions):
         from llm_decision_engine import LLMDecisionEngine
@@ -247,26 +452,25 @@ class TestCalibrationLineIsPerModel:
             provider="rule-based",
             trade_history_file=str(tmp_path / "trades.jsonl"),
             paths_provider=lambda: paths)
-        engine.model = "test/current-model"
+        engine.model = self.MODEL
         engine.decision_log = type("Log", (), {
             "get_recent": staticmethod(lambda limit=300: decisions)})()
         return engine
 
+    def test_line_appears_for_the_running_configuration(self, tmp_path):
+        """POSITIVE CONTROL — without this the negatives prove nothing."""
+        engine = self._engine(tmp_path, self._paths(), self._rows())
+        line = engine._calibration_line()
+        assert line is not None and "CALIBRATION" in line
+
     def test_no_line_when_history_belongs_to_another_model(self, tmp_path):
-        import llm_decision_engine as lde
-        foreign = [{"model": "test/old-model",
-                    "prompt_version": lde.ENTRY_PROMPT_VERSION,
-                    "direction": "BUY", "confidence": 0.9}
-                   for _ in range(200)]
-        engine = self._engine(tmp_path, [{"event_key": "x"}], foreign)
+        engine = self._engine(tmp_path, self._paths(),
+                              self._rows(model="test/old-model"))
         assert engine._calibration_line() is None
 
     def test_no_line_when_history_belongs_to_another_prompt_version(self, tmp_path):
-        rows = [{"model": "test/current-model",
-                 "prompt_version": "1999-01-01.0",
-                 "direction": "BUY", "confidence": 0.9}
-                for _ in range(200)]
-        engine = self._engine(tmp_path, [{"event_key": "x"}], rows)
+        engine = self._engine(tmp_path, self._paths(),
+                              self._rows(prompt_version="1999-01-01.0"))
         assert engine._calibration_line() is None
 
     def test_signature_matches_the_single_call_stamp(self, tmp_path):

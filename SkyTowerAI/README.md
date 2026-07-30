@@ -2,7 +2,7 @@
 
 ## AI-Enhanced News Trading System for MT5
 
-> Stan: 30.07.2026 · 661 testów · uruchamianie i operacje: [RUNBOOK.md](RUNBOOK.md) ·
+> Stan: 30.07.2026 · 679 testów · uruchamianie i operacje: [RUNBOOK.md](RUNBOOK.md) ·
 > pełny kontekst: [CLAUDE.md](CLAUDE.md)
 
 Automatyczny system tradingowy oparty o strategię SkyTower-FX z ulepszeniami AI.
@@ -202,7 +202,7 @@ przekazuje `max_loss_usd` do EA z każdym sygnałem.
 ## Testowanie
 
 ```bash
-# Pełny zestaw testów (661, ~17 s) — z katalogu SkyTowerAI/
+# Pełny zestaw testów (679, ~18 s) — z katalogu SkyTowerAI/
 python\venv\Scripts\python.exe -m pytest -q
 ```
 
@@ -242,7 +242,7 @@ pip install -r requirements.txt
 
 Aktualne pełne drzewo: [CLAUDE.md](CLAUDE.md) → "File Structure". Rdzeń:
 `python/` (serwer Flask + ~25 modułów), `mt5/SkyTowerAI_EA.mq5`,
-`START.bat` (launcher), `RUNBOOK.md` (operacje), `tests/` (661 testów).
+`START.bat` (launcher), `RUNBOOK.md` (operacje), `tests/` (679 testów).
 
 ---
 
