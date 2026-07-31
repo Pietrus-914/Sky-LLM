@@ -3,7 +3,7 @@
 ## Quick Summary
 SkyTower-AI is an automated forex trading system that trades high-impact economic news events. A Flask server analyzes each event (COT data, retail sentiment used contrarian, forecast vs previous, market context pushed by MT5) and decides BUY/SELL/SKIP via an LLM panel (OpenRouter) with a rule-based fallback. The MT5 Expert Advisor executes; **the server also manages the exit** (EA keeps only technical guardrails).
 
-State: server **4.1.0**, **691 tests green** (30.07.2026), running natively on Windows. Active branch `gpt_review` (see `GPT_REVIEW_PLAN.md`). Docs wiki: `../wiki/index.md`.
+State: server **4.1.0**, **696 tests green** (30.07.2026), running natively on Windows. Active branch `gpt_review` (see `GPT_REVIEW_PLAN.md`). Docs wiki: `../wiki/index.md`.
 
 ## Project Location
 `C:\Users\pietr\Documents\Sky tower\SkyTowerAI\`
@@ -65,7 +65,7 @@ SkyTowerAI/
 ├── mt5/
 │   ├── SkyTowerAI_EA.mq5         # Expert Advisor (~1950 lines — use offset/limit reads!)
 │   └── SkyTower_Zones.mq5        # Zone indicator
-├── tests/                        # 691 tests: unit/ integration/ e2e/ (pytest)
+├── tests/                        # 696 tests: unit/ integration/ e2e/ (pytest)
 ├── START.bat                     # PRIMARY launcher: server (auto-restart) + MT5, idempotent
 ├── start_server.bat              # Server only (creates venv on first run)
 ├── start_server_24_7.bat         # 24/7 variant with watchdog loop
@@ -185,7 +185,7 @@ EA confidence gate: `InpMinConfidence` (0.5); `forced:true` signals bypass it.
 ```powershell
 curl http://127.0.0.1:5555/health          # status
 # START.bat = server + MT5; start_server.bat = server only
-python\venv\Scripts\python.exe -m pytest -q   # run tests (691, ~19 s)
+python\venv\Scripts\python.exe -m pytest -q   # run tests (696, ~19 s)
 ```
 Add tradeable event names: `config.py` → TIER1/TIER2 or `SKYTOWER_EXTRA_EVENTS`.
 

@@ -398,6 +398,88 @@ class TestCommandDeliveryIsConfirmed:
         assert pm.last_llm_check == 12345.0
 
 
+class TestManagementTrailRecordsTheEnding:
+    """The "AI position management" trail is the story of the trade, and a
+    guardrail is usually what ENDS it. Guardrail commands were served without
+    being recorded, so the trail stopped at the last HOLD while the trade's
+    own close reason said "Safety: ..." — and trade_history.jsonl fed that
+    truncated story to the post-trade reflections."""
+
+    def _pm(self):
+        pm = PositionManager(exit_engine=None)
+        pm.on_position_opened({
+            "ticket": 909, "position_id": "909", "symbol": "USDCAD",
+            "direction": "BUY", "entry_price": 1.3700, "lots": 1.0,
+            "remaining_lots": 1.0, "max_loss_usd": 100.0, "tick_value": 10.0,
+        })
+        return pm
+
+    def _report(self, **over):
+        data = {"ticket": 909, "position_id": "909", "symbol": "USDCAD",
+                "remaining_lots": 1.0, "profit_usd": 0.0, "sl": 1.3660,
+                "current_price": 1.3710, "spread_pips": 2.0}
+        data.update(over)
+        return data
+
+    def test_guardrail_close_lands_in_the_trail(self):
+        pm = self._pm()
+        pm.update_position(self._report(profit_usd=-150.0))
+
+        last = pm.position.ai_decisions[-1]
+        assert last["action"] == "CLOSE"
+        assert last["source"] == "guardrail"
+        assert "max loss" in last["reasoning"].lower()
+
+    def test_profit_protection_close_lands_in_the_trail(self):
+        """The exact shape from the 31.07 screenshot: peak, fade, safety close
+        — previously invisible in the trail."""
+        pm = self._pm()
+        pm.update_position(self._report(profit_usd=50.0))
+        cmd = pm.update_position(self._report(profit_usd=12.0))
+
+        assert cmd["command"]["action"] == "CLOSE"
+        last = pm.position.ai_decisions[-1]
+        assert last["source"] == "guardrail"
+        assert "profit dropped" in last["reasoning"]
+
+    def test_repeating_guardrail_is_collapsed(self):
+        """Guardrails re-fire on every report while the condition holds; the
+        trail must show one line per event, not one per poll."""
+        pm = self._pm()
+        for _ in range(4):
+            pm.update_position(self._report(profit_usd=-150.0))
+
+        closes = [d for d in pm.position.ai_decisions
+                  if d.get("source") == "guardrail"]
+        assert len(closes) == 1
+
+    def test_model_decisions_are_never_collapsed(self):
+        """Two identical HOLDs 30s apart are two real consultations."""
+        pm = self._pm()
+        same = PositionCommand(action="HOLD", reason="AI: developing")
+        pm._record_management_action(same, source="ai")
+        pm._record_management_action(same, source="ai")
+        assert len(pm.position.ai_decisions) == 2
+
+    def test_trail_survives_into_the_closed_trade_record(self, tmp_path):
+        history = tmp_path / "trades.jsonl"
+        pm = PositionManager(exit_engine=None, history_file=str(history))
+        pm.on_position_opened({
+            "ticket": 909, "position_id": "909", "symbol": "USDCAD",
+            "direction": "BUY", "entry_price": 1.3700, "lots": 1.0,
+            "remaining_lots": 1.0, "max_loss_usd": 100.0, "tick_value": 10.0,
+        })
+        pm.update_position(self._report(profit_usd=-150.0))
+        pm.on_position_closed({"ticket": 909, "profit": -150.0,
+                               "close_price": 1.3600, "reason": "Safety"})
+
+        import json
+        with open(history, encoding="utf-8") as f:
+            rec = json.loads(f.readline())
+        assert any(d.get("source") == "guardrail" and d["action"] == "CLOSE"
+                   for d in rec["ai_decisions"])
+
+
 class TestCalibrationLineIsPerModel:
     """The line says "you have been OVERCONFIDENT by N points — state lower
     confidence". Computed across models or prompt versions, it tells the

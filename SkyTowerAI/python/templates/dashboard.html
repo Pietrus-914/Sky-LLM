@@ -2595,10 +2595,17 @@
                 else if (action.indexOf('MODIFY') >= 0) actionClass = 'modify';
                 else if (action.indexOf('PARTIAL') >= 0) actionClass = 'partial';
                 var ts = dec.time || dec.timestamp;
+                // Safety guardrails (max loss, max hold, emergency spread,
+                // profit protection) are server rules, not model decisions —
+                // they are what usually ENDS the trade, so the trail must not
+                // let them pass as AI reasoning. Older rows have no source.
+                var isGuard = dec.source === 'guardrail';
                 html += '<div class="ai-log-entry">' +
                     '<span class="time">' + escapeHtml(ts ? utcToCET(ts) : '--') + '</span>' +
                     '<span class="action ' + actionClass + '">' + escapeHtml(action) + '</span>' +
-                    '<span class="reason">' + escapeHtml(dec.reasoning || dec.reason || '--') + '</span>' +
+                    '<span class="reason">' +
+                    (isGuard ? '<b style="color:var(--warning,#e0a458)">[SAFETY]</b> ' : '') +
+                    escapeHtml(dec.reasoning || dec.reason || '--') + '</span>' +
                 '</div>';
             }
             return html;

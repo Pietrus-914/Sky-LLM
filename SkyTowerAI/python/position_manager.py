@@ -1121,6 +1121,7 @@ class PositionManager:
             # 1. Check safety guardrails (immediate, no LLM needed)
             guardrail_cmd = self._check_guardrails()
             if guardrail_cmd:
+                self._record_management_action(guardrail_cmd, source="guardrail")
                 self.pending_command = guardrail_cmd
                 self._persist_active_position(self.position)
                 return self._serve_command(guardrail_cmd)
@@ -1201,11 +1202,7 @@ class PositionManager:
 
             if llm_decision:
                 # Log all decisions (HOLD and non-HOLD)
-                self.position.ai_decisions.append({
-                    "time": utcnow().isoformat(),
-                    "action": llm_decision.action,
-                    "reasoning": llm_decision.reason,
-                })
+                self._record_management_action(llm_decision, source="ai")
 
                 if llm_decision.action != "HOLD":
                     self._persist_active_position(self.position)
@@ -1312,11 +1309,7 @@ class PositionManager:
             )
             return
 
-        self.position.ai_decisions.append({
-            "time": utcnow().isoformat(),
-            "action": decision.action,
-            "reasoning": decision.reason,
-        })
+        self._record_management_action(decision, source="ai")
 
         if decision.action != "HOLD":
             if self.pending_command is not None:
@@ -1427,6 +1420,40 @@ class PositionManager:
                 )
 
         return None
+
+    def _record_management_action(self, cmd: PositionCommand,
+                                  source: str = "ai") -> None:
+        """Append one entry to the position's management trail. Under lock.
+
+        Guardrail commands used to be served WITHOUT being recorded, so the
+        trail told the story of a trade and then stopped before its ending:
+        a position closed by max-loss, max-hold, emergency spread or profit
+        protection showed a last line of "HOLD" and nothing else, even though
+        the close reason on the trade itself said "Safety: ...". The trail
+        also feeds trade_history.jsonl and the post-trade reflections, which
+        were therefore reasoning about trades that appear never to end.
+
+        Guardrails re-evaluate on EVERY report and keep firing while their
+        condition holds (and a re-served command fires again), so identical
+        consecutive GUARDRAIL entries are collapsed into one line per event.
+        Model decisions are never collapsed: two identical HOLDs 30s apart are
+        two real consultations, and the timestamps are the point of the trail.
+        """
+        if self.position is None:
+            return
+        entry = {
+            "time": utcnow().isoformat(),
+            "action": cmd.action,
+            "reasoning": cmd.reason,
+            "source": source,
+        }
+        if source == "guardrail" and self.position.ai_decisions:
+            prev = self.position.ai_decisions[-1]
+            if (prev.get("source") == "guardrail"
+                    and prev.get("action") == entry["action"]
+                    and prev.get("reasoning") == entry["reasoning"]):
+                return
+        self.position.ai_decisions.append(entry)
 
     def _serve_command(self, cmd: PositionCommand) -> Dict:
         """Write a command into the response and remember it, so the NEXT

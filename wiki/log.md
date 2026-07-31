@@ -300,3 +300,31 @@ prawdopodobnie **nigdy nie oddał udanego głosu wejściowego**.
   `grep "Ensemble vote DROPPED" logs/server.log` podaje powód i pierwsze 200
   znaków nieparsowalnej odpowiedzi; pełne surowe odpowiedzi per model są w
   `logs/decision_context/<decision_id>.json`.
+
+## 2026-07-31 INGEST | Ślad zarządzania pozycją gubił własne zakończenie
+
+Zgłoszenie operatora: „brakuje mi informacji o zamknięciu po 15 wierszach" —
+podejrzenie limitu na liście AI POSITION MANAGEMENT.
+
+**Limitu nie ma.** Nagłówek „(15)" to długość listy, a dashboard iteruje
+wszystkie wpisy bez cięcia (`dashboard.html`, pętla po `trade.ai_decisions`);
+close record niesie `list(position.ai_decisions)` w całości. Jedyne obcięcie w
+kodzie to `pos.ai_decisions[-5:]` w `exit_decision_engine._build_prompt` — ile
+decyzji widzi MODEL, nie ile się zapisuje.
+
+**Prawdziwa przyczyna:** komendy guardraili były serwowane **bez zapisu do
+śladu**. `_check_guardrails()` zwracał komendę, `update_position` ją wysyłał i
+nic nie trafiało do `ai_decisions` — więc ślad kończył się ostatnim HOLD-em
+modelu, mimo że sam trade miał `reason: "Safety: profit dropped 74% from peak"`.
+Dotyczyło to wszystkich bezpieczników: max loss, max hold, spread awaryjny i
+ochrona zysku — czyli **akcji, które najczęściej KOŃCZĄ zagranie**. Ten sam
+ucięty ślad szedł do `trade_history.jsonl` i dalej do refleksji po trade'zie,
+które „widziały" zagrania bez zakończenia.
+
+Fix: wspólne `PositionManager._record_management_action(cmd, source=...)` dla
+obu ścieżek (model i guardrail), pole `source` w każdym wpisie, zwijanie
+IDENTYCZNYCH kolejnych wpisów guardraila (bezpiecznik re-ewaluuje się na każdym
+raporcie i strzelałby co 5-15 s), decyzje modelu nigdy nie zwijane — dwa
+identyczne HOLD-y co 30 s to dwie realne konsultacje. Dashboard oznacza wiersze
+bezpieczników `[SAFETY]`; stare wpisy bez `source` renderują się jak dotąd.
+6 nowych testów, **696 zielonych**.

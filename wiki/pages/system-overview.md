@@ -42,7 +42,7 @@ w pozycji. Całe ryzyko konfiguruje się **wyłącznie w panelu** (persist w
 
 ## Stan projektu
 
-- 691 testów zielonych (pełny przebieg 30.07.2026, ~19 s), wersja serwera 4.1.0.
+- 696 testów zielonych (pełny przebieg 30.07.2026, ~19 s), wersja serwera 4.1.0.
 - Branch `gpt_review`: Stage 1 (recovery pozycji) i Stage 2 (jednostki/SL/retcody)
   zacommitowane i zweryfikowane 26.07; Stage 3–4 otwarte
   ([GPT_REVIEW_PLAN.md](../../SkyTowerAI/GPT_REVIEW_PLAN.md)).
