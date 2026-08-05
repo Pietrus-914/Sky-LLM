@@ -58,6 +58,26 @@ def _pin_ensemble_k(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_risk_config(monkeypatch):
+    """The guardrail tests encode exact thresholds, but every risk key in
+    POSITION_MANAGEMENT_CONFIG is operator-tunable at import time (.env) and
+    at runtime (panel -> logs/runtime_overrides.json, applied on import). An
+    operator who saves profit_protection_percent=80 in the panel would fail
+    the suite on a clean checkout. Pin the keys the guardrail math reads;
+    tests that want other values patch pm.config themselves."""
+    import config
+    for key, value in (("max_loss_usd", 100.0),
+                       ("max_daily_loss_usd", 300.0),
+                       ("max_daily_trades", 5),
+                       ("max_hold_minutes", 30),
+                       ("emergency_spread_pips", 15),
+                       ("profit_protection_percent", 50.0),
+                       ("profit_protection_floor_pct", 30.0),
+                       ("profit_protection_grace_seconds", 120)):
+        monkeypatch.setitem(config.POSITION_MANAGEMENT_CONFIG, key, value)
+
+
+@pytest.fixture(autouse=True)
 def _no_calendar_network(monkeypatch):
     """Tests must NEVER hit the real calendar feeds: the FF feed 429s when
     hammered, and a successful fetch OVERWRITES the production

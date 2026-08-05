@@ -26,10 +26,22 @@ from trading_units import forex_pip_size
 PNL_SAMPLE_CAP = 12
 
 # Consecutive reports whose spread must exceed emergency_spread_pips before the
-# server liquidates. Entry is capped just under the same threshold, so without
+# server liquidates. Entry is blocked just under the same threshold, so without
 # confirmation one spiked tick at the release closes the trade at the worst
 # price of the session. A spread at 2x the threshold still closes immediately.
 SPREAD_BREACHES_TO_CLOSE = 2
+
+# Same lesson for profit protection: the P/L series is sampled from single
+# ticks every 5-15s, and around a release one tick can show a >50% drop that
+# the next tick takes back. One report arms, the second confirms.
+PROFIT_DROP_BREACHES_TO_CLOSE = 2
+
+# The EA's reported floating profit is GROSS (POSITION_PROFIT excludes
+# commission and swap), so a profit-protection close at "+$1" would book a
+# net loss on any real lot. A close only counts as protecting profit when
+# the gross total clears this per-lot cushion (~$2.5/side/lot observed on
+# the live broker, doubled for the round trip plus headroom).
+COMMISSION_CUSHION_USD_PER_LOT = 7.0
 
 # How many times one command may be written into an EA response before the
 # server gives up on it and re-consults the exit model. 2 = the original
@@ -177,6 +189,8 @@ class PositionManager:
 
         # Consecutive emergency-spread breaches on the current position
         self._spread_breaches: int = 0
+        # Consecutive profit-protection breaches on the current position
+        self._profit_drop_breaches: int = 0
 
         # Last command written into an EA response, kept until the next report
         # shows whether it executed. Delivery is confirm-then-retire rather
@@ -673,10 +687,11 @@ class PositionManager:
                 if decision_id and not self.position.decision_id:
                     self.position.decision_id = decision_id
                 self.position.forced = self.position.forced or forced
-                # Same reset as the fresh-open branch: the debounce counter is
-                # manager-scoped, so a reconciled position must not inherit
-                # breaches counted before the reconnect.
+                # Same reset as the fresh-open branch: the debounce counters
+                # are manager-scoped, so a reconciled position must not
+                # inherit breaches counted before the reconnect.
                 self._spread_breaches = 0
+                self._profit_drop_breaches = 0
                 self.recovery_state = "ready"
                 result = "reconciled"
                 logger.info(
@@ -698,6 +713,7 @@ class PositionManager:
                 self._served_attempts = 0
                 self.last_llm_check = 0.0
                 self._spread_breaches = 0
+                self._profit_drop_breaches = 0
                 self._abandon_exit_worker()
                 self.recovery_state = "ready"
                 result = "opened"
@@ -892,6 +908,7 @@ class PositionManager:
             self._served_command = None
             self._served_attempts = 0
             self._spread_breaches = 0
+            self._profit_drop_breaches = 0
             self._abandon_exit_worker()
 
             try:
@@ -1403,21 +1420,68 @@ class PositionManager:
         # from its peak. Comparing floating-only against the peak made every
         # 50% partial close look like a ~50% collapse and instantly killed
         # the runner the AI had deliberately left open.
+        #
+        # Reworked after the 2026-08-04 NZD Employment close: the old flat $20
+        # activation floor is ~1.3 pips at 1.57 lots, so the rule armed itself
+        # on spread noise seconds before the release and a single whipsaw
+        # report closed a correct SELL at a loss while the exit AI held.
+        # Four rules, mirroring the emergency-spread lessons above:
+        #   * the floor scales with the trade's risk budget, not a flat USD,
+        #   * the release whipsaw window is off-limits (grace after open),
+        #   * the drop needs a second consecutive report to confirm,
+        #   * a NEGATIVE total is never "profit protection" — leave it to
+        #     max-loss, the broker SL and the exit model.
         protection_pct = self.config.get("profit_protection_percent", 50)
-        if pos.max_profit_usd > 20.0:  # only activate after meaningful profit
+        floor_pct = self.config.get("profit_protection_floor_pct", 30)
+        grace_s = self.config.get("profit_protection_grace_seconds", 120)
+        floor_usd = max(10.0, max_loss * (floor_pct / 100.0))
+        # Gross-vs-net: the peak/total series excludes commission, so only a
+        # total above this cushion is genuinely "still in profit" net.
+        cushion_usd = COMMISSION_CUSHION_USD_PER_LOT * pos.lots
+        armed = (pos.max_profit_usd >= floor_usd
+                 and (utcnow() - pos.open_time).total_seconds() >= grace_s)
+        if armed:
             profit_drop_pct = ((pos.max_profit_usd - total_pnl) / pos.max_profit_usd) * 100
-            if profit_drop_pct >= protection_pct:
+            if profit_drop_pct >= protection_pct and total_pnl > cushion_usd:
+                self._profit_drop_breaches += 1
                 current_txt = f"${total_pnl:.2f}"
                 if pos.realized_usd:
                     current_txt += f" incl. ${pos.realized_usd:.2f} realized"
-                logger.warning(f"GUARDRAIL: Profit protection triggered. "
-                               f"Peak: ${pos.max_profit_usd:.2f}, Current: {current_txt} "
-                               f"(-{profit_drop_pct:.0f}%)")
-                return PositionCommand(
-                    action="CLOSE",
-                    reason=f"Safety: profit dropped {profit_drop_pct:.0f}% from peak "
-                           f"(${pos.max_profit_usd:.2f} → {current_txt})",
+                # Catastrophic give-back of a big peak closes on the FIRST
+                # report (mirror of the 2x emergency-spread rule): the next
+                # report may already be in the red, where this rule refuses
+                # to act, so waiting for confirmation risks the whole peak.
+                catastrophic = (profit_drop_pct >= 90
+                                and pos.max_profit_usd >= 2 * floor_usd)
+                if (catastrophic
+                        or self._profit_drop_breaches >= PROFIT_DROP_BREACHES_TO_CLOSE):
+                    logger.warning(
+                        f"GUARDRAIL: Profit protection triggered. "
+                        f"Peak: ${pos.max_profit_usd:.2f}, Current: {current_txt} "
+                        f"(-{profit_drop_pct:.0f}%, "
+                        f"{'catastrophic give-back' if catastrophic else f'{self._profit_drop_breaches} consecutive reports'})")
+                    return PositionCommand(
+                        action="CLOSE",
+                        reason=f"Safety: profit dropped {profit_drop_pct:.0f}% from peak "
+                               f"(${pos.max_profit_usd:.2f} → {current_txt})",
+                    )
+                logger.warning(
+                    f"Profit drop {profit_drop_pct:.0f}% from peak "
+                    f"${pos.max_profit_usd:.2f} — awaiting confirmation on the "
+                    f"next report (breach {self._profit_drop_breaches}/"
+                    f"{PROFIT_DROP_BREACHES_TO_CLOSE})"
                 )
+            else:
+                # Recovered above the drop line OR at/below the cushion: both
+                # reset the debounce. Time in the red never counts toward a
+                # close — a collapse must confirm itself with consecutive
+                # POSITIVE reports, otherwise the first green tick after a
+                # deep drawdown would cash out the runner at breakeven right
+                # when momentum returns. In the red the downside is already
+                # bounded by max-loss and the broker SL.
+                self._profit_drop_breaches = 0
+        else:
+            self._profit_drop_breaches = 0
 
         return None
 
@@ -1533,6 +1597,14 @@ class PositionManager:
             reported_sl = self._safe_float(data.get("sl", self.position.sl))
             pip_size = forex_pip_size(self.position.symbol)
             return abs(reported_sl - cmd.sl_price) <= pip_size + pip_size * 1e-9
+        if cmd.action == "MODIFY_TP":
+            # Same evidence as MODIFY_SL: the EA reports the broker's tp on
+            # every report. Falling through to True would auto-confirm a TP
+            # move the broker rejected, making REDELIVERABLE_ACTIONS dead
+            # for this action.
+            reported_tp = self._safe_float(data.get("tp", self.position.tp))
+            pip_size = forex_pip_size(self.position.symbol)
+            return abs(reported_tp - cmd.tp_price) <= pip_size + pip_size * 1e-9
         if cmd.action == "CLOSE":
             return False
         return True

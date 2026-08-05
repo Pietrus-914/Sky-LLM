@@ -328,3 +328,41 @@ raporcie i strzelałby co 5-15 s), decyzje modelu nigdy nie zwijane — dwa
 identyczne HOLD-y co 30 s to dwie realne konsultacje. Dashboard oznacza wiersze
 bezpieczników `[SAFETY]`; stare wpisy bez `source` renderują się jak dotąd.
 6 nowych testów, **696 zielonych**.
+
+## INGEST 2026-08-05: postmortem NZD Employment — przebudowa profit-protection, statystyczny TP, TP brokera w zleceniu
+
+Trade 04.08 22:45 UTC (SELL NZDUSD 1.57 lot, Employment Change q/q): kierunek
+trafny, ale guardrail profit-protection zamknął pozycję w sekundy po publikacji
+z wynikiem −12.57 $ ("Safety: profit dropped 168% from peak ($34.54 → −$23.55)").
+Postmortem wykazał trzy niezależne wady i wszystkie trzy zostały naprawione,
+każda ze swoim niezależnym code review + testami (711 zielonych):
+
+1. **Profit-protection** (position_manager): stary płaski próg uzbrojenia 20 $
+   to przy 1.57 lota ~1.3 pipsa — uzbrajał się na szumie spreadu; brak debounce
+   i karencji. Teraz: próg = 30% budżetu `max_loss_usd` (min 10 $), karencja
+   120 s po otwarciu, potwierdzenie w 2 kolejnych raportach (wzór spreadu
+   awaryjnego; oddanie ≥90% szczytu ≥2× progu zamyka od razu), nigdy nie
+   zamyka na minusie netto (poduszka prowizji ~7 $/lot; czas „pod wodą"
+   ZERUJE licznik — odbicie musi potwierdzić się dwoma zielonymi raportami).
+   Trzy nowe parametry w panelu Risk & Daily Limits + env z clampem zakresu
+   (`_env_ranged_*`) + w logu startowym EFFECTIVE RISK LIMITS. Conftest pinuje
+   klucze ryzyka (panel operatora nie może psuć testów).
+2. **Statystyczny TP** (build_learned_stats + llm_decision_engine): nowe staty
+   `favorable_run_5min/30min` (ekskursja Z kierunkiem; mediana/p75/p80/p90) z
+   ~44k ścieżek; prompt każe mieścić `take_profit_pips` między medianą a p80
+   dla okna wyjścia (30-min = sufit, minus spread — statystyka to travel
+   bidu); clamp TP obniżony 30→8 (dla NZD jobs p75 ruchu 30-min = 20.3 pipsa,
+   TP 48 był nieosiągalny z konstrukcji). `ENTRY_PROMPT_VERSION = 2026-08-05.1`.
+3. **TP brokera w zleceniu** (EA): `trade.Buy/Sell` dostawały TP=0 na sztywno —
+   `take_profit_pips` było parsowane i WYRZUCANE (dlatego deal miał pustą
+   kolumnę T/P). Teraz TP jedzie w zleceniu (zaokrąglenie KU wejściu, walidacja
+   stops-level po konserwatywnej stronie, degradacja do 0 zamiast blokady
+   wejścia, retry bez TP tylko na retcode 10016, korekcyjny ModifyPositionTP
+   po otwarciu). Exit-LLM widzi TP w prompcie i ma udokumentowaną akcję
+   MODIFY_TP (confirm-then-retire porównuje raportowane `tp`). Kompilacja
+   0/0. Bonus: `InpUseZoneTargets` to od dawna martwy input (nie pobiera
+   /api/targets) — CLAUDE.md poprawione.
+
+Strony: system-overview (guardraile 2026-08-05, przepływ z TP), learning-loop
+(favorable run, clamp 8–120, wersja promptu). Pełny postmortem w pamięci
+projektu Claude (nzd-postmortem-2026-08-04).

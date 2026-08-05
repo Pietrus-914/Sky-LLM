@@ -28,21 +28,32 @@ legacy** (nieużywany od 10.07.2026). Szczegóły operacyjne: [RUNBOOK.md](../..
 2. ~150 s przed publikacją: analiza + decyzja LLM (COT, sentyment kontrariańsko,
    forecast vs previous, kontekst M1 z EA, playbooki, learned stats, kalibracja).
 3. EA na wykresie pary decyzji (NZDUSD/USDCAD/AUDUSD/GBPUSD) odbiera sygnał
-   z `max_loss_usd` (bez tego pola EA odrzuca sygnał) i wchodzi ~15 s przed eventem.
-4. Serwer prowadzi pozycję (MODIFY_SL / PARTIAL_CLOSE / CLOSE przez
-   `/api/position/report`); EA ma awaryjny limit czasu i spreadu.
+   z `max_loss_usd` (bez tego pola EA odrzuca sygnał) i wchodzi ~15 s przed
+   eventem — **ze SL i TP brokera w zleceniu** (od 05.08.2026 `take_profit_pips`
+   z decyzji trafia do zlecenia jako limit; nieakceptowalny TP degraduje do 0
+   i nigdy nie blokuje wejścia).
+4. Serwer prowadzi pozycję (MODIFY_SL / MODIFY_TP / PARTIAL_CLOSE / CLOSE przez
+   `/api/position/report`); EA ma awaryjny limit czasu i spreadu. TP brokera
+   jest oportunistyczny — łapie szpikulec między raportami 5–15 s.
 5. Zamknięcie → realized P/L z historii dealów → `logs/trade_history.jsonl`;
    ścieżka ceny eventu → `logs/event_paths.jsonl` (patrz [learning-loop.md](learning-loop.md)).
 
-## Guardraile (stan 2026-07-27)
+## Guardraile (stan 2026-08-05)
 
 Max 100 $/trade, 300 $/dzień (blok do północy UTC), 5 tradów/dzień, max 30 min
-w pozycji. Całe ryzyko konfiguruje się **wyłącznie w panelu** (persist w
-`logs/runtime_overrides.json`); EA nie ma inputów ryzyka.
+w pozycji. **Profit protection** (przebudowany po postmortem NZD 04.08.2026):
+zamyka przy ≥50% spadku całkowitego zysku od szczytu, ale uzbraja się dopiero
+gdy szczyt ≥ 30% budżetu `max_loss_usd` (min 10 $), nie działa przez 120 s po
+otwarciu (whipsaw publikacji), wymaga 2 kolejnych raportów potwierdzenia (jak
+spread awaryjny; oddanie ≥90% szczytu ≥2× progu zamyka od razu) i nigdy nie
+zamyka na minusie (netto — wymagana poduszka prowizji ~7 $/lot). Wszystkie trzy
+parametry w panelu Risk & Daily Limits. Całe ryzyko konfiguruje się
+**wyłącznie w panelu** (persist w `logs/runtime_overrides.json`); EA nie ma
+inputów ryzyka.
 
 ## Stan projektu
 
-- 696 testów zielonych (pełny przebieg 30.07.2026, ~19 s), wersja serwera 4.1.0.
+- 711 testów zielonych (pełny przebieg 05.08.2026, ~19 s), wersja serwera 4.1.0.
 - Branch `gpt_review`: Stage 1 (recovery pozycji) i Stage 2 (jednostki/SL/retcody)
   zacommitowane i zweryfikowane 26.07; Stage 3–4 otwarte
   ([GPT_REVIEW_PLAN.md](../../SkyTowerAI/GPT_REVIEW_PLAN.md)).
@@ -51,4 +62,4 @@ w pozycji. Całe ryzyko konfiguruje się **wyłącznie w panelu** (persist w
 - Źródła danych bywają zawodne (COT często brak, Myfxbook 403, FF sporadycznie
   429 — nie hammerować feedu); kontekst rynkowy ratuje push danych z EA.
 
-_Aktualizacja: 2026-07-27 · stan: branch gpt_review (po f8d617d)_
+_Aktualizacja: 2026-08-05 · stan: branch gpt_review (postmortem NZD — guardrail + TP)_

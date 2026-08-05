@@ -42,6 +42,9 @@ DECISION FRAMEWORK (phases describe the OPPORTUNITY, they are not close triggers
 AVAILABLE ACTIONS:
 - HOLD: Do nothing, let position run. Use when position is developing favorably.
 - MODIFY_SL: Change stop loss. Provide sl_price (instrument price). Use to lock in profits.
+- MODIFY_TP: Move the broker take-profit. Provide tp_price (instrument price). Use to
+  pull the target closer when momentum fades. Removing the TP is not possible, only
+  moving it - when the target itself is wrong, prefer PARTIAL_CLOSE or CLOSE.
 - PARTIAL_CLOSE: Close portion of position. Provide close_percent (25-75). Use at key levels.
 - CLOSE: Full position close. Use when target reached, momentum lost, or protecting gains.
 
@@ -51,6 +54,7 @@ Keep reasoning under 40 words - the response must NEVER be cut off before "actio
 {
     "reasoning": "Brief explanation (max 40 words)",
     "sl_price": 0.0,
+    "tp_price": 0.0,
     "close_percent": 0,
     "action": "HOLD"
 }"""
@@ -176,6 +180,7 @@ class ExitDecisionEngine:
 - Current price: {pos.current_price}
 - Lots: {pos.remaining_lots} (original: {pos.lots})
 - Stop Loss: {pos.sl}
+- Take Profit: {pos.tp if pos.tp else "none (no broker TP on this position)"}
 - Profit/Loss (floating, remaining lots only): ${pos.profit_usd:.2f}
 - Realized by partial closes: ${pos.realized_usd:.2f}
 - TOTAL trade P/L: ${pos.profit_usd + pos.realized_usd:.2f}

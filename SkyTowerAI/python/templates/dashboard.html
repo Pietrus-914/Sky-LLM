@@ -1113,6 +1113,18 @@
                     <label for="riskMaxLoss">Max loss per trade USD (sizes the lot)</label>
                     <input type="number" id="riskMaxLoss" min="5" max="100000" step="5" style="width:110px">
                 </div>
+                <div class="config-row">
+                    <label for="riskProfitProtPct">Profit protection: close on drop from peak (%)</label>
+                    <input type="number" id="riskProfitProtPct" min="10" max="95" step="5" style="width:110px">
+                </div>
+                <div class="config-row">
+                    <label for="riskProfitProtFloor">Profit protection arms at peak &ge; (% of max loss per trade)</label>
+                    <input type="number" id="riskProfitProtFloor" min="5" max="200" step="5" style="width:110px">
+                </div>
+                <div class="config-row">
+                    <label for="riskProfitProtGrace">Profit protection grace after open (seconds, 0 = none)</label>
+                    <input type="number" id="riskProfitProtGrace" min="0" max="600" step="10" style="width:110px">
+                </div>
                 <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
                     Single source of truth: changes survive restarts and need no EA inputs
                     to keep in sync. Daily limits apply immediately; "Max loss per trade"
@@ -1324,6 +1336,9 @@
                         <tr><td><b>Max trades per day</b></td><td>Globalny limit tradów dziennie (cały serwer, wszystkie pary razem). Po osiągnięciu serwer przestaje wydawać sygnały. Licznik zeruje się o północy UTC (02:00 czasu PL latem). <b>Jedyne miejsce ustawienia — EA nie ma już swojego limitu.</b></td><td>5</td></tr>
                         <tr><td><b>Max daily loss USD</b></td><td>Dzienny budżet straty. Po przekroczeniu serwer blokuje nowe wejścia do północy UTC.</td><td>300 (3% konta)</td></tr>
                         <tr><td><b>Max loss per trade USD</b></td><td>Budżet ryzyka pojedynczego trade'u: <b>z tej kwoty EA liczy wielkość lota</b>, przy tej stracie pozycja jest zamykana (guardrail serwera + offline guardrail EA). Wysyłany do EA automatycznie z każdym sygnałem — <b>jedyne miejsce ustawienia</b>. <b>Nie może być większy niż „Max daily loss"</b> — taki zapis serwer odrzuca (jeden trade mógłby wydać cały dzienny budżet, bo limit dzienny blokuje dopiero NASTĘPNE wejście). Efektywne limity są logowane przy starcie serwera — to jedyna pewna odpowiedź na pytanie „jaki budżet jest naprawdę uzbrojony?", bo wartości z panelu nadpisują `.env` na stałe.</td><td>100 (1% konta)</td></tr>
+                        <tr><td><b>Profit protection: close on drop from peak (%)</b></td><td>Guardrail ochrony zysku: zamyka, gdy CAŁKOWITY zysk trade'u (floating + zrealizowane partiale) spadnie o ten procent od szczytu. Po postmortem NZD (04.08.2026) działa ostrożnie: uzbraja się dopiero od progu poniżej, nie działa w karencji po otwarciu, wymaga potwierdzenia w <b>2 kolejnych raportach EA</b> (jak spread awaryjny), przy oddaniu &ge;90% dużego szczytu (&ge;2&times; próg) zamyka od razu, a <b>nigdy nie zamyka na minusie</b> — czerwony trade to sprawa max loss / SL brokera, nie „ochrony zysku". Zamknięcie musi też pokryć poduszkę prowizji (~7$/lot), żeby „ochrona" nie realizowała straty netto.</td><td>50</td></tr>
+                        <tr><td><b>Profit protection arms at peak &ge; (% of max loss)</b></td><td>Próg uzbrojenia jako procent budżetu „Max loss per trade" (minimum 10$). Skaluje się z wielkością pozycji: stary płaski próg 20$ przy locie 1.57 to było ~1.3 pipsa — uzbrajał się na szumie spreadu sekundy przed publikacją.</td><td>30</td></tr>
+                        <tr><td><b>Profit protection grace (s)</b></td><td>Karencja po otwarciu: przez tyle sekund guardrail w ogóle nie zamyka. Whipsaw publikacji (retrace 25-45% szpikulca wg playbooków) dzieje się właśnie w tym oknie. 0 = brak karencji.</td><td>120</td></tr>
                         <tr><td><b>Tier 1 / Tier 2 / Currencies</b></td><td>Które typy eventów i waluty są aktywne.</td><td>bez zmian</td></tr>
                         <tr><td><b>Currency Regimes (auto)</b></td><td>Reżim polityki banku (hiking/cutting/hold) per waluta — etykieta do statystyk reakcji, <b>nie wpływa na ryzyko</b>. Aktualizuje się SAM z każdej zarejestrowanej decyzji o stopach (niejednoznaczny hold ocenia LLM po reakcji rynku). Dropdown = ręczny override do następnej decyzji banku. EUR/JPY/CHF nie mają par na wykresach, więc nie auto-aktualizują się — dla nich override ręczny.</td><td>auto</td></tr>
                     </tbody>
@@ -1455,9 +1470,13 @@
                 2. Budżet: min(10 000 × InpRiskPercent%, 100$ z sygnału) = <b>100$</b>.<br>
                 3. Lot: 100$ / (30 pipsów × ~7,30$/pips za 1 lot USDCAD) ≈ <b>0.45 lota</b>
                    (dla par XXX/USD pips za 1 lot ≈ 10$ → ~0.33 lota).<br>
-                4. Wejście 15 s przed publikacją, SL 30 pipsów od ceny.<br>
+                4. Wejście 15 s przed publikacją, SL 30 pipsów od ceny. <b>Do zlecenia trafia też TP brokera</b>
+                   z take_profit_pips decyzji (od 05.08.2026): LLM kotwiczy go w zmierzonych statystykach ruchu tego eventu
+                   (mediana–p80 „favorable run"), więc szpikulec publikacji może zamknąć pozycję na plusie
+                   między dwoma raportami EA — bez czekania na serwer. Nieakceptowalny TP (za blisko rynku)
+                   jest pomijany, nigdy nie blokuje wejścia.<br>
                 5. Najgorszy scenariusz: pełny SL ≈ −100$ (+ koszt spreadu); twardy sufit to i tak −100$ (guardrail serwera i EA).<br>
-                6. Dobry scenariusz: TP1 → zamknięcie 50%, SL na wejście, trailing na reszcie. Po 30 min pozycja znika niezależnie od wyniku.<br>
+                6. Dobry scenariusz: TP brokera łapie szpikulec ALBO serwer zarządza wyjściem (partial/trailing/close). Po 30 min pozycja znika niezależnie od wyniku.<br>
                 7. Po 3 stratach ~100$ (limit dzienny 300$) lub 5 tradach serwer blokuje handel do północy UTC.<br><br>
                 <span style="color:var(--text-secondary)">Z włączonymi redukcjami (oba przełączniki = true) budżet z kroku 2 byłby dodatkowo mnożony:
                 np. pewność 0.65 → lot% 70, spread 5 pipsów → ×80% ⇒ 100$ × 0.70 × 0.80 = 56$ → ~0.25 lota. Mniejsze pozycje, ale mniej przewidywalne.</span>
@@ -2112,11 +2131,21 @@
                 });
 
                 // Risk & daily limits go to their own endpoint
-                var riskPayload = {
-                    max_daily_trades: parseInt($('riskMaxDailyTrades').value, 10),
-                    max_daily_loss_usd: parseFloat($('riskMaxDailyLoss').value),
-                    max_loss_usd: parseFloat($('riskMaxLoss').value)
-                };
+                // Fields left blank (e.g. after a failed load) are simply not
+                // sent — parseFloat('') is NaN -> JSON null -> the server
+                // would 400 the WHOLE risk save including the daily limits.
+                var riskPayload = {};
+                var riskFields = [
+                    ['max_daily_trades', parseInt($('riskMaxDailyTrades').value, 10)],
+                    ['max_daily_loss_usd', parseFloat($('riskMaxDailyLoss').value)],
+                    ['max_loss_usd', parseFloat($('riskMaxLoss').value)],
+                    ['profit_protection_percent', parseFloat($('riskProfitProtPct').value)],
+                    ['profit_protection_floor_pct', parseFloat($('riskProfitProtFloor').value)],
+                    ['profit_protection_grace_seconds', parseInt($('riskProfitProtGrace').value, 10)]
+                ];
+                riskFields.forEach(function(kv) {
+                    if (!isNaN(kv[1])) riskPayload[kv[0]] = kv[1];
+                });
                 var riskResp = await fetch(BASE_URL + '/api/config/risk', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -2160,6 +2189,9 @@
                 if (data.max_daily_trades != null) $('riskMaxDailyTrades').value = data.max_daily_trades;
                 if (data.max_daily_loss_usd != null) $('riskMaxDailyLoss').value = data.max_daily_loss_usd;
                 if (data.max_loss_usd != null) $('riskMaxLoss').value = data.max_loss_usd;
+                if (data.profit_protection_percent != null) $('riskProfitProtPct').value = data.profit_protection_percent;
+                if (data.profit_protection_floor_pct != null) $('riskProfitProtFloor').value = data.profit_protection_floor_pct;
+                if (data.profit_protection_grace_seconds != null) $('riskProfitProtGrace').value = data.profit_protection_grace_seconds;
             } catch(e) { /* server offline - leave blank */ }
         }
 

@@ -39,8 +39,11 @@ double SkySpreadPips(string symbol)
    return (ask - bid) / pip;
 }
 
-// Normalize a protective stop to the broker tick grid without moving it
-// closer to the entry: BUY stops round down, SELL stops round up.
+// Normalize a stop-order price to the broker tick grid: BUY rounds down,
+// SELL rounds up. For a protective stop (below/above entry) this never moves
+// it closer to the entry; for a take-profit the SAME rounding moves it
+// TOWARD the entry, i.e. the target only gets easier to reach — both are the
+// conservative direction. Do not "fix" the rounding for one use case.
 double SkyNormalizeStopPrice(string symbol, double price, string direction)
 {
    double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);

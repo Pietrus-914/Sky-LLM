@@ -134,13 +134,22 @@ class TestGuardrails:
         assert pm_with_position._spread_breaches == 0
 
     def test_profit_protection_triggers_close(self, pm_with_position):
-        """Profit drop >50% from peak should trigger CLOSE."""
-        # First report: peak profit of $80
+        """Confirmed drop >50% from an armed peak, outside grace, closes."""
+        # Outside the post-open grace window (but under max hold)
+        pm_with_position.position.open_time = (
+            datetime.utcnow() - timedelta(minutes=5))
+        # Peak $80 >= floor (30% of $100 budget = $30) -> armed
         pm_with_position.update_position(make_report_data(profit_usd=80.0))
 
-        # Second report: profit dropped to $30 (62.5% drop from $80)
-        result = pm_with_position.update_position(
+        # First drop report ($30 = 62.5% drop) only arms the debounce
+        first = pm_with_position.update_position(
             make_report_data(profit_usd=30.0)
+        )
+        assert first["command"]["action"] == "HOLD"
+
+        # Second consecutive drop report confirms -> CLOSE
+        result = pm_with_position.update_position(
+            make_report_data(profit_usd=28.0)
         )
         assert result["has_command"] is True
         assert result["command"]["action"] == "CLOSE"
@@ -154,13 +163,104 @@ class TestGuardrails:
         assert result["command"]["action"] == "HOLD"
 
     def test_profit_protection_only_after_threshold(self, pm_with_position):
-        """Profit protection should not trigger if peak < $20."""
-        # Peak = $15, drop to $5 (66% drop but below $20 threshold)
-        pm_with_position.update_position(make_report_data(profit_usd=15.0))
+        """No protection close while the peak is below the arming floor
+        (30% of the $100 default budget = $30)."""
+        pm_with_position.position.open_time = (
+            datetime.utcnow() - timedelta(minutes=5))
+        # Peak = $25 < $30 floor, drop to $5 (80% drop) twice
+        pm_with_position.update_position(make_report_data(profit_usd=25.0))
+        pm_with_position.update_position(make_report_data(profit_usd=5.0))
         result = pm_with_position.update_position(
             make_report_data(profit_usd=5.0)
         )
-        # Should not trigger profit protection (peak $15 < $20 threshold)
+        assert result["command"]["action"] == "HOLD"
+
+    def test_profit_protection_floor_scales_with_budget(self, pm):
+        """2026-08-04 NZD regression: with a $1000 budget the old flat $20
+        floor armed at ~1.3 pips of a 1.57-lot position. The floor is now 30%
+        of max_loss_usd, so a $34.54 peak must NOT arm the guardrail."""
+        pm.on_position_opened(make_position_data(max_loss_usd=1000.0))
+        pm.position.open_time = datetime.utcnow() - timedelta(minutes=5)
+        pm.update_position(make_report_data(profit_usd=34.54))
+        pm.update_position(make_report_data(profit_usd=-23.55))
+        result = pm.update_position(make_report_data(profit_usd=-23.55))
+        assert result["command"]["action"] == "HOLD"
+
+    def test_profit_protection_respects_grace_period(self, pm_with_position):
+        """2026-08-04 NZD regression: the release whipsaw lives in the first
+        ~2 minutes. Inside the grace window even a confirmed 100%+ drop from
+        an armed peak must not close."""
+        # Fresh position (open_time = now) -> inside 120s grace
+        pm_with_position.update_position(make_report_data(profit_usd=80.0))
+        pm_with_position.update_position(make_report_data(profit_usd=5.0))
+        result = pm_with_position.update_position(
+            make_report_data(profit_usd=5.0)
+        )
+        assert result["command"]["action"] == "HOLD"
+
+    def test_profit_protection_single_report_does_not_close(
+            self, pm_with_position):
+        """One whipsaw report is noise; recovery resets the debounce."""
+        pm_with_position.position.open_time = (
+            datetime.utcnow() - timedelta(minutes=5))
+        pm_with_position.update_position(make_report_data(profit_usd=80.0))
+        # One drop report, then recovery above the 50% line
+        pm_with_position.update_position(make_report_data(profit_usd=30.0))
+        back = pm_with_position.update_position(
+            make_report_data(profit_usd=70.0)
+        )
+        assert back["command"]["action"] == "HOLD"
+        assert pm_with_position._profit_drop_breaches == 0
+
+    def test_profit_protection_never_closes_in_the_red(self, pm_with_position):
+        """A negative total is a job for max-loss/SL, not profit protection —
+        and time in the red RESETS the debounce, so a recovery must earn the
+        close with two consecutive positive reports of its own (the first
+        green tick after a deep drawdown must not cash out the runner)."""
+        pm_with_position.position.open_time = (
+            datetime.utcnow() - timedelta(minutes=5))
+        pm_with_position.update_position(make_report_data(profit_usd=80.0))
+        # Two drop reports in the red -> no close, counter stays reset
+        pm_with_position.update_position(make_report_data(profit_usd=-5.0))
+        red = pm_with_position.update_position(
+            make_report_data(profit_usd=-5.0)
+        )
+        assert red["command"]["action"] == "HOLD"
+        assert pm_with_position._profit_drop_breaches == 0
+        # Recovery to +$10 (drop 87.5%): first green report only arms...
+        first_green = pm_with_position.update_position(
+            make_report_data(profit_usd=10.0)
+        )
+        assert first_green["command"]["action"] == "HOLD"
+        # ...the second green report confirms and locks in what is left
+        result = pm_with_position.update_position(
+            make_report_data(profit_usd=10.0)
+        )
+        assert result["command"]["action"] == "CLOSE"
+        assert "profit dropped" in result["command"]["reason"].lower()
+
+    def test_catastrophic_give_back_closes_on_first_report(
+            self, pm_with_position):
+        """A >=90% give-back of a big armed peak (>=2x floor) closes without
+        waiting for confirmation — the next report may already be in the red,
+        where this rule refuses to act."""
+        pm_with_position.position.open_time = (
+            datetime.utcnow() - timedelta(minutes=5))
+        pm_with_position.update_position(make_report_data(profit_usd=200.0))
+        result = pm_with_position.update_position(
+            make_report_data(profit_usd=5.0)
+        )
+        assert result["command"]["action"] == "CLOSE"
+        assert "profit dropped" in result["command"]["reason"].lower()
+
+    def test_incident_regression_default_budget(self, pm_with_position):
+        """2026-08-04 NZD shape at the $100 DEFAULT budget: the $34.54 peak
+        DOES clear the $30 floor, so it is the grace window (and debounce)
+        that must carry the save — the whipsaw happened seconds after open."""
+        pm_with_position.update_position(make_report_data(profit_usd=34.54))
+        result = pm_with_position.update_position(
+            make_report_data(profit_usd=-23.55)
+        )
         assert result["command"]["action"] == "HOLD"
 
     def test_daily_loss_blocks_new_trades(self, pm):
@@ -774,17 +874,23 @@ class TestPartialCloseAccounting:
 
     def test_protection_still_fires_on_real_collapse_after_partial(self, pm):
         pm.on_position_opened(make_position_data(lots=2.4))
+        pm.position.open_time = datetime.utcnow() - timedelta(minutes=5)
         pm.update_position(make_report_data(remaining_lots=2.4, profit_usd=200.0))
         pm.update_position(make_report_data(remaining_lots=1.2, profit_usd=96.0))
-        # Genuine reversal: floating -> $0, total 100 vs peak 200 = -50%
+        # Genuine reversal: floating -> $0, total 100 vs peak 200 = -50%,
+        # confirmed on a second consecutive report
+        pm.update_position(make_report_data(remaining_lots=1.2, profit_usd=0.0))
         result = pm.update_position(make_report_data(remaining_lots=1.2, profit_usd=0.0))
         assert result["has_command"] is True
         assert result["command"]["action"] == "CLOSE"
         assert "profit dropped" in result["command"]["reason"].lower()
 
     def test_protection_unchanged_without_partial(self, pm_with_position):
-        """No partial close -> exact old floating-only behaviour."""
+        """No partial close -> same peak math on the plain floating value."""
+        pm_with_position.position.open_time = (
+            datetime.utcnow() - timedelta(minutes=5))
         pm_with_position.update_position(make_report_data(profit_usd=80.0))
+        pm_with_position.update_position(make_report_data(profit_usd=30.0))
         result = pm_with_position.update_position(make_report_data(profit_usd=30.0))
         assert result["command"]["action"] == "CLOSE"
         assert "profit dropped" in result["command"]["reason"].lower()

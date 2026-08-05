@@ -24,8 +24,15 @@ operatora); nic nie wymaga klikania.
   (klucz: „fade ostatnich świec", 78%); edytowalny ręcznie, trackowany w git.
   Workflow badania: `research/screens/README.md`.
 - `knowledge/learned_stats.json` — generowany skryptem, nie ruszać ręcznie.
+  Od 05.08.2026 zawiera też `favorable_run_5min`/`favorable_run_30min`
+  (ekskursja Z kierunkiem ruchu, mediana/p75/**p80**/p90) — kotwica dla
+  `take_profit_pips`: prompt każe mieścić TP między medianą a p80 favorable
+  run dla okna wyjścia (minus bieżący spread — statystyka mierzy travel bidu).
 - Pola liczbowe odpowiedzi LLM są clampowane (conf 0–1, lot≤85, exit 5–15,
-  SL 25–80, TP 30–120).
+  SL 25–80, TP **8**–120 — floor obniżony z 30, bo dla małych eventów p75
+  ruchu 30-min bywa < 30 pipsów i TP nigdy nie był osiągalny).
+- `ENTRY_PROMPT_VERSION = 2026-08-05.1` (zmiana promptu TP) — kalibracja
+  liczy się per wersja, więc linia kalibracji zamilknie do n≥50 nowej wersji.
 
 ## Operacje i pułapki
 
@@ -37,4 +44,4 @@ operatora); nic nie wymaga klikania.
   w prompcie korygowane do UTC.
 - Analiza przed LIVE na danych historycznych: [CALIBRATION_ANALYSIS.md](../../SkyTowerAI/CALIBRATION_ANALYSIS.md).
 
-_Aktualizacja: 2026-07-27 · stan: branch gpt_review (po f8d617d)_
+_Aktualizacja: 2026-08-05 · stan: branch gpt_review (favorable run + TP 8–120, prompt 2026-08-05.1)_

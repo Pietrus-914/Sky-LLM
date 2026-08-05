@@ -384,6 +384,23 @@ class TestCommandDeliveryIsConfirmed:
         assert pm._served_command is None
         assert pm.position.sl_moved_to_be is True
 
+    def test_observed_modify_tp_is_retired(self):
+        """MODIFY_TP used to fall through _command_effect_observed to True —
+        auto-confirmed without broker evidence, making its REDELIVERABLE
+        membership dead. Now it retires only on a matching reported tp."""
+        pm = self._pm()
+        pm.pending_command = PositionCommand(action="MODIFY_TP",
+                                             tp_price=1.3760)
+        pm.update_position(self._report())
+
+        # tp still the old one -> NOT confirmed, re-served once
+        second = pm.update_position(self._report(tp=1.3800))
+        assert second["command"]["action"] == "MODIFY_TP"
+
+        # broker report shows the new tp -> retired
+        pm.update_position(self._report(tp=1.3760))
+        assert pm._served_command is None
+
     def test_unobserved_modify_sl_does_not_burn_an_extra_model_call(self):
         """A broker that keeps rejecting a stop must not bill a fresh exit
         consultation on every single report."""
@@ -434,7 +451,11 @@ class TestManagementTrailRecordsTheEnding:
         """The exact shape from the 31.07 screenshot: peak, fade, safety close
         — previously invisible in the trail."""
         pm = self._pm()
+        # Outside the post-open grace window, and the drop confirmed by a
+        # second consecutive report (2026-08-04 guardrail rework)
+        pm.position.open_time = datetime.utcnow() - timedelta(minutes=5)
         pm.update_position(self._report(profit_usd=50.0))
+        pm.update_position(self._report(profit_usd=12.0))
         cmd = pm.update_position(self._report(profit_usd=12.0))
 
         assert cmd["command"]["action"] == "CLOSE"

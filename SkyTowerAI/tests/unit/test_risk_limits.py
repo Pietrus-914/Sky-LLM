@@ -93,6 +93,63 @@ class TestRiskEndpointRejectsConflicts:
         assert resp.status_code == 400
         assert "between" in resp.get_json()["message"]
 
+    def test_profit_protection_keys_round_trip(self, client):
+        """The 2026-08-05 guardrail knobs are panel-owned like the rest of
+        the risk card: GET exposes them, a valid POST applies + persists."""
+        c, saved = client
+        resp = c.get('/api/config/risk')
+        data = resp.get_json()
+        for key in ("profit_protection_percent",
+                    "profit_protection_floor_pct",
+                    "profit_protection_grace_seconds"):
+            assert key in data
+
+        resp = c.post('/api/config/risk', json={
+            "profit_protection_percent": 60,
+            "profit_protection_floor_pct": 40,
+            "profit_protection_grace_seconds": 180,
+        })
+        assert resp.status_code == 200
+        assert cfg.POSITION_MANAGEMENT_CONFIG["profit_protection_percent"] == 60
+        assert cfg.POSITION_MANAGEMENT_CONFIG["profit_protection_floor_pct"] == 40
+        assert cfg.POSITION_MANAGEMENT_CONFIG["profit_protection_grace_seconds"] == 180
+        assert saved and saved[0].get("profit_protection_percent") == 60
+
+    def test_profit_protection_out_of_range_rejected(self, client):
+        c, saved = client
+        before = cfg.POSITION_MANAGEMENT_CONFIG["profit_protection_percent"]
+        resp = c.post('/api/config/risk',
+                      json={"profit_protection_percent": 5})
+        assert resp.status_code == 400
+        assert "between" in resp.get_json()["message"]
+        assert cfg.POSITION_MANAGEMENT_CONFIG["profit_protection_percent"] == before
+        assert saved == []
+
+    def test_profit_protection_percent_changes_guardrail_live(self):
+        """A panel write must change the very next guardrail evaluation —
+        PositionManager holds the SAME config dict, not a copy."""
+        from datetime import datetime, timedelta
+        from position_manager import PositionManager
+        pm = PositionManager(exit_engine=None)
+        pm.on_position_opened({
+            "ticket": 1, "symbol": "NZDUSD", "direction": "BUY",
+            "entry_price": 0.62, "lots": 0.5, "sl": 0.617, "tp": 0.0,
+            "tick_value": 10.0, "account_balance": 5000.0,
+        })
+        pm.position.open_time = datetime.utcnow() - timedelta(minutes=5)
+        report = {"ticket": 1, "current_price": 0.621, "remaining_lots": 0.5,
+                  "sl": 0.617, "tp": 0.0, "tick_value": 10.0,
+                  "account_balance": 5000.0, "spread_pips": 2.0}
+        pm.update_position(dict(report, profit_usd=80.0))
+        # At 85% the 62.5% drop is not a breach -> counter never arms
+        cfg.POSITION_MANAGEMENT_CONFIG["profit_protection_percent"] = 85
+        try:
+            pm.update_position(dict(report, profit_usd=30.0))
+            result = pm.update_position(dict(report, profit_usd=30.0))
+            assert result["command"]["action"] == "HOLD"
+        finally:
+            cfg.POSITION_MANAGEMENT_CONFIG["profit_protection_percent"] = 50
+
 
 class TestForcedFlagSurvivesReconcile:
     """A reconcile report REBUILDS server state after a restart. The EA now
