@@ -1,6 +1,6 @@
 # SkyTower-AI 4.1 — Dokumentacja Techniczna
 
-> Stan: 30.07.2026 · serwer 4.1.0 · 691 testów zielonych. Operacje i uruchamianie:
+> Stan: 30.07.2026 · serwer 4.1.0 · 696 testów zielonych. Operacje i uruchamianie:
 > [RUNBOOK.md](RUNBOOK.md) (autorytatywny). Mapa całej dokumentacji:
 > `../wiki/pages/documentation-map.md`.
 
@@ -99,7 +99,7 @@ SkyTowerAI/
 │   ├── tools/        # narzędzia offline (serwer ich NIE importuje)
 │   └── .env          # OPENROUTER_API_KEY (gitignored)
 ├── mt5/SkyTowerAI_EA.mq5   # Expert Advisor (~1950 linii)
-├── tests/            # 691 testów (pytest)
+├── tests/            # 696 testów (pytest)
 ├── START.bat         # główny launcher (serwer + MT5)
 └── RUNBOOK.md        # instrukcja operacyjna (autorytatywna)
 ```

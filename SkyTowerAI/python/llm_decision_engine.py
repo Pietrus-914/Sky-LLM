@@ -28,7 +28,7 @@ from config import (LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS,
 # Bump MANUALLY on every substantive entry-prompt change. Recorded with each
 # decision so calibration/replay can be grouped per prompt version — without
 # it, prompt edits silently mix regimes inside one calibration ledger.
-ENTRY_PROMPT_VERSION = "2026-07-26.1"
+ENTRY_PROMPT_VERSION = "2026-08-05.1"
 
 # Minimum VALID votes for an ensemble result to be called a panel decision.
 # Below this the committee has silently shrunk (a vendor timed out, or replied
@@ -152,6 +152,18 @@ d. Volatility fit: are your stop_loss_pips/take_profit_pips consistent with ATR 
    in the release seconds — the EVENT PLAYBOOK gives measured wick sizes for many
    events; if two estimates could apply, budget the LARGER. A stop tighter than
    wick+spread dies at the print even when the direction is right.
+   TAKE-PROFIT REACHABILITY: the TP becomes a broker limit order at entry — an
+   opportunistic banker of the spike that the 5-15s report cycle would give
+   back; the server exit engine still closes the trade on schedule either way.
+   Size it from the measured "favorable run" stats when provided: between the
+   MEDIAN (hit in roughly half of correctly-called releases) and the p80 (the
+   strong-spike tail, hit in ~20%), and never above the p80 for your exit
+   window. The 30-min figures often print near T+30 — within a 5-15 min hold
+   treat them as a ceiling, not a target. A TP beyond the measured run is a
+   lottery ticket. UNITS CAVEAT: the measured run is BID-path travel, while a
+   TP is a P/L distance that fills only after price travels TP + spread — so
+   subtract the current spread from the measured stat before anchoring, and
+   always keep TP >= ~2x current spread.
 e. Historical reactions, LEARNED EVENT STATISTICS (when provided) and YOUR
    TRACK RECORD: the measured medians and hit-rates are your statistical prior —
    anchor on them, then adjust for today's specifics. Respect sample sizes:
@@ -167,7 +179,12 @@ and direction fields:
 {
     "reasoning": "Base rate -> adjustments -> confidence self-check -> conclusion. CONCISE: max ~120 words — the response must never be cut off before the fields below",
     "stop_loss_pips": 25 to 80 (wider for JPY pairs: 40-80),
-    "take_profit_pips": 30 to 120 (1.5x to 2x of SL),
+    "take_profit_pips": 8 to 120 (when measured stats are provided, size it between
+        the MEDIAN and the p80 of the favorable run for your exit window — near the
+        median for a high-probability bank, toward the p80 only with strong
+        continuation evidence, never above it. NOT a fixed multiple of SL — but if
+        the reachable TP is under ~0.5x your SL, question whether the trade is
+        worth its risk at all),
     "exit_minutes": 5 to 15,
     "lot_percent": 60 to 85 (percent of max lot),
     "direction": %DIRECTION_VALUES%,
@@ -846,6 +863,43 @@ confidence — do NOT inflate it just because a direction is required."""
                          f"eventual 5-min direction): {wick_txt} pips (n={wick['n']}) "
                          f"— the stop must survive the tail of this, not the median")
 
+        fav_parts = []
+        fav_has_p80 = False
+        fav_has_5min = False
+        for label, stat_key in (("first 5min", "favorable_run_5min"),
+                                ("first 30min", "favorable_run_30min")):
+            fav = block.get(stat_key)
+            if not isinstance(fav, dict) or fav.get('n', 0) < self.STATS_MIN_N:
+                continue
+            fav_txt = f"{label} median {fav['median']:g}"
+            if 'p75' in fav:
+                fav_txt += f", p75 {fav['p75']:g}"
+            if 'p80' in fav:
+                fav_txt += f", p80 {fav['p80']:g}"
+                fav_has_p80 = True
+            if stat_key == "favorable_run_5min":
+                fav_has_5min = True
+            fav_parts.append(fav_txt + f" (n={fav['n']})")
+        if fav_parts:
+            # Never direct the model at a quantile this block does not show:
+            # p80 needs n>=10 while the render gate is n>=5, and 30-min-only
+            # blocks must not turn the ceiling into the anchor.
+            if fav_has_p80:
+                guidance = ("size take_profit_pips between the median and the "
+                            "p80 for your exit window, never above the p80")
+            else:
+                guidance = ("size take_profit_pips near the median with the "
+                            "p75 as the ceiling (sample too small for a p80)")
+            if not fav_has_5min:
+                guidance += ("; CAUTION: only the 30-min window is measured "
+                             "here and its extreme often prints near T+30 — "
+                             "beyond a 5-15 min hold, treat it as a hard "
+                             "ceiling, not a target")
+            lines.append("- favorable run (excursion WITH the eventual "
+                         "direction — what a take-profit can capture when the "
+                         "direction is right): " + "; ".join(fav_parts)
+                         + " pips — " + guidance)
+
         cont = self._fmt_rate(block.get('continuation_5to30'))
         if cont:
             lines.append(f"- 5->30min continuation (same direction still at 30min): {cont}")
@@ -904,6 +958,14 @@ confidence — do NOT inflate it just because a direction is required."""
         move5 = self._fmt_dist(block.get('abs_move_5min'))
         if move5:
             recap_parts.append(f"5-min |move| {move5}")
+        # The recap has the highest recency weight in the prompt — without the
+        # favorable run here, the last magnitude the model sees is the (much
+        # smaller) boundary move it was told NOT to size the TP from.
+        fav5 = block.get('favorable_run_5min')
+        if (isinstance(fav5, dict) and fav5.get('n', 0) >= self.STATS_MIN_N
+                and 'p80' in fav5):
+            recap_parts.append(f"favorable-run median {fav5['median']:g}"
+                               f"/p80 {fav5['p80']:g}p (TP anchor..ceiling)")
         if beat:
             recap_parts.append(f"BEAT->{cur} stronger {beat}")
         if miss:
@@ -1185,9 +1247,12 @@ decision in JSON format."""
                 logger.warning(f"LLM returned SKIP despite force mode — remapped to {direction}")
 
             # LLM numeric fields are clamped to the ranges documented in the
-            # output schema (exit 5-15, lot <=85, SL 25-80, TP 30-120) — the
+            # output schema (exit 5-15, lot <=85, SL 25-80, TP 8-120) — the
             # playbook texts quote sub-5-minute historical exits and the model
             # must not be able to push an out-of-contract value to the EA.
+            # The TP floor is 8, not 30: many tradeable events (NZD jobs:
+            # 30-min |move| p75 = 20 pips) never travel 30 pips, and a floor
+            # above the measured favorable run made every TP unreachable.
             # SL/TP of 0 mean "not set" and are passed through for EA fallback.
             sl_pips = self._num(decision_data.get('stop_loss_pips'), 0)
             tp_pips = self._num(decision_data.get('take_profit_pips'), 0)
@@ -1204,7 +1269,7 @@ decision in JSON format."""
                 exit_minutes_after=int(self._num(decision_data.get('exit_minutes'), 10, 5, 15)),
                 stop_loss_percent=self._num(decision_data.get('stop_loss_percent'), 40, 0, 100),
                 stop_loss_pips=sl_pips if sl_pips <= 0 else min(max(sl_pips, 25.0), 80.0),
-                take_profit_pips=tp_pips if tp_pips <= 0 else min(max(tp_pips, 30.0), 120.0),
+                take_profit_pips=tp_pips if tp_pips <= 0 else min(max(tp_pips, 8.0), 120.0),
                 reasoning=reasoning,
                 data_summary=data_context,
                 timestamp=utcnow(),
@@ -1401,7 +1466,7 @@ decision in JSON format."""
                 stop_loss_percent=_median([self._num(v["parsed"].get('stop_loss_percent'),
                                                      40, 0, 100) for v in src]),
                 stop_loss_pips=sl if sl <= 0 else min(max(sl, 25.0), 80.0),
-                take_profit_pips=tp if tp <= 0 else min(max(tp, 30.0), 120.0),
+                take_profit_pips=tp if tp <= 0 else min(max(tp, 8.0), 120.0),
                 reasoning=reasoning,
                 data_summary=data_context,
                 timestamp=utcnow(),

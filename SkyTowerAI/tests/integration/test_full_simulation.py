@@ -604,12 +604,15 @@ class TestEdgeCases:
         """If profit peaks, drops 50%, but then recovers — should have closed at drop."""
         pm = PositionManager(exit_engine=None)
         pm.on_position_opened(make_open_data())
+        # Outside the post-open grace window (2026-08-04 guardrail rework)
+        pm.position.open_time = datetime.utcnow() - timedelta(minutes=5)
 
         # Rise to peak
         pm.update_position(make_report(profit_usd=50.0))
         pm.update_position(make_report(profit_usd=80.0))
 
-        # Drop >50% from peak ($80 → $35 = 56% drop)
+        # Drop >50% from peak ($80 → $35 = 56% drop), confirmed twice
+        pm.update_position(make_report(profit_usd=35.0))
         result = pm.update_position(make_report(profit_usd=35.0))
         assert result['command']['action'] == 'CLOSE'
         assert "profit dropped" in result['command']['reason'].lower()
@@ -636,6 +639,9 @@ class TestStrategySimulation:
         pm.config["llm_check_interval_seconds"] = 0
 
         pm.on_position_opened(make_open_data())
+        # Scenarios model the minutes AFTER the release whipsaw, so start
+        # outside the profit-protection grace window (but under max hold)
+        pm.position.open_time = datetime.utcnow() - timedelta(minutes=5)
 
         actions = []
         # The simulated EA must EXECUTE commands: flags are derived from broker
@@ -716,9 +722,11 @@ class TestStrategySimulation:
         ~$37 realized), so protection fires when the total falls under ~$64,
         i.e. when the remaining leg is worth roughly $26 — not at $40. Judging
         it on the floating value alone is exactly the bug that used to
-        force-close the runner right after every partial.
+        force-close the runner right after every partial. The fade also has to
+        LAST: one report under the line is treated as whipsaw noise, the
+        second consecutive one confirms (2026-08-04 guardrail rework).
         """
-        curve = [0, 15, 35, 55, 75, 90, 85, 75, 60, 45, 40, 32, 25]
+        curve = [0, 15, 35, 55, 75, 90, 85, 75, 60, 45, 40, 32, 25, 15]
         actions = self._run_scenario(curve)
 
         assert any(a["action"] == "PARTIAL_CLOSE" for a in actions), \

@@ -33,6 +33,26 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_ranged_float(name: str, default: float, lo: float, hi: float) -> float:
+    """_env_float plus a range guard. An out-of-range value can silently
+    DISABLE a guardrail (grace of 99999s means profit protection never arms),
+    so the .env rung gets the same bounds the panel endpoint enforces."""
+    value = _env_float(name, default)
+    if not lo <= value <= hi:
+        print(f"WARNING: {name}={value} out of range {lo}-{hi} — using default {default}")
+        return default
+    return value
+
+
+def _env_ranged_int(name: str, default: int, lo: int, hi: int) -> int:
+    """_env_int plus the same range guard as _env_ranged_float."""
+    value = _env_int(name, default)
+    if not lo <= value <= hi:
+        print(f"WARNING: {name}={value} out of range {lo}-{hi} — using default {default}")
+        return default
+    return value
+
+
 def _env_bool(name: str, default: bool) -> bool:
     """Bool env var — accepts 1/true/yes/on (case-insensitive)."""
     raw = os.getenv(name)
@@ -318,7 +338,16 @@ POSITION_MANAGEMENT_CONFIG = {
     "max_loss_usd": _env_float("SKYTOWER_MAX_LOSS_USD", 100.0),        # per trade → forced close
     "max_hold_minutes": 30,            # Max position duration
     "emergency_spread_pips": 15,       # Close if spread spikes above this
-    "profit_protection_percent": 50,   # Close if profit drops >50% from peak
+    # Close if the whole trade's profit drops >X% from its peak
+    "profit_protection_percent": _env_ranged_float("SKYTOWER_PROFIT_PROTECTION_PERCENT", 50.0, 10, 95),
+    # Profit protection arms only after the peak reaches this % of the trade's
+    # max-loss budget (min $10). A flat $20 floor was ~1.3 pips at 1.57 lots
+    # and armed on spread noise (2026-08-04 NZD postmortem).
+    "profit_protection_floor_pct": _env_ranged_float("SKYTOWER_PROFIT_PROTECTION_FLOOR_PCT", 30.0, 5, 200),
+    # No profit-protection closes this many seconds after open: the release
+    # whipsaw (retrace 25-45% per playbooks) lives inside this window. Matches
+    # the EA's hot reporting period by default.
+    "profit_protection_grace_seconds": _env_ranged_int("SKYTOWER_PROFIT_PROTECTION_GRACE_SECONDS", 120, 0, 600),
 
     # AI decision intervals
     "llm_check_interval_seconds": 30,  # How often to consult LLM for exit decisions
@@ -475,7 +504,10 @@ def _apply_runtime_overrides():
         HIGH_IMPACT_EVENTS = TIER1_EVENTS + TIER2_EVENTS
     for key, lo, hi, cast in (("max_daily_trades", 1, 100, int),
                               ("max_daily_loss_usd", 10, 1_000_000, float),
-                              ("max_loss_usd", 5, 100_000, float)):
+                              ("max_loss_usd", 5, 100_000, float),
+                              ("profit_protection_percent", 10, 95, float),
+                              ("profit_protection_floor_pct", 5, 200, float),
+                              ("profit_protection_grace_seconds", 0, 600, int)):
         if key in data:
             try:
                 value = cast(data[key])

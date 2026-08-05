@@ -42,6 +42,9 @@ DECISION FRAMEWORK (phases describe the OPPORTUNITY, they are not close triggers
 AVAILABLE ACTIONS:
 - HOLD: Do nothing, let position run. Use when position is developing favorably.
 - MODIFY_SL: Change stop loss. Provide sl_price (instrument price). Use to lock in profits.
+- MODIFY_TP: Move the broker take-profit. Provide tp_price (instrument price). Use to
+  pull the target closer when momentum fades. Removing the TP is not possible, only
+  moving it - when the target itself is wrong, prefer PARTIAL_CLOSE or CLOSE.
 - PARTIAL_CLOSE: Close portion of position. Provide close_percent (25-75). Use at key levels.
 - CLOSE: Full position close. Use when target reached, momentum lost, or protecting gains.
 
@@ -51,6 +54,7 @@ Keep reasoning under 40 words - the response must NEVER be cut off before "actio
 {
     "reasoning": "Brief explanation (max 40 words)",
     "sl_price": 0.0,
+    "tp_price": 0.0,
     "close_percent": 0,
     "action": "HOLD"
 }"""
@@ -176,6 +180,7 @@ class ExitDecisionEngine:
 - Current price: {pos.current_price}
 - Lots: {pos.remaining_lots} (original: {pos.lots})
 - Stop Loss: {pos.sl}
+- Take Profit: {pos.tp if pos.tp else "none (no broker TP on this position)"}
 - Profit/Loss (floating, remaining lots only): ${pos.profit_usd:.2f}
 - Realized by partial closes: ${pos.realized_usd:.2f}
 - TOTAL trade P/L: ${pos.profit_usd + pos.realized_usd:.2f}
@@ -289,9 +294,10 @@ Respond with JSON only."""
         else:
             return self._rule_based_decision(pos)
 
-        return self._parse_llm_response(response_text)
+        return self._parse_llm_response(response_text, pos)
 
-    def _parse_llm_response(self, text: str) -> PositionCommand:
+    def _parse_llm_response(self, text: str,
+                            pos: Optional[OpenPosition] = None) -> PositionCommand:
         """Parse LLM response into a PositionCommand."""
         try:
             # Extract JSON from response (handle markdown code blocks)
@@ -315,17 +321,57 @@ Respond with JSON only."""
             if action not in ("HOLD", "MODIFY_SL", "MODIFY_TP", "PARTIAL_CLOSE", "CLOSE"):
                 action = "HOLD"
 
-            return PositionCommand(
+            # `or 0`: a JSON null KEY EXISTS, so .get's default alone returns
+            # None and float(None) raised TypeError — which the except below
+            # did not catch, silently demoting a VALID model verdict (usually
+            # HOLD with "tp_price": null) to the rule-based fallback.
+            cmd = PositionCommand(
                 action=action,
-                sl_price=float(data.get("sl_price", 0)),
-                tp_price=float(data.get("tp_price", 0)),
-                close_percent=float(data.get("close_percent", 0)),
+                sl_price=float(data.get("sl_price") or 0),
+                tp_price=float(data.get("tp_price") or 0),
+                close_percent=float(data.get("close_percent") or 0),
                 reason=f"AI: {data.get('reasoning', 'No reasoning')}",
             )
-        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            if cmd.action == "MODIFY_TP":
+                cmd = self._validate_modify_tp(cmd, pos)
+            return cmd
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError) as e:
             logger.error(f"ExitEngine: Failed to parse LLM response: {e}")
             logger.error(f"ExitEngine: Raw response: {text[:300]}")
             return PositionCommand(action="HOLD", reason="AI: Parse error, holding")
+
+    @staticmethod
+    def _validate_modify_tp(cmd: PositionCommand,
+                            pos: Optional[OpenPosition]) -> PositionCommand:
+        """tp_price is the only model-produced number that reaches the broker
+        unclamped, and a wrong-units value (pips instead of an instrument
+        price, e.g. 15 on NZDUSD ~0.59) can land on the VALID far side of the
+        market — the broker accepts it and the real target is silently gone.
+        Demote anything that is not a plausible profit-side price to HOLD."""
+        if pos is None:
+            return cmd
+        price = pos.current_price
+        if not price or price <= 0:
+            return PositionCommand(
+                action="HOLD",
+                reason="AI: MODIFY_TP dropped (no current price to validate against)")
+        pip_size = forex_pip_size(pos.symbol)
+        margin = pip_size  # do not park a TP right on top of the market
+        on_profit_side = (cmd.tp_price > price + margin
+                          if pos.direction == "BUY"
+                          else 0 < cmd.tp_price < price - margin)
+        # Units sanity: a genuine TP lives within a few hundred pips of the
+        # market; 500 pips is far beyond any clamp/stat this system produces.
+        within_band = abs(cmd.tp_price - price) <= 500 * pip_size
+        if on_profit_side and within_band:
+            return cmd
+        logger.warning(
+            f"ExitEngine: MODIFY_TP {cmd.tp_price} rejected "
+            f"({pos.direction} @ {price}) — wrong side or implausible units; "
+            f"holding instead")
+        return PositionCommand(
+            action="HOLD",
+            reason=f"AI: MODIFY_TP {cmd.tp_price} invalid vs market {price} — held")
 
     def _rule_based_decision(self, pos: OpenPosition) -> PositionCommand:
         """

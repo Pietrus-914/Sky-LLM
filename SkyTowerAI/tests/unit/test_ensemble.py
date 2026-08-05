@@ -103,6 +103,20 @@ class TestUnanimity:
         assert d.stop_loss_pips == 50
         assert d.take_profit_pips == 60
 
+    def test_small_tp_survives_the_clamp(self, tmp_path, monkeypatch):
+        # Events with a measured favorable run under 30 pips (NZD jobs p80
+        # ~26) need a small TP to be expressible; the old 30-pip floor
+        # silently inflated every statistically-sized target out of reach.
+        d, _, _ = run_ensemble(tmp_path, monkeypatch, [
+            reply("BUY", 0.7, tp=12), reply("BUY", 0.7, tp=14),
+            reply("BUY", 0.7, tp=16)])
+        assert d.take_profit_pips == 14
+        # Absurdly small still clamps up to the 8-pip floor
+        d, _, _ = run_ensemble(tmp_path, monkeypatch, [
+            reply("BUY", 0.7, tp=2), reply("BUY", 0.7, tp=2),
+            reply("BUY", 0.7, tp=2)])
+        assert d.take_profit_pips == 8
+
     def test_sl_zero_sentinel_never_averaged(self, tmp_path, monkeypatch):
         # 0 = "not set" SENTINEL, not a magnitude. Zeros >= real votes -> 0.
         d, _, _ = run_ensemble(tmp_path, monkeypatch, [

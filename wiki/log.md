@@ -300,3 +300,112 @@ prawdopodobnie **nigdy nie oddał udanego głosu wejściowego**.
   `grep "Ensemble vote DROPPED" logs/server.log` podaje powód i pierwsze 200
   znaków nieparsowalnej odpowiedzi; pełne surowe odpowiedzi per model są w
   `logs/decision_context/<decision_id>.json`.
+
+## 2026-07-31 INGEST | Ślad zarządzania pozycją gubił własne zakończenie
+
+Zgłoszenie operatora: „brakuje mi informacji o zamknięciu po 15 wierszach" —
+podejrzenie limitu na liście AI POSITION MANAGEMENT.
+
+**Limitu nie ma.** Nagłówek „(15)" to długość listy, a dashboard iteruje
+wszystkie wpisy bez cięcia (`dashboard.html`, pętla po `trade.ai_decisions`);
+close record niesie `list(position.ai_decisions)` w całości. Jedyne obcięcie w
+kodzie to `pos.ai_decisions[-5:]` w `exit_decision_engine._build_prompt` — ile
+decyzji widzi MODEL, nie ile się zapisuje.
+
+**Prawdziwa przyczyna:** komendy guardraili były serwowane **bez zapisu do
+śladu**. `_check_guardrails()` zwracał komendę, `update_position` ją wysyłał i
+nic nie trafiało do `ai_decisions` — więc ślad kończył się ostatnim HOLD-em
+modelu, mimo że sam trade miał `reason: "Safety: profit dropped 74% from peak"`.
+Dotyczyło to wszystkich bezpieczników: max loss, max hold, spread awaryjny i
+ochrona zysku — czyli **akcji, które najczęściej KOŃCZĄ zagranie**. Ten sam
+ucięty ślad szedł do `trade_history.jsonl` i dalej do refleksji po trade'zie,
+które „widziały" zagrania bez zakończenia.
+
+Fix: wspólne `PositionManager._record_management_action(cmd, source=...)` dla
+obu ścieżek (model i guardrail), pole `source` w każdym wpisie, zwijanie
+IDENTYCZNYCH kolejnych wpisów guardraila (bezpiecznik re-ewaluuje się na każdym
+raporcie i strzelałby co 5-15 s), decyzje modelu nigdy nie zwijane — dwa
+identyczne HOLD-y co 30 s to dwie realne konsultacje. Dashboard oznacza wiersze
+bezpieczników `[SAFETY]`; stare wpisy bez `source` renderują się jak dotąd.
+6 nowych testów, **696 zielonych**.
+
+## INGEST 2026-08-05: postmortem NZD Employment — przebudowa profit-protection, statystyczny TP, TP brokera w zleceniu
+
+Trade 04.08 22:45 UTC (SELL NZDUSD 1.57 lot, Employment Change q/q): kierunek
+trafny, ale guardrail profit-protection zamknął pozycję w sekundy po publikacji
+z wynikiem −12.57 $ ("Safety: profit dropped 168% from peak ($34.54 → −$23.55)").
+Postmortem wykazał trzy niezależne wady i wszystkie trzy zostały naprawione,
+każda ze swoim niezależnym code review + testami (711 zielonych):
+
+1. **Profit-protection** (position_manager): stary płaski próg uzbrojenia 20 $
+   to przy 1.57 lota ~1.3 pipsa — uzbrajał się na szumie spreadu; brak debounce
+   i karencji. Teraz: próg = 30% budżetu `max_loss_usd` (min 10 $), karencja
+   120 s po otwarciu, potwierdzenie w 2 kolejnych raportach (wzór spreadu
+   awaryjnego; oddanie ≥90% szczytu ≥2× progu zamyka od razu), nigdy nie
+   zamyka na minusie netto (poduszka prowizji ~7 $/lot; czas „pod wodą"
+   ZERUJE licznik — odbicie musi potwierdzić się dwoma zielonymi raportami).
+   Trzy nowe parametry w panelu Risk & Daily Limits + env z clampem zakresu
+   (`_env_ranged_*`) + w logu startowym EFFECTIVE RISK LIMITS. Conftest pinuje
+   klucze ryzyka (panel operatora nie może psuć testów).
+2. **Statystyczny TP** (build_learned_stats + llm_decision_engine): nowe staty
+   `favorable_run_5min/30min` (ekskursja Z kierunkiem; mediana/p75/p80/p90) z
+   ~44k ścieżek; prompt każe mieścić `take_profit_pips` między medianą a p80
+   dla okna wyjścia (30-min = sufit, minus spread — statystyka to travel
+   bidu); clamp TP obniżony 30→8 (dla NZD jobs p75 ruchu 30-min = 20.3 pipsa,
+   TP 48 był nieosiągalny z konstrukcji). `ENTRY_PROMPT_VERSION = 2026-08-05.1`.
+3. **TP brokera w zleceniu** (EA): `trade.Buy/Sell` dostawały TP=0 na sztywno —
+   `take_profit_pips` było parsowane i WYRZUCANE (dlatego deal miał pustą
+   kolumnę T/P). Teraz TP jedzie w zleceniu (zaokrąglenie KU wejściu, walidacja
+   stops-level po konserwatywnej stronie, degradacja do 0 zamiast blokady
+   wejścia, retry bez TP tylko na retcode 10016, korekcyjny ModifyPositionTP
+   po otwarciu). Exit-LLM widzi TP w prompcie i ma udokumentowaną akcję
+   MODIFY_TP (confirm-then-retire porównuje raportowane `tp`). Kompilacja
+   0/0. Bonus: `InpUseZoneTargets` to od dawna martwy input (nie pobiera
+   /api/targets) — CLAUDE.md poprawione.
+
+Strony: system-overview (guardraile 2026-08-05, przepływ z TP), learning-loop
+(favorable run, clamp 8–120, wersja promptu). Pełny postmortem w pamięci
+projektu Claude (nzd-postmortem-2026-08-04).
+
+## INGEST 2026-08-05 (2): finalny audyt adwersaryjny pakietu postmortem — 7 potwierdzonych defektów naprawionych
+
+Po wdrożeniu pakietu postmortem przeprowadzono finalny audyt całego commita
+(3 soczewki × adwersaryjna weryfikacja każdego znaleziska; 11 zgłoszonych,
+4 obalone, 7 potwierdzonych). Naprawione (719 testów zielonych):
+
+1. **Pętla reconcile zerowała liczniki debounce** (position_manager): przy
+   trwałej awarii zapisu position-store (dysk pełny/zablokowany plik) każdy
+   raport wchodził w gałąź reconcile i zerował _spread_breaches oraz
+   _profit_drop_breaches PRZED guardrailami — potwierdzone zamknięcia
+   (spread, profit-protection) nigdy nie osiągały drugiego raportu. Reset
+   tylko przy prawdziwym recovery (recovery_state == "pending").
+2. **Poduszka prowizji po partialu liczona od pełnego lota**: broker
+   realized_usd zawiera już prowizję wejściową CAŁEJ pozycji, więc poduszka
+   liczy się teraz od remaining_lots — stara wersja tworzyła martwą strefę
+   (np. total 9.5$ przy poduszce 10.5$), w której guardrail nie zamykał i
+   zerował licznik.
+3. **MODIFY_TP bez walidacji jednostek/strony**: tp_price=15 (pipsy zamiast
+   ceny) na NZDUSD lądował po WAŻNEJ stronie rynku — broker przyjmował,
+   realny TP znikał. Teraz walidacja strony zysku + pasmo 500 pipsów od
+   rynku; nieprawidłowy MODIFY_TP degraduje do HOLD z logiem.
+4. **Odrzucony przez brokera MODIFY_TP ginął bez re-konsultacji**: po
+   MAX_COMMAND_DELIVERIES resetuje teraz last_llm_check (jak CLOSE) — decyzja
+   o bankowaniu jest czasowo krytyczna; MODIFY_SL celowo zostaje na cyklu.
+5. **float(None) w parserze exit**: JSON null w polu liczbowym (naturalne
+   dla nowego tp_price) rzucał TypeError niełapany przez except — ważny HOLD
+   modelu degradował do rule-based fallbacku. Teraz `or 0` + TypeError w
+   except.
+6. **Panel: pominięte pola NaN raportowały sukces**: teraz głośny toast
+   "NOT saved (…) — previous values still armed" + przeładowanie karty
+   wartościami realnie uzbrojonymi (zweryfikowane w przeglądarce E2E).
+
+ODROCZONE (minor, udokumentowana luka): fill widoczny z opóźnieniem i
+zamknięty przez ciasny TP brokera ZANIM jakikolwiek poll recovery zobaczy
+pozycję → trade znika z księgowości (bez opened/closed, RECOVERY_NONE po
+30 s). Rzadki wyścig pod obciążeniem publikacji; pieniądze bezpieczne,
+gubi się tylko wpis w historii/limicie dziennym. Fix wymagałby skanu
+historii dealów przy wygaśnięciu okna pendingOpen — do osobnej rundy.
+
+Obalone przez weryfikatorów (nie są bugami): "katastrofa niespełnialna przy
+produkcyjnych lotach", "gorszy drugi raport kasuje potwierdzenie", "testy
+nie pinują semantyk", "renderer 30-min bez sufitu".

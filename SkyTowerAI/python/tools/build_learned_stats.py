@@ -230,8 +230,8 @@ def attribute_records(records):
 
 def _dist(values, tail=False):
     """{"median", "p25", "p75", "n"} of a numeric list (None -> omitted).
-    tail=True adds p90 (n>=10) — stop budgets must survive the tail wick,
-    not the median one."""
+    tail=True adds p80/p90 (n>=10) — stop budgets must survive the tail wick,
+    not the median one, and take-profits anchor on the p80 favorable run."""
     vals = sorted(v for v in values if v is not None)
     if not vals:
         return None
@@ -241,7 +241,9 @@ def _dist(values, tail=False):
         out["p25"] = round(q1, 1)
         out["p75"] = round(q3, 1)
     if tail and len(vals) >= 10:
-        out["p90"] = round(statistics.quantiles(vals, n=10, method="inclusive")[8], 1)
+        deciles = statistics.quantiles(vals, n=10, method="inclusive")
+        out["p80"] = round(deciles[7], 1)
+        out["p90"] = round(deciles[8], 1)
     return out
 
 
@@ -294,6 +296,31 @@ def _pair_stats(recs):
         out["adverse_wick_5min"] = _dist(adverse, tail=True)
     if ranges:
         out["range_5min"] = _dist(ranges)
+
+    # Favorable run: the excursion WITH the eventual direction — what a
+    # take-profit can realistically capture when the direction call is right.
+    # Mirrors the adverse wick above: the window extreme on the move's own
+    # side, conditional on that window's |move| clearing the noise gate.
+    # 5-min matches the shortest hold; 30-min is the ceiling for 5-15 min
+    # holds (an extreme printed at T+29 may be unreachable earlier).
+    fav5 = []
+    for r in recs:
+        hi, lo, mv = (r.get("first5_high_pips"), r.get("first5_low_pips"),
+                      r.get("move_5min_pips"))
+        if hi is None or lo is None or mv is None or abs(mv) < MIN_MOVE_PIPS:
+            continue
+        fav5.append(hi if mv > 0 else -lo)
+    if fav5:
+        out["favorable_run_5min"] = _dist(fav5, tail=True)
+    fav30 = []
+    for r in recs:
+        hi, lo, mv = (r.get("high_30min_pips"), r.get("low_30min_pips"),
+                      r.get("move_30min_pips"))
+        if hi is None or lo is None or mv is None or abs(mv) < MIN_MOVE_PIPS:
+            continue
+        fav30.append(hi if mv > 0 else -lo)
+    if fav30:
+        out["favorable_run_30min"] = _dist(fav30, tail=True)
 
     # Continuation: does the 5-min direction still hold at 30 min?
     cont = [(r["move_5min_pips"], r["move_30min_pips"]) for r in recs

@@ -233,13 +233,19 @@ def config_risk():
             "max_daily_trades": pm.get("max_daily_trades"),
             "max_daily_loss_usd": pm.get("max_daily_loss_usd"),
             "max_loss_usd": pm.get("max_loss_usd"),
+            "profit_protection_percent": pm.get("profit_protection_percent"),
+            "profit_protection_floor_pct": pm.get("profit_protection_floor_pct"),
+            "profit_protection_grace_seconds": pm.get("profit_protection_grace_seconds"),
         })
 
     data = request.json or {}
     updated = {}
     for key, lo, hi, cast in (("max_daily_trades", 1, 100, int),
                               ("max_daily_loss_usd", 10, 1_000_000, float),
-                              ("max_loss_usd", 5, 100_000, float)):
+                              ("max_loss_usd", 5, 100_000, float),
+                              ("profit_protection_percent", 10, 95, float),
+                              ("profit_protection_floor_pct", 5, 200, float),
+                              ("profit_protection_grace_seconds", 0, 600, int)):
         if key in data:
             try:
                 value = cast(data[key])
@@ -2920,7 +2926,10 @@ if __name__ == '__main__':
         f"EFFECTIVE RISK LIMITS: max_loss_usd=${_risk.get('max_loss_usd'):,.0f}/trade | "
         f"max_daily_loss_usd=${_risk.get('max_daily_loss_usd'):,.0f}/day | "
         f"max_daily_trades={_risk.get('max_daily_trades')} | "
-        f"max_hold_minutes={_risk.get('max_hold_minutes')} "
+        f"max_hold_minutes={_risk.get('max_hold_minutes')} | "
+        f"profit_protection={_risk.get('profit_protection_percent'):g}% drop, "
+        f"arms at {_risk.get('profit_protection_floor_pct'):g}% of budget, "
+        f"grace {_risk.get('profit_protection_grace_seconds')}s "
         f"(defaults < .env < dashboard panel)"
     )
     import config as _cfg

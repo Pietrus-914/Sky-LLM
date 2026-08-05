@@ -630,6 +630,13 @@ int OnInit()
    Print("Zone Indicator: ", InpUseZoneIndicator ? "Enabled" : "Disabled");
    Print("Zone Bias for Direction: ", InpUseZoneBiasForDirection ? "Enabled" : "Disabled");
    Print("Visual Panel: ", InpShowPanel ? "Enabled" : "Disabled");
+   // Broker stop distances: stops level gates TP/SL placement; a non-zero
+   // FREEZE level would block modifies/closes near the TP (retcode 10018) —
+   // if this ever prints > 0, that failure mode is live on this broker.
+   Print("Broker stops level: ",
+         SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL),
+         " pts | freeze level: ",
+         SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL), " pts");
    Print("==============================================");
 
    //--- Check server connection
@@ -1769,6 +1776,31 @@ void ExecuteEventTrade()
       }
    }
 
+   //--- Finalize the take-profit for the ORDER itself. The server's exit
+   //--- engine stays the strategic exit owner, but a broker-side TP is the
+   //--- only mechanism that can bank a news spike between two 5-15s position
+   //--- reports (2026-08-04 NZD: the favorable spike came and went inside
+   //--- one report cycle). Unlike the stop, an unusable TP must never block
+   //--- the trade: it degrades to 0 and the server manages the exit alone.
+   double tp = 0;
+   if(InpUseStopLoss && MathIsValidNumber(tp1) && tp1 > 0)
+   {
+      // Round toward the entry (BUY floor, SELL ceil) so grid rounding can
+      // only make the target easier to reach, never harder.
+      tp = SkyNormalizeStopPrice(symbol, tp1, g_eventDirection);
+      double brokerMinStop =
+         (double)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
+      bool tpUsable = (tp > 0)
+         && ((g_eventDirection == "BUY" && tp >= ask + brokerMinStop)
+             || (g_eventDirection == "SELL" && tp <= bid - brokerMinStop));
+      if(!tpUsable)
+      {
+         Print("Take-profit ", tp1,
+               " unusable at current quotes - opening without a broker TP");
+         tp = 0;
+      }
+   }
+
    // Size only after the exact stop is final. If broker SLs are disabled,
    // retain a synthetic 25-pip distance for the risk calculation.
    double sizingSL = sl;
@@ -1861,11 +1893,27 @@ void ExecuteEventTrade()
    bool success = false;
    if(g_eventDirection == "BUY")
    {
-      success = trade.Buy(lots, symbol, ask, sl, 0, "SkyTower-AI");
+      success = trade.Buy(lots, symbol, ask, sl, tp, "SkyTower-AI");
    }
    else
    {
-      success = trade.Sell(lots, symbol, bid, sl, 0, "SkyTower-AI");
+      success = trade.Sell(lots, symbol, bid, sl, tp, "SkyTower-AI");
+   }
+
+   // A TP the broker rejects must not cost the entry: retcode 10016
+   // (invalid stops) guarantees nothing executed, so one retry without the
+   // TP is safe and cannot double-open. Any other failure keeps the old
+   // no-retry behavior.
+   if(!success && tp > 0
+      && trade.ResultRetcode() == TRADE_RETCODE_INVALID_STOPS)
+   {
+      Print("Order rejected for invalid stops with TP ", tp,
+            " - retrying once WITHOUT broker TP");
+      tp = 0;
+      if(g_eventDirection == "BUY")
+         success = trade.Buy(lots, symbol, ask, sl, 0, "SkyTower-AI");
+      else
+         success = trade.Sell(lots, symbol, bid, sl, 0, "SkyTower-AI");
    }
 
    bool requestConfirmed = ConfirmTradeRequest(success, "Trade execution");
@@ -1944,7 +1992,22 @@ void ExecuteEventTrade()
          GetSpreadStatus(spread), ")");
    Print("Lot Multiplier: ",
          DoubleToString(appliedSpreadMult * 100, 0), "%");
+   // TP postcondition is best-effort, unlike the SL's: a missing TP is a
+   // lost opportunity, not unbounded risk, so one corrective modify and a
+   // warning — never a close.
+   if(tp > 0 && liveTP <= 0)
+   {
+      Print("WARNING: broker did not apply TP ", tp, " - one corrective try");
+      if(ModifyPositionTP(g_currentTicket, tp))
+         liveTP = tp;
+      else
+         Print("WARNING: TP could not be applied "
+               "(server exit engine still manages the position)");
+   }
+   else if(tp > 0 && MathAbs(liveTP - tp) > tickSize * 1.1)
+      Print("WARNING: broker adjusted TP: requested ", tp, " applied ", liveTP);
    if(liveSL > 0) Print("Stop Loss: ", liveSL);
+   if(liveTP > 0) Print("Take Profit: ", liveTP);
    Print("Ticket: ", g_currentTicket,
          " | Position ID: ", g_currentPositionId);
    Print("==============================================");

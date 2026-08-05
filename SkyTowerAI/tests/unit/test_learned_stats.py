@@ -24,7 +24,8 @@ from decision_history import DecisionHistory
 
 def path_rec(name="cpi m/m", currency="USD", pair="USDCAD",
              time="2024-01-01T13:30", impact="HIGH", move1=10.0, move5=20.0,
-             move15=22.0, move30=25.0, hi=22.0, lo=-3.0, pre=-4.0,
+             move15=22.0, move30=25.0, hi=22.0, lo=-3.0, hi30=None, lo30=None,
+             pre=-4.0,
              surprise="BEAT", mag=0.2, regime="hiking", source="historical",
              non_data=False, test=False, status="ok"):
     """One event-path record in the shared live/historical schema."""
@@ -39,6 +40,7 @@ def path_rec(name="cpi m/m", currency="USD", pair="USDCAD",
         "move_1min_pips": move1, "move_5min_pips": move5,
         "move_15min_pips": move15, "move_30min_pips": move30,
         "first5_high_pips": hi, "first5_low_pips": lo,
+        "high_30min_pips": hi30, "low_30min_pips": lo30,
         "pre_release_3m_pips": pre,
     }
 
@@ -217,6 +219,39 @@ class TestBuildStats:
         block = build_stats(recs)["events"]["USD|cpi m/m"]["pairs"]["USDCAD"]
         assert block["adverse_wick_5min"]["median"] == 7.0
 
+    def test_favorable_run_with_eventual_direction(self):
+        # Up-moves: favorable = first5_high (what a BUY's TP could capture)
+        recs = releases(4, move5=20.0, hi=22.0, lo=-3.0)
+        block = build_stats(recs)["events"]["USD|cpi m/m"]["pairs"]["USDCAD"]
+        assert block["favorable_run_5min"]["median"] == 22.0
+        # Down-moves: favorable = |first5_low|
+        recs = releases(4, move5=-20.0, hi=7.0, lo=-25.0)
+        block = build_stats(recs)["events"]["USD|cpi m/m"]["pairs"]["USDCAD"]
+        assert block["favorable_run_5min"]["median"] == 25.0
+
+    def test_favorable_run_30min_uses_30min_extremes_and_direction(self):
+        # 5-min window up, 30-min window reversed down: each window's
+        # favorable side follows ITS OWN eventual direction
+        recs = releases(4, move5=20.0, hi=22.0, lo=-3.0,
+                        move30=-30.0, hi30=24.0, lo30=-38.0)
+        block = build_stats(recs)["events"]["USD|cpi m/m"]["pairs"]["USDCAD"]
+        assert block["favorable_run_5min"]["median"] == 22.0
+        assert block["favorable_run_30min"]["median"] == 38.0
+
+    def test_favorable_run_p80_present_with_enough_samples(self):
+        recs = releases(12, move5=20.0, hi=22.0, lo=-3.0)
+        block = build_stats(recs)["events"]["USD|cpi m/m"]["pairs"]["USDCAD"]
+        assert "p80" in block["favorable_run_5min"]
+        # 30-min extremes absent from these records -> stat not fabricated
+        assert "favorable_run_30min" not in block
+
+    def test_favorable_run_respects_move_gate(self):
+        # Sub-2-pip window moves are direction noise: no favorable stat may
+        # be fabricated from them (same gate as the adverse wick)
+        recs = releases(4, move5=0.5, hi=22.0, lo=-3.0)
+        block = build_stats(recs)["events"]["USD|cpi m/m"]["pairs"]["USDCAD"]
+        assert "favorable_run_5min" not in block
+
     def test_regime_split(self):
         recs = releases(4, regime="hiking", move5=40.0)
         recs += releases(4, month_start=5, regime="cutting", move5=10.0)
@@ -381,6 +416,10 @@ def cpi_entry(n=20, median5=18.2, beat_n=15, regime_buckets=True):
                 "abs_move_5min": {"median": median5, "p25": 9.1, "p75": 30.0, "n": n},
                 "adverse_wick_5min": {"median": 1.5, "p25": 0.2, "p75": 3.8,
                                       "p90": 12.8, "n": n},
+                "favorable_run_5min": {"median": 15.5, "p25": 7.3, "p75": 25.5,
+                                       "p80": 25.7, "p90": 29.1, "n": 16},
+                "favorable_run_30min": {"median": 18.3, "p25": 11.2,
+                                        "p75": 25.9, "p80": 26.3, "n": 18},
                 "continuation_5to30": {"rate": 0.86, "n": n},
                 "fade_pre_drift": {"rate": 0.47, "n": n},
                 "beat_currency_up_5min": {"rate": 0.68, "n": beat_n},
@@ -424,6 +463,11 @@ class TestLearnedStatsSection:
         assert 'USD "CPI m/m" on USDCAD: n=20 measured releases' in full
         assert "median 18.2 (IQR 9.1-30, n=20)" in full
         assert "p90 12.8" in full
+        assert ("favorable run" in full
+                and "first 5min median 15.5, p75 25.5, p80 25.7 (n=16)" in full
+                and "first 30min median 18.3, p75 25.9, p80 26.3 (n=18)" in full
+                and "size take_profit_pips between the median and the p80" in full)
+        assert "favorable-run median 15.5/p80 25.7p" in recap
         assert "86% (n=20)" in full          # continuation
         assert "BEAT -> USD stronger: 68% (n=15)" in full
         assert "current USD policy regime: hiking" in full
