@@ -2134,7 +2134,12 @@
                 // Fields left blank (e.g. after a failed load) are simply not
                 // sent — parseFloat('') is NaN -> JSON null -> the server
                 // would 400 the WHOLE risk save including the daily limits.
+                // But a skipped field must never masquerade as a saved one:
+                // the operator would believe a guardrail is armed at the new
+                // value while the old one still runs — so skipped fields are
+                // reported loudly after the save.
                 var riskPayload = {};
+                var riskSkipped = [];
                 var riskFields = [
                     ['max_daily_trades', parseInt($('riskMaxDailyTrades').value, 10)],
                     ['max_daily_loss_usd', parseFloat($('riskMaxDailyLoss').value)],
@@ -2145,6 +2150,7 @@
                 ];
                 riskFields.forEach(function(kv) {
                     if (!isNaN(kv[1])) riskPayload[kv[0]] = kv[1];
+                    else riskSkipped.push(kv[0]);
                 });
                 var riskResp = await fetch(BASE_URL + '/api/config/risk', {
                     method: 'POST',
@@ -2168,7 +2174,14 @@
                 });
 
                 if (resp.ok && riskResp.ok && modelsResp.ok) {
-                    showToast('Configuration saved (applies immediately, survives restarts)');
+                    if (riskSkipped.length) {
+                        showToast('Saved, BUT risk fields NOT saved (empty/invalid): '
+                                  + riskSkipped.join(', ')
+                                  + ' — previous values still armed', false);
+                        loadRiskConfig();  // show what is actually armed
+                    } else {
+                        showToast('Configuration saved (applies immediately, survives restarts)');
+                    }
                 } else if (!riskResp.ok) {
                     var err = await riskResp.json().catch(function(){ return {}; });
                     showToast('Risk limits rejected: ' + (err.message || riskResp.status), false);

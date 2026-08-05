@@ -263,6 +263,48 @@ class TestGuardrails:
         )
         assert result["command"]["action"] == "HOLD"
 
+    def test_debounce_survives_persistent_persist_failure(self, pm_with_position):
+        """2026-08-05 audit: while the position-store write keeps failing
+        (disk full, locked file), every report re-enters the reconcile branch
+        — which used to zero both debounce counters on every pass, so the
+        confirmed-spread and profit-protection closes could NEVER reach their
+        second confirming report for as long as persistence kept failing."""
+        from position_store import PositionStoreError
+        pm = pm_with_position
+        pm.position.open_time = datetime.utcnow() - timedelta(minutes=5)
+        pm.position_store.save = MagicMock(
+            side_effect=PositionStoreError("disk full"))
+        pm.recovery_state = "error"
+        snap = dict(make_position_data(), **make_report_data())
+        snap["reconcile"] = True
+
+        pm.update_position(dict(snap, profit_usd=80.0))
+        pm.update_position(dict(snap, profit_usd=30.0))
+        result = pm.update_position(dict(snap, profit_usd=30.0))
+        assert result["command"]["action"] == "CLOSE"
+        assert "profit dropped" in result["command"]["reason"].lower()
+
+    def test_cushion_shrinks_to_remaining_lots_after_partial(self, pm):
+        """2026-08-05 audit: after a partial the broker realized_usd already
+        contains the entry commission for the FULL size, so the cushion must
+        be sized on the remaining leg — the old original-lots cushion parked
+        the guardrail in a dead band on exactly the AI-runner trades."""
+        pm.on_position_opened(make_position_data(lots=1.5))
+        pm.position.open_time = datetime.utcnow() - timedelta(minutes=5)
+        pm.update_position(make_report_data(remaining_lots=1.5, profit_usd=20.0))
+        # 50% partial banked at +$25 net (broker deal history)
+        pm.update_position(make_report_data(remaining_lots=0.75, profit_usd=20.0,
+                                            realized_usd=25.0))
+        # Collapse to total $9.5 (79% give-back): above the remaining-leg
+        # cushion 7*0.75=$5.25, but below the old original-lots 7*1.5=$10.5
+        pm.update_position(make_report_data(remaining_lots=0.75, profit_usd=-15.5,
+                                            realized_usd=25.0))
+        result = pm.update_position(
+            make_report_data(remaining_lots=0.75, profit_usd=-15.5,
+                             realized_usd=25.0))
+        assert result["command"]["action"] == "CLOSE"
+        assert "profit dropped" in result["command"]["reason"].lower()
+
     def test_daily_loss_blocks_new_trades(self, pm):
         """Daily loss > $300 should block new trades."""
         # Simulate 3 losing trades

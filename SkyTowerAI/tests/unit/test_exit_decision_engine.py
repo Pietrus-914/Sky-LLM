@@ -59,6 +59,62 @@ def engine():
 
 
 # ============================================================================
+# TestModifyTpValidationAndParsing (2026-08-05 audit)
+# ============================================================================
+
+class TestModifyTpValidationAndParsing:
+    """tp_price was the only model-produced number reaching the broker with
+    no units/side validation, and a JSON null in any numeric field silently
+    demoted a valid model verdict to the rule-based fallback."""
+
+    def test_null_numeric_field_keeps_the_model_verdict(self, engine):
+        cmd = engine._parse_llm_response(
+            '{"reasoning": "momentum intact", "sl_price": 0.0,'
+            ' "tp_price": null, "close_percent": 0, "action": "HOLD"}')
+        assert cmd.action == "HOLD"
+        assert "Parse error" not in cmd.reason
+        assert "momentum intact" in cmd.reason
+
+    def test_modify_tp_wrong_units_demoted_to_hold(self, engine):
+        # Pips confused with an instrument price: 15 on NZDUSD ~0.62 lands on
+        # the VALID far side for a BUY — the broker would accept it and the
+        # real 8-pip target would silently vanish
+        pos = make_open_position(direction="BUY", current_price=0.6215)
+        cmd = engine._parse_llm_response(
+            '{"reasoning": "bank it", "tp_price": 15, "action": "MODIFY_TP"}',
+            pos)
+        assert cmd.action == "HOLD"
+        assert "invalid" in cmd.reason.lower()
+
+    def test_modify_tp_wrong_side_demoted_to_hold(self, engine):
+        # A BUY take-profit below the market is a broker rejection at best
+        pos = make_open_position(direction="BUY", current_price=0.6215)
+        cmd = engine._parse_llm_response(
+            '{"reasoning": "bank", "tp_price": 0.6200, "action": "MODIFY_TP"}',
+            pos)
+        assert cmd.action == "HOLD"
+
+    def test_modify_tp_plausible_price_passes(self, engine):
+        pos = make_open_position(direction="BUY", current_price=0.6215)
+        cmd = engine._parse_llm_response(
+            '{"reasoning": "bank", "tp_price": 0.6230, "action": "MODIFY_TP"}',
+            pos)
+        assert cmd.action == "MODIFY_TP"
+        assert cmd.tp_price == pytest.approx(0.6230)
+
+    def test_modify_tp_sell_side_validation(self, engine):
+        pos = make_open_position(direction="SELL", current_price=0.6215)
+        ok = engine._parse_llm_response(
+            '{"reasoning": "bank", "tp_price": 0.6200, "action": "MODIFY_TP"}',
+            pos)
+        assert ok.action == "MODIFY_TP"
+        bad = engine._parse_llm_response(
+            '{"reasoning": "bank", "tp_price": 0.6230, "action": "MODIFY_TP"}',
+            pos)
+        assert bad.action == "HOLD"
+
+
+# ============================================================================
 # TestRuleBasedDecisions
 # ============================================================================
 

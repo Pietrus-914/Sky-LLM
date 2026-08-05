@@ -687,11 +687,19 @@ class PositionManager:
                 if decision_id and not self.position.decision_id:
                     self.position.decision_id = decision_id
                 self.position.forced = self.position.forced or forced
-                # Same reset as the fresh-open branch: the debounce counters
-                # are manager-scoped, so a reconciled position must not
-                # inherit breaches counted before the reconnect.
-                self._spread_breaches = 0
-                self._profit_drop_breaches = 0
+                # Debounce counters are manager-scoped, so a position
+                # RECOVERED after a disconnect/restart must not inherit
+                # breaches counted before the reconnect. But this branch also
+                # re-runs on every report while recovery_state is stuck
+                # non-ready (e.g. the position-store write keeps failing:
+                # disk full, locked file) — resetting unconditionally there
+                # zeroed both counters BEFORE _check_guardrails could ever
+                # reach its second confirming report, disabling the
+                # confirmed-spread and profit-protection closes for exactly
+                # as long as persistence kept failing.
+                if was_pending:
+                    self._spread_breaches = 0
+                    self._profit_drop_breaches = 0
                 self.recovery_state = "ready"
                 result = "reconciled"
                 logger.info(
@@ -1120,12 +1128,17 @@ class PositionManager:
                     )
                     self._served_command = None
                     self._served_attempts = 0
-                    # Only an undelivered CLOSE justifies paying for an
-                    # immediate extra model call. Forcing one after every
-                    # unobserved MODIFY_SL would bill a fresh exit call on
-                    # EVERY report (5-15s) whenever a broker keeps rejecting a
-                    # stop — the periodic interval is the right cadence there.
-                    if served.action == "CLOSE":
+                    # An undelivered CLOSE justifies paying for an immediate
+                    # extra model call, and so does an undelivered MODIFY_TP:
+                    # a TP move is a time-critical banking decision (the
+                    # profitable window is minutes), and a broker rejection
+                    # usually means price already crossed the requested level
+                    # — the model must re-decide on fresh state, not wait a
+                    # full interval. MODIFY_SL stays on the periodic cadence:
+                    # a failed stop move leaves the OLD protection intact, and
+                    # forcing a consult would bill a fresh exit call on EVERY
+                    # report whenever a broker keeps rejecting a stop.
+                    if served.action in ("CLOSE", "MODIFY_TP"):
                         self.last_llm_check = 0.0
                 elif self.pending_command is None:
                     logger.warning(
@@ -1437,7 +1450,15 @@ class PositionManager:
         floor_usd = max(10.0, max_loss * (floor_pct / 100.0))
         # Gross-vs-net: the peak/total series excludes commission, so only a
         # total above this cushion is genuinely "still in profit" net.
-        cushion_usd = COMMISSION_CUSHION_USD_PER_LOT * pos.lots
+        # Sized on the REMAINING lots: before any partial that equals the
+        # original size (round trip un-booked), and after a partial the
+        # broker-sourced realized_usd already contains the entry commission
+        # for the FULL position plus the closed slice's exit — the only
+        # un-booked cost left is the remaining leg's exit (~$2.5/lot), so
+        # keeping the original-lots cushion would double-count and park the
+        # guardrail in a dead band exactly on the AI-runner trades.
+        cushion_usd = COMMISSION_CUSHION_USD_PER_LOT * (
+            pos.remaining_lots if pos.remaining_lots > 0 else pos.lots)
         armed = (pos.max_profit_usd >= floor_usd
                  and (utcnow() - pos.open_time).total_seconds() >= grace_s)
         if armed:

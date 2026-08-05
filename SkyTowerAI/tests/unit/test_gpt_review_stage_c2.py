@@ -160,7 +160,11 @@ class TestEmergencySpreadDebounce:
     def test_reconciled_position_does_not_inherit_breaches(self):
         """The counter is manager-scoped: a position adopted after a reconnect
         must not be liquidated on its first wide tick because of breaches
-        counted before it existed."""
+        counted before it existed. A genuine reconnect goes through
+        recovery_state == "pending" (snapshot restored, awaiting the EA);
+        a mere re-reconcile of a live position (state stuck non-ready by a
+        failing store write) must NOT reset — see
+        test_debounce_survives_persistent_persist_failure."""
         pm = PositionManager(exit_engine=None)
         snapshot = {
             "ticket": 4242, "position_id": "4242", "symbol": "USDCAD",
@@ -169,6 +173,7 @@ class TestEmergencySpreadDebounce:
         }
         pm.on_position_opened(snapshot)
         pm._spread_breaches = SPREAD_BREACHES_TO_CLOSE - 1
+        pm.recovery_state = "pending"                     # restart recovery
 
         pm.on_position_opened(snapshot, recovered=True)   # reconcile branch
 
@@ -413,6 +418,21 @@ class TestCommandDeliveryIsConfirmed:
         pm.update_position(self._report())      # dropped
         assert pm._served_command is None
         assert pm.last_llm_check == 12345.0
+
+    def test_dropped_modify_tp_forces_prompt_reconsult(self):
+        """2026-08-05 audit: a broker-rejected TP move usually means price
+        already crossed the requested level — the banking decision is
+        time-critical, so the model must re-decide immediately (like CLOSE),
+        not wait out a full consult interval."""
+        pm = self._pm()
+        pm.last_llm_check = 12345.0
+        pm.pending_command = PositionCommand(action="MODIFY_TP",
+                                             tp_price=1.3760)
+        pm.update_position(self._report())      # served
+        pm.update_position(self._report())      # re-served
+        pm.update_position(self._report())      # dropped
+        assert pm._served_command is None
+        assert pm.last_llm_check == 0.0
 
 
 class TestManagementTrailRecordsTheEnding:
