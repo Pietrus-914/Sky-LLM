@@ -480,15 +480,18 @@ class EventPathRecorder:
 
     def scheduled_event(self, currency: str, event_name: str,
                         event_minute: str) -> Optional[Dict]:
-        """forecast/previous for a monitored event, taken from the SCHEDULE
-        (populated up to SCHEDULE_HORIZON_SECONDS before the release and not
-        retired until measurement at T+31), falling back to an already-measured
-        record. Used to label reaction records at T+5 with the numbers the
-        decision was made on.
+        """forecast/previous for a monitored event, taken from the SCHEDULE,
+        falling back to an already-measured record. Used to label reaction
+        records at T+5 with the numbers the decision was made on.
+
+        The schedule entry is created up to SCHEDULE_HORIZON_SECONDS before the
+        release and survives well past T+5: per-pair completion deliberately
+        does NOT retire it, and retirement happens at give-up (T+50).
 
         NOTE: _pending is mutated by the updater thread WITHOUT the lock, so
         list() here can still raise mid-iteration — the CALLER must swallow it.
-        Taking self._lock would not make this safe."""
+        Taking self._lock here would NOT be enough on its own; closing the race
+        properly means bringing _schedule/_retire/_cleanup under the lock too."""
         wanted = normalize_event_name(event_name)
         currency = (currency or '').upper()
         for entry in list(self._pending.values()):

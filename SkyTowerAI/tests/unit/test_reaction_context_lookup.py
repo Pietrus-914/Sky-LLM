@@ -158,11 +158,52 @@ class TestEnrichMissingContext:
         store.record(make_reaction(event_name="Cash Rate (FAKE TEST EVENT)"))
         assert store.enrich_missing_context(lambda *_a: {"forecast": "1"}) == 0
 
-    def test_resolves_surprise_when_actual_arrives(self, store):
+    def test_never_writes_actual(self, store):
+        """The maintenance endpoint must not become a decision change: writing
+        'actual' here would flip surprise off UNKNOWN and un-suppress
+        summarize()'s actual-vs-forecast clause. 'actual' belongs to
+        backfill_actuals alone."""
         store.record(make_reaction())
         store.enrich_missing_context(
             lambda *_a: {"forecast": "0.3", "actual": "0.1", "source": "path_record"})
-        assert store._records[0]["surprise"] == "MISS"
+        assert store._records[0]["forecast"] == "0.3"
+        assert store._records[0]["actual"] is None
+        assert store._records[0]["surprise"] == "UNKNOWN"
+
+    def test_reports_persistence_failure(self, store, monkeypatch):
+        store.record(make_reaction())
+        monkeypatch.setattr("event_reaction_history.atomic_rewrite_jsonl",
+                            lambda *_a, **_k: False)
+        store.enrich_missing_context(lambda *_a: {"forecast": "1", "source": "decision"})
+        assert store.last_enrich_persisted is False
+
+    def test_persistence_flag_true_on_success(self, store):
+        store.record(make_reaction())
+        store.enrich_missing_context(lambda *_a: {"forecast": "1", "source": "decision"})
+        assert store.last_enrich_persisted is True
+
+
+class TestPromptInvisibility:
+    """The load-bearing guarantee: populating forecast/previous must leave the
+    entry prompt byte-identical. summarize() is the only path from this store
+    into the prompt."""
+
+    def test_summarize_suppresses_detail_without_actual(self, store):
+        store.set_event_lookup(lambda *_a: {
+            "forecast": "4.35%", "previous": "4.35%", "source": "decision"})
+        store.record(make_reaction())
+        summary = store.summarize("Cash Rate", "AUD")
+        assert "UNKNOWN" in summary
+        assert "actual" not in summary
+        assert "4.35%" not in summary
+
+    def test_summary_identical_wired_and_unwired(self, store, tmp_path):
+        bare = EventReactionHistory(log_dir=str(tmp_path / "bare"))
+        bare.record(make_reaction())
+        store.set_event_lookup(lambda *_a: {
+            "forecast": "4.35%", "previous": "4.35%", "source": "decision"})
+        store.record(make_reaction())
+        assert store.summarize("Cash Rate", "AUD") == bare.summarize("Cash Rate", "AUD")
 
 
 class TestNumericRevisionDetection:

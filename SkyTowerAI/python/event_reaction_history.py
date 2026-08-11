@@ -171,6 +171,7 @@ class EventReactionHistory:
         self._lock = Lock()
         self._records: List[Dict] = []
         self.last_backfill_stats: Dict = {}
+        self.last_enrich_persisted: bool = True
         # The EA has no calendar and never sends forecast/previous; the SERVER
         # showed both to the model at decision time. "surprise: UNKNOWN" on
         # every record was always a plumbing gap, not missing data.
@@ -483,7 +484,14 @@ class EventReactionHistory:
         with self._lock:
             for record, known in resolved:
                 changed = False
-                for field in ('forecast', 'previous', 'actual'):
+                # forecast/previous ONLY. 'actual' has its own path
+                # (backfill_actuals) and writing it here would flip 'surprise'
+                # off UNKNOWN, which un-suppresses summarize()'s
+                # "(actual X vs forecast Y)" clause — i.e. it would silently
+                # turn this maintenance endpoint into a change of what the
+                # entry model reads. Keep that door shut in code, not by
+                # relying on the feed happening to carry no released values.
+                for field in ('forecast', 'previous'):
                     if (record.get(field) in (None, '')
                             and known.get(field) not in (None, '')):
                         record[field] = known[field]
@@ -495,8 +503,21 @@ class EventReactionHistory:
                     record['surprise_magnitude'] = surprise_magnitude(
                         record.get('actual'), record.get('forecast'))
                     updated += 1
-            if updated and atomic_rewrite_jsonl(self._file_path, self._records):
-                logger.info(f"Filled forecast/previous on {updated} reaction record(s)")
+
+            # Persistence is reported separately: returning a count for a write
+            # that never reached disk reads as success, and the enrichment
+            # would then vanish on the next restart.
+            self.last_enrich_persisted = True
+            if updated:
+                self.last_enrich_persisted = atomic_rewrite_jsonl(
+                    self._file_path, self._records)
+                if self.last_enrich_persisted:
+                    logger.info(
+                        f"Filled forecast/previous on {updated} reaction record(s)")
+                else:
+                    logger.error(
+                        f"Enriched {updated} reaction record(s) IN MEMORY ONLY — "
+                        f"the rewrite of {os.path.basename(self._file_path)} failed")
         return updated
 
     def get_file_path(self) -> str:

@@ -6,6 +6,7 @@ Uses as contrarian indicator (per SkyTower strategy)
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+from timeutil import utcnow
 from typing import Dict, Optional
 from dataclasses import dataclass
 from loguru import logger
@@ -488,7 +489,10 @@ class SentimentAggregator:
             logger.warning("No live sentiment data (sources empty) — "
                            "reporting NO_DATA, not simulated values")
 
-        self.last_status["_checked_at"] = datetime.now().isoformat()
+        # UTC: this one is published over HTTP next to the server's other
+        # timestamps, and local wall-clock here would read hours off on the
+        # 24/7 machine
+        self.last_status["_checked_at"] = utcnow().isoformat() + "Z"
         self._cache = aggregated
         self._cache_time = datetime.now()
 

@@ -1283,7 +1283,18 @@ def enrich_reactions():
     """
     ensure_services()
     try:
-        filled = decision_engine.reaction_history.enrich_missing_context()
+        history = decision_engine.reaction_history
+        filled = history.enrich_missing_context()
+        if not getattr(history, 'last_enrich_persisted', True):
+            # In-memory only: a restart would silently undo it, and a retry
+            # would report 0 ("already done") while disk is still null.
+            return jsonify({
+                "status": "error",
+                "updated": filled,
+                "message": (f"enriched {filled} record(s) in memory but the "
+                            f"rewrite of event_reactions.jsonl FAILED — see "
+                            f"server.log, then restart and retry"),
+            }), 500
         return jsonify({"status": "ok", "updated": filled})
     except Exception as e:
         logger.error(f"Reaction enrich failed: {e}")
@@ -1578,7 +1589,10 @@ BACKFILL_MIN_INTERVAL_SECONDS = 900   # at most one FF fetch per 15 min
 BACKFILL_MAX_AGE_DAYS = 2             # the FF weekly XML feed is THIS-WEEK-ONLY;
                                       # 7 days promised a resolution it cannot
                                       # deliver and kept dead rows pending
-BACKFILL_MAX_ATTEMPTS = 12            # mirrors EventReactionHistory's own cap
+
+# Imported, not copied: this precheck and the store's own filter gate the same
+# rows, and a hand-mirrored literal would drift apart on the first edit.
+from event_reaction_history import BACKFILL_MAX_ATTEMPTS  # noqa: E402
 
 
 def _reaction_event_lookup(decision_id: str, currency: str,
