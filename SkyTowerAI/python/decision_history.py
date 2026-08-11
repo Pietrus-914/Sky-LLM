@@ -174,6 +174,22 @@ class DecisionHistory:
         except Exception as e:
             logger.debug(f"Decision context prune failed: {e}")
 
+    def get_context(self, decision_id: str) -> Optional[Dict]:
+        """Read back the full context dump for one decision (data_summary +
+        raw reply). The JSONL row is slim by design, so this side file written
+        by _dump_context is the ONLY place the event's forecast/previous
+        survive a restart — which is what lets a reaction recorded minutes
+        later be labelled with the numbers the model actually saw."""
+        if not decision_id:
+            return None
+        path = os.path.join(os.path.dirname(self._file_path),
+                            'decision_context', f"{decision_id}.json")
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
     def get_recent(self, limit: int = 20) -> List[Dict]:
         """Get most recent decisions (newest first)."""
         with self._lock:

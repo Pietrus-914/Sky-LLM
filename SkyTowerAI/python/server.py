@@ -5,7 +5,7 @@ Provides REST API for MT5 Expert Advisor communication
 from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 from datetime import datetime, timedelta
-from timeutil import utcnow
+from timeutil import utcnow, to_naive_utc
 import json
 import math
 import os
@@ -124,6 +124,11 @@ def init_services():
     # Post-event price paths for ALL monitored events (traded or not) —
     # measured server-side from EA-pushed M1, the system's learning substrate
     path_recorder = EventPathRecorder(regime_provider=regime_tracker.get)
+
+    # The EA has no calendar, so reaction records used to carry null
+    # forecast/previous and a permanent "surprise: UNKNOWN". Wire the store to
+    # the server's own knowledge of the event — no network, no EA change.
+    decision_engine.reaction_history.set_event_lookup(_reaction_event_lookup)
 
     logger.info("Services initialized successfully (with AI Position Manager + Decision History)")
 
@@ -393,10 +398,19 @@ def get_trade_log(decision_id):
     return jsonify({"status": "ok", "trade": trade})
 
 
+# This handler makes uncached upstream calls (a COT fetch alone can take 30s),
+# so anything that polls it must not reach the network on every hit.
+_datasource_status_cache = {"at": 0.0, "payload": None}
+DATASOURCE_STATUS_TTL = 120
+
+
 @app.route('/api/datasources/status', methods=['GET'])
 def get_datasource_status():
     """Check which data sources are currently responding."""
     ensure_services()
+    if (_datasource_status_cache["payload"] is not None
+            and time.time() - _datasource_status_cache["at"] < DATASOURCE_STATUS_TTL):
+        return jsonify(_datasource_status_cache["payload"])
     status = {}
 
     # Test COT
@@ -417,6 +431,9 @@ def get_datasource_status():
         status["sentiment"] = {
             "status": "ok" if pairs > 0 else "no_data",
             "pairs_analyzed": pairs,
+            # Per-source outcome: "no_data" alone cannot distinguish a blocked
+            # source from one that parsed nothing
+            "sources": getattr(decision_engine.sentiment, 'last_status', {}),
         }
     except Exception as e:
         status["sentiment"] = {"status": "error", "detail": str(e)}
@@ -431,7 +448,9 @@ def get_datasource_status():
     except Exception as e:
         status["calendar"] = {"status": "error", "detail": str(e)}
 
-    return jsonify({"status": "ok", "data_sources": status})
+    payload = {"status": "ok", "data_sources": status}
+    _datasource_status_cache.update(at=time.time(), payload=payload)
+    return jsonify(payload)
 
 
 @app.route('/health', methods=['GET'])
@@ -1251,6 +1270,26 @@ def report_event_reaction():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route('/api/maintenance/enrich-reactions', methods=['POST'])
+def enrich_reactions():
+    """Operator-triggered one-shot: fill forecast/previous on historical
+    reaction rows from logs/decision_context/. Does NOT touch 'actual' and does
+    NOT hit the network.
+
+    Safe with the server running — it goes through the store's own lock and
+    atomic_rewrite_jsonl. An out-of-band edit to logs/event_reactions.jsonl
+    would instead be silently reverted, because the store loads the file once
+    at startup and rewrites it whole from memory.
+    """
+    ensure_services()
+    try:
+        filled = decision_engine.reaction_history.enrich_missing_context()
+        return jsonify({"status": "ok", "updated": filled})
+    except Exception as e:
+        logger.error(f"Reaction enrich failed: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route('/api/event-reactions', methods=['GET'])
 def get_event_reactions():
     """List recorded event reactions. Filters: ?event=CPI&currency=USD&limit=20"""
@@ -1536,7 +1575,62 @@ def api_regimes():
 # never stall the decision pipeline or hammer ForexFactory forever
 _last_backfill_fetch = 0.0
 BACKFILL_MIN_INTERVAL_SECONDS = 900   # at most one FF fetch per 15 min
-BACKFILL_MAX_AGE_DAYS = 7             # FF weekly feed can't resolve older records
+BACKFILL_MAX_AGE_DAYS = 2             # the FF weekly XML feed is THIS-WEEK-ONLY;
+                                      # 7 days promised a resolution it cannot
+                                      # deliver and kept dead rows pending
+BACKFILL_MAX_ATTEMPTS = 12            # mirrors EventReactionHistory's own cap
+
+
+def _reaction_event_lookup(decision_id: str, currency: str,
+                           event_name: str, event_minute: str) -> dict:
+    """forecast/previous for one reaction, from the SERVER's own knowledge.
+    Performs NO network I/O — it runs inside the EA's POST to
+    /api/event-reaction.
+
+    Order, most authoritative first:
+      1. the decision that armed this reaction (decision_id is echoed by the
+         EA) — literally the numbers the model was shown;
+      2. the path recorder's schedule, filled well before the release;
+      3. the calendar cache, read-only.
+    """
+    from event_reaction_history import normalize_event_name
+
+    currency = (currency or '').upper()
+    try:
+        if decision_id and decision_history is not None:
+            ctx = decision_history.get_context(decision_id) or {}
+            event = (ctx.get('data_summary') or {}).get('event') or {}
+            if event.get('forecast') or event.get('previous'):
+                return {"forecast": event.get('forecast'),
+                        "previous": event.get('previous'),
+                        "source": "decision"}
+    except Exception as e:
+        logger.debug(f"Reaction lookup via decision failed: {e}")
+
+    try:
+        if path_recorder is not None:
+            found = path_recorder.scheduled_event(currency, event_name, event_minute)
+            if found:
+                return found
+    except Exception as e:
+        logger.debug(f"Reaction lookup via path recorder failed: {e}")
+
+    try:
+        if calendar is not None:
+            wanted = normalize_event_name(event_name)
+            for event in calendar.peek_cached_events():
+                if (event.currency or '').upper() != currency:
+                    continue
+                if normalize_event_name(event.event_name) != wanted:
+                    continue
+                if to_naive_utc(event.datetime_utc).isoformat()[:16] != event_minute:
+                    continue
+                return {"forecast": event.forecast, "previous": event.previous,
+                        "source": "calendar"}
+    except Exception as e:
+        logger.debug(f"Reaction lookup via calendar failed: {e}")
+
+    return {}
 
 
 def _backfill_reaction_actuals():
@@ -1560,6 +1654,7 @@ def _backfill_reaction_actuals():
         pending = [r for r in history.get_recent(200)
                    if r.get('actual') in (None, '')
                    and not r.get('test')
+                   and r.get('backfill_attempts', 0) < BACKFILL_MAX_ATTEMPTS
                    and (r.get('event_time') or '') >= cutoff]
         # Recorder applies its own (tighter, 48h) window + non-data/attempt
         # exclusions — see EventPathRecorder._backfillable
@@ -1577,15 +1672,30 @@ def _backfill_reaction_actuals():
                 try:
                     events = source.fetch_events(days_ahead=7)
                 except Exception as e:
-                    logger.debug(f"Backfill calendar fetch failed: {e}")
+                    logger.warning(f"Backfill calendar fetch FAILED: {e}")
                 break
+
+        with_actual = sum(1 for e in events if getattr(e, 'actual', None))
+        logger.info(f"Backfill pass: {len(events)} feed events "
+                    f"({with_actual} with 'actual'), {len(pending)} reaction rows "
+                    f"pending, paths_pending={paths_pending}")
+        if events and with_actual == 0:
+            # The single most useful line in this function: it distinguishes
+            # "nothing has been released yet" from "this source structurally
+            # cannot supply 'actual'", which is what has been happening.
+            logger.warning("Backfill source returned ZERO released values — the "
+                           "ForexFactory weekly XML feed carries no <actual> "
+                           "element; 'actual'/'surprise' can never be filled "
+                           "from it")
+
         if events:
             if pending:
                 history.backfill_actuals(events)
+                logger.info(f"Reaction backfill: {history.last_backfill_stats}")
             if paths_pending:
                 path_recorder.backfill_actuals(events)
     except Exception as e:
-        logger.debug(f"Reaction backfill error: {e}")
+        logger.warning(f"Reaction backfill error: {e}")
 
 
 # Global storage for zone data from all EA instances
