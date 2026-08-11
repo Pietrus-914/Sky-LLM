@@ -11,7 +11,7 @@ import json
 import os
 import re
 from datetime import datetime
-from timeutil import utcnow
+from timeutil import utcnow, to_naive_utc
 from threading import Lock
 from typing import Dict, List, Optional
 
@@ -49,6 +49,13 @@ def normalize_event_name(name: str) -> str:
 
 
 _UNIT_MULTIPLIERS = {"T": 1e12, "B": 1e9, "M": 1e6, "K": 1e3}
+
+# Mirror of EventPathRecorder's guard (event_path_recorder.py BACKFILL_MAX_ATTEMPTS):
+# without an attempt cap ONE permanently unmatchable row keeps the 15-minute
+# calendar fetch loop running around the clock, and ForexFactory 429s when
+# hammered. The 25 rows recorded so far are exactly that case — the weekly XML
+# feed carries no <actual> element at all, so they can never resolve from it.
+BACKFILL_MAX_ATTEMPTS = 12
 
 
 def parse_numeric(value) -> Optional[float]:
@@ -110,14 +117,22 @@ def apply_release_to_record(record: Dict, event) -> None:
     record['actual'] = event.actual
     if record.get('forecast') in (None, '') and event.forecast:
         record['forecast'] = event.forecast
-    # Revision check BEFORE any overwrite of the stored value
-    if (record.get('previous') not in (None, '')
-            and event.previous
-            and str(event.previous) != str(record['previous'])):
-        record['previous_revised'] = event.previous
-        rev = surprise_magnitude(event.previous, record['previous'])
-        if rev is not None:
-            record['revision_magnitude'] = rev
+    # Revision check BEFORE any overwrite of the stored value. NUMERIC first:
+    # 'previous' is now populated at record time from the decision context while
+    # event.previous comes from a feed, so a pure string compare would
+    # manufacture phantom revisions on formatting alone ("0.30%" vs "0.3%").
+    if record.get('previous') not in (None, '') and event.previous:
+        old_n = parse_numeric(record['previous'])
+        new_n = parse_numeric(event.previous)
+        if old_n is not None and new_n is not None:
+            differs = old_n != new_n
+        else:
+            differs = str(event.previous).strip() != str(record['previous']).strip()
+        if differs:
+            record['previous_revised'] = event.previous
+            rev = surprise_magnitude(event.previous, record['previous'])
+            if rev is not None:
+                record['revision_magnitude'] = rev
     if record.get('previous') in (None, '') and event.previous:
         record['previous'] = event.previous
     record['surprise'] = classify_surprise(record['actual'], record.get('forecast'))
@@ -148,14 +163,43 @@ def atomic_rewrite_jsonl(file_path: str, records: List[Dict]) -> bool:
 class EventReactionHistory:
     """Thread-safe JSONL store of post-release price reactions."""
 
-    def __init__(self, log_dir: str = None):
+    def __init__(self, log_dir: str = None, event_lookup=None):
         if log_dir is None:
             log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
         os.makedirs(log_dir, exist_ok=True)
         self._file_path = os.path.join(log_dir, 'event_reactions.jsonl')
         self._lock = Lock()
         self._records: List[Dict] = []
+        self.last_backfill_stats: Dict = {}
+        self.last_enrich_persisted: bool = True
+        # The EA has no calendar and never sends forecast/previous; the SERVER
+        # showed both to the model at decision time. "surprise: UNKNOWN" on
+        # every record was always a plumbing gap, not missing data.
+        self._event_lookup = event_lookup
         self._load()
+
+    def set_event_lookup(self, fn) -> None:
+        """Wire the server-side forecast/previous resolver after construction —
+        the decision engine builds this store before the server has a calendar
+        or a path recorder to resolve against."""
+        self._event_lookup = fn
+
+    def _lookup_event(self, reaction: Dict) -> Dict:
+        """Resolve forecast/previous from the server's own knowledge. NEVER
+        raises and never blocks: a reaction must be stored even when the lookup
+        is unwired or broken."""
+        if self._event_lookup is None:
+            return {}
+        try:
+            found = self._event_lookup(
+                str(reaction.get('decision_id') or ''),
+                (reaction.get('currency') or '').upper(),
+                reaction.get('event_name') or '',
+                (reaction.get('event_time') or '')[:16])
+            return found if isinstance(found, dict) else {}
+        except Exception as e:
+            logger.warning(f"Event lookup for reaction failed: {e}")
+            return {}
 
     def _load(self):
         # Load ALL records: backfill_actuals rewrites the file from memory,
@@ -193,6 +237,27 @@ class EventReactionHistory:
                 return round((float(later_price) - float(base)) / pip, 1)
             return None
 
+        # Resolved OUTSIDE self._lock: the lookup reaches into stores that hold
+        # their own locks, and calling it under this one is a lock-ordering
+        # hazard.
+        known = self._lookup_event(reaction)
+
+        def resolve(field):
+            """EA value wins (it never sends one today), then the server's own
+            knowledge of the event."""
+            value = reaction.get(field)
+            if value not in (None, ''):
+                return value, 'ea'
+            value = known.get(field)
+            if value not in (None, ''):
+                return value, known.get('source') or 'server'
+            return None, None
+
+        forecast, src_forecast = resolve('forecast')
+        previous, src_previous = resolve('previous')
+        actual, _ = resolve('actual')
+        context_source = src_forecast or src_previous
+
         entry = {
             "recorded_at": utcnow().isoformat() + "Z",
             # Dry-run reactions must never surface as history for the real
@@ -207,12 +272,15 @@ class EventReactionHistory:
             # armed it — empty from an old EA build (join falls back to
             # event name + minute matching)
             "decision_id": str(reaction.get('decision_id') or ''),
-            "forecast": reaction.get('forecast'),
-            "previous": reaction.get('previous'),
-            "actual": reaction.get('actual'),
-            "surprise": classify_surprise(reaction.get('actual'), reaction.get('forecast')),
-            "surprise_magnitude": surprise_magnitude(reaction.get('actual'),
-                                                     reaction.get('forecast')),
+            "forecast": forecast,
+            "previous": previous,
+            "actual": actual,
+            # 'decision' | 'schedule' | 'path_record' | 'calendar' | 'ea' | None.
+            # Without it a null forecast is ambiguous between "the lookup was
+            # unwired" and "the calendar genuinely had no forecast".
+            "context_source": context_source,
+            "surprise": classify_surprise(actual, forecast),
+            "surprise_magnitude": surprise_magnitude(actual, forecast),
             "price_at_event": reaction.get('price_at_event'),
             "move_1min_pips": move_pips(reaction.get('price_after_1min')),
             "move_5min_pips": move_pips(reaction.get('price_after_5min')),
@@ -322,17 +390,30 @@ class EventReactionHistory:
         the calendar published the released value. calendar_events is a list
         of EconomicEvent objects (may include past events with .actual set).
         Rewrites the JSONL when anything changed. Returns count updated.
+
+        Rows that no feed row resolves accumulate 'backfill_attempts' and drop
+        out after BACKFILL_MAX_ATTEMPTS. The counters are PERSISTED even when
+        nothing was filled — otherwise every restart resets them and the cap
+        never bites. Diagnostics land on self.last_backfill_stats rather than
+        the return value, which callers and tests rely on being an int.
         """
         updated = 0
+        attempts_bumped = 0
+        sample_unmatched = None
         with self._lock:
             pending = [r for r in self._records
-                       if r.get('actual') in (None, '') and not r.get('test')]
+                       if r.get('actual') in (None, '')
+                       and not r.get('test')
+                       and r.get('backfill_attempts', 0) < BACKFILL_MAX_ATTEMPTS]
             if not pending:
+                self.last_backfill_stats = {"examined": 0, "updated": 0,
+                                            "unmatched": 0, "sample": None}
                 return 0
 
             for record in pending:
                 rec_name = record.get('event_name_normalized', '')
                 rec_time = (record.get('event_time') or '')[:16]
+                matched = False
                 for event in calendar_events:
                     if getattr(event, 'actual', None) in (None, ''):
                         continue
@@ -340,16 +421,103 @@ class EventReactionHistory:
                         continue
                     if normalize_event_name(event.event_name) != rec_name:
                         continue
-                    event_time_str = event.datetime_utc.isoformat()[:16]
-                    if event_time_str != rec_time:
+                    # to_naive_utc mirrors event_path_recorder's matcher; the
+                    # [:16] slice already truncates before any UTC offset, so
+                    # this only guards a future non-UTC-aware calendar source.
+                    if to_naive_utc(event.datetime_utc).isoformat()[:16] != rec_time:
                         continue
                     apply_release_to_record(record, event)
                     updated += 1
+                    matched = True
                     break
+                if not matched:
+                    record['backfill_attempts'] = record.get('backfill_attempts', 0) + 1
+                    attempts_bumped += 1
+                    if sample_unmatched is None:
+                        sample_unmatched = (record.get('currency'), rec_name, rec_time,
+                                            record['backfill_attempts'])
 
-            if updated and atomic_rewrite_jsonl(self._file_path, self._records):
-                logger.info(f"Backfilled 'actual' for {updated} event reaction(s)")
+            self.last_backfill_stats = {"examined": len(pending), "updated": updated,
+                                        "unmatched": attempts_bumped,
+                                        "sample": sample_unmatched}
+            if (updated or attempts_bumped) and atomic_rewrite_jsonl(
+                    self._file_path, self._records):
+                if updated:
+                    logger.info(f"Backfilled 'actual' for {updated} event reaction(s)")
 
+        return updated
+
+    def enrich_missing_context(self, lookup=None) -> int:
+        """
+        Fill forecast/previous on records written before the server resolved
+        them itself. Independent of backfill_actuals: it needs only the
+        server's own decision knowledge, never the network. Returns the number
+        of records changed.
+
+        Lookups are collected BEFORE taking the lock, so the rule "never call
+        out while holding the store lock" holds here as it does in record().
+        """
+        lookup = lookup or self._event_lookup
+        if lookup is None:
+            return 0
+
+        with self._lock:
+            targets = [r for r in self._records
+                       if not r.get('test')
+                       and (r.get('forecast') in (None, '')
+                            or r.get('previous') in (None, ''))]
+
+        resolved = []
+        for record in targets:
+            try:
+                known = lookup(record.get('decision_id') or '',
+                               (record.get('currency') or '').upper(),
+                               record.get('event_name') or '',
+                               (record.get('event_time') or '')[:16]) or {}
+            except Exception as e:
+                logger.debug(f"Reaction enrich lookup failed: {e}")
+                continue
+            if known:
+                resolved.append((record, known))
+
+        updated = 0
+        with self._lock:
+            for record, known in resolved:
+                changed = False
+                # forecast/previous ONLY. 'actual' has its own path
+                # (backfill_actuals) and writing it here would flip 'surprise'
+                # off UNKNOWN, which un-suppresses summarize()'s
+                # "(actual X vs forecast Y)" clause — i.e. it would silently
+                # turn this maintenance endpoint into a change of what the
+                # entry model reads. Keep that door shut in code, not by
+                # relying on the feed happening to carry no released values.
+                for field in ('forecast', 'previous'):
+                    if (record.get(field) in (None, '')
+                            and known.get(field) not in (None, '')):
+                        record[field] = known[field]
+                        changed = True
+                if changed:
+                    record['context_source'] = known.get('source') or 'server'
+                    record['surprise'] = classify_surprise(record.get('actual'),
+                                                           record.get('forecast'))
+                    record['surprise_magnitude'] = surprise_magnitude(
+                        record.get('actual'), record.get('forecast'))
+                    updated += 1
+
+            # Persistence is reported separately: returning a count for a write
+            # that never reached disk reads as success, and the enrichment
+            # would then vanish on the next restart.
+            self.last_enrich_persisted = True
+            if updated:
+                self.last_enrich_persisted = atomic_rewrite_jsonl(
+                    self._file_path, self._records)
+                if self.last_enrich_persisted:
+                    logger.info(
+                        f"Filled forecast/previous on {updated} reaction record(s)")
+                else:
+                    logger.error(
+                        f"Enriched {updated} reaction record(s) IN MEMORY ONLY — "
+                        f"the rewrite of {os.path.basename(self._file_path)} failed")
         return updated
 
     def get_file_path(self) -> str:

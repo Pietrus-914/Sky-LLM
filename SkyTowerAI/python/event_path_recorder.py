@@ -478,6 +478,46 @@ class EventPathRecorder:
             return any(self._backfillable(r, cutoff)
                        for r in self._records[-400:])
 
+    def scheduled_event(self, currency: str, event_name: str,
+                        event_minute: str) -> Optional[Dict]:
+        """forecast/previous for a monitored event, taken from the SCHEDULE,
+        falling back to an already-measured record. Used to label reaction
+        records at T+5 with the numbers the decision was made on.
+
+        The schedule entry is created up to SCHEDULE_HORIZON_SECONDS before the
+        release and survives well past T+5: per-pair completion deliberately
+        does NOT retire it, and retirement happens at give-up (T+50).
+
+        NOTE: _pending is mutated by the updater thread WITHOUT the lock, so
+        list() here can still raise mid-iteration — the CALLER must swallow it.
+        Taking self._lock here would NOT be enough on its own; closing the race
+        properly means bringing _schedule/_retire/_cleanup under the lock too."""
+        wanted = normalize_event_name(event_name)
+        currency = (currency or '').upper()
+        for entry in list(self._pending.values()):
+            if entry.get('currency') != currency:
+                continue
+            if normalize_event_name(entry.get('event_name', '')) != wanted:
+                continue
+            if _naive_utc(entry['event_time']).isoformat()[:16] != event_minute:
+                continue
+            return {"forecast": entry.get('forecast'),
+                    "previous": entry.get('previous'),
+                    "source": "schedule"}
+        with self._lock:
+            for record in reversed(self._records[-400:]):
+                if record.get('currency') != currency:
+                    continue
+                if record.get('event_name_normalized') != wanted:
+                    continue
+                if (record.get('event_time') or '')[:16] != event_minute:
+                    continue
+                return {"forecast": record.get('forecast'),
+                        "previous": record.get('previous'),
+                        "actual": record.get('actual'),
+                        "source": "path_record"}
+        return None
+
     def backfill_actuals(self, calendar_events: List) -> int:
         """Fill 'actual' (+ surprise, revision) from released calendar rows.
         Match: currency + normalized name + minute-precision UTC time.

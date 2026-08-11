@@ -6,6 +6,7 @@ Uses as contrarian indicator (per SkyTower strategy)
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+from timeutil import utcnow
 from typing import Dict, Optional
 from dataclasses import dataclass
 from loguru import logger
@@ -424,6 +425,10 @@ class SentimentAggregator:
         ]
         self._cache = {}
         self._cache_time = None
+        # Per-source outcome of the last fetch, surfaced on
+        # /api/datasources/status. Without it "no_data" is indistinguishable
+        # between "blocked", "parsed nothing" and "never asked".
+        self.last_status: Dict[str, str] = {}
 
     def get_sentiment(self, pair: str) -> Optional[SentimentData]:
         """
@@ -457,6 +462,7 @@ class SentimentAggregator:
         aggregated = {}
 
         for source in self.sources:
+            source_name = type(source).__name__
             try:
                 data = source.fetch_sentiment()
                 for pair, sentiment in data.items():
@@ -469,7 +475,10 @@ class SentimentAggregator:
                         existing = aggregated[pair_normalized]
                         aggregated[pair_normalized] = self._merge_sentiment(existing, sentiment)
 
+                self.last_status[source_name] = (
+                    f"ok: {len(data)} pairs" if data else "0 pairs")
             except Exception as e:
+                self.last_status[source_name] = f"{type(e).__name__}: {e}"
                 logger.error(f"Error fetching from source: {e}")
 
         # No live data = honestly NO data. The old SimulatedSentiment
@@ -480,6 +489,10 @@ class SentimentAggregator:
             logger.warning("No live sentiment data (sources empty) — "
                            "reporting NO_DATA, not simulated values")
 
+        # UTC: this one is published over HTTP next to the server's other
+        # timestamps, and local wall-clock here would read hours off on the
+        # 24/7 machine
+        self.last_status["_checked_at"] = utcnow().isoformat() + "Z"
         self._cache = aggregated
         self._cache_time = datetime.now()
 

@@ -196,9 +196,9 @@ Add tradeable event names: `config.py` → TIER1/TIER2 or `SKYTOWER_EXTRA_EVENTS
 
 | Data | Source | Status |
 |------|--------|--------|
-| Calendar | ForexFactory feed (**GMT** — verify timezone of any new source!) | Works; occasional 429 — do NOT hammer the feed |
-| COT | CFTC | Frequently missing data |
-| Sentiment | Myfxbook (403), FXSSI (0 pairs) | Unreliable — LLM compensates with EA market context |
+| Calendar | ForexFactory feed (**GMT** — verify timezone of any new source!) | Works for scheduling; occasional 429 — do NOT hammer the feed. **Carries NO `<actual>` element** (verified: `logs/ff_calendar_cache.json`, 99 events, 72 forecast / 85 previous / **0 actual**), so `backfill_actuals` has never filled a single value. Released numbers exist only on the FF HTML week page (`tools/parse_ff_calendar.py`) |
+| COT | CFTC | **Config bug, not a flaky source**: `cot_analyzer.py:55` `CURRENCY_CONTRACTS` pins USD to `U.S. DOLLAR INDEX` and NZD to `NEW ZEALAND DOLLAR`; the live CFTC series are `USD INDEX - ICE FUTURES U.S.` and `NZ DOLLAR - CHICAGO MERCANTILE EXCHANGE`. Evidence: `cot_has_data` is false for **all** USD/NZD and true for **all** CAD/GBP/AUD rows across 20 decisions — a currency-perfect split, not network flakiness. The prefix query returns 200 + `[]` and `cot_analyzer.py:111` reports the lookup miss as "Could not fetch COT data". Note `/api/datasources/status` probes with `analyze_currency("USD")`, so that indicator is red **by construction** |
+| Sentiment | Myfxbook (403), FXSSI (0 pairs) | Genuinely unavailable. `NO_DATA` since 26.07 is CORRECT: commit `50252be` removed `TradingViewTechnical` (TA ratings dressed as positioning) and `SimulatedSentiment` (hardcoded constants). The 2–7 "pairs analyzed" seen before that date came from those two — fabricated, not real retail data |
 | LLM | OpenRouter | `OPENROUTER_API_KEY` in `python/.env` |
 
 ## Common Issues

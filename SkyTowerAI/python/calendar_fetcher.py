@@ -677,6 +677,24 @@ class CalendarAggregator:
 
         return unique
 
+    def peek_cached_events(self) -> List[EconomicEvent]:
+        """Every event currently cached, WITHOUT fetching — for lookups that
+        must not block or hit the network (the reaction endpoint runs inside
+        the EA's POST).
+
+        NOTE: get_upcoming_events filters `now <= e.datetime_utc <= cutoff`
+        BEFORE caching, so this holds only FUTURE events; it resolves a
+        just-released event only inside the window where a pre-release entry
+        is still cached. Last resort behind the decision context and the path
+        recorder's schedule."""
+        out: List[EconomicEvent] = []
+        for entry in list(self._cache.values()):
+            try:
+                out.extend(entry[0])
+            except (TypeError, IndexError):
+                continue
+        return out
+
     def _is_cache_valid(self, cache_key: str) -> bool:
         """Check if THIS key's cached result is still within its TTL."""
         entry = self._cache.get(cache_key)
