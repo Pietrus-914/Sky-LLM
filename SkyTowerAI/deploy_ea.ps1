@@ -1,4 +1,4 @@
-# deploy_ea.ps1 — jedyna wspierana droga wgrywania EA po zmianach w mt5/.
+﻿# deploy_ea.ps1 — jedyna wspierana droga wgrywania EA po zmianach w mt5/.
 #
 # Dlaczego ten skrypt istnieje: źródła EA żyją w KILKU miejscach (repo +
 # datafoldery każdego terminala MetaQuotes), a MetaEditor otwierany z MT5
