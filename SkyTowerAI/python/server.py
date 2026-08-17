@@ -364,6 +364,82 @@ def config_models():
     return jsonify({"status": "ok", "updated": staged})
 
 
+@app.route('/api/config/routing', methods=['GET', 'POST'])
+def config_routing():
+    """Event -> instrument routing (multi-instrument). GET returns the live
+    table plus which routed symbols currently have fresh EA data; POST sets
+    it (dict {"USD": ["XAUUSD"]} or string "USD:XAUUSD;GBP:XAUUSD,GBPUSD"),
+    persisted in runtime_overrides.json (default < env < panel). Symbols
+    that are not forex pairs must have an instrument profile — a POST naming
+    an unknown non-forex symbol is rejected, because the EA/server units for
+    it are undefined."""
+    import config as cfg
+    from instrument_profiles import profile_for, is_forex_root
+
+    def _live_status():
+        out = {}
+        with market_data_lock:
+            for cur, syms in cfg.INSTRUMENT_ROUTING.items():
+                rows = []
+                for sym in syms:
+                    entry = _find_pair_data(market_data_reports, sym)
+                    age = _market_data_age_seconds(entry) if entry else None
+                    rows.append({"symbol": sym,
+                                 "has_data": entry is not None,
+                                 "fresh": bool(entry) and age <= MARKET_DATA_MAX_AGE_SECONDS,
+                                 "age_seconds": int(age) if age is not None else None,
+                                 "profile": (profile_for(sym).name if profile_for(sym) else None)})
+                out[cur] = rows
+        return out
+
+    if request.method == 'GET':
+        return jsonify({"status": "ok",
+                        "instrument_routing": cfg.INSTRUMENT_ROUTING,
+                        "live": _live_status(),
+                        "default_pairs": DEFAULT_PAIRS})
+
+    data = request.json or {}
+    if 'instrument_routing' not in data:
+        return jsonify({"status": "error",
+                        "message": "instrument_routing missing"}), 400
+    raw = data['instrument_routing']
+    if isinstance(raw, str):
+        table = cfg.parse_instrument_routing(raw)
+    elif isinstance(raw, dict):
+        table = {}
+        try:
+            for cur, syms in raw.items():
+                cur_u = str(cur).strip().upper()
+                if len(cur_u) != 3 or not cur_u.isalpha():
+                    raise ValueError(f"bad currency key '{cur}'")
+                if isinstance(syms, str):
+                    syms = syms.split(',')
+                if not isinstance(syms, list):
+                    raise ValueError(f"{cur}: expected a list of symbols")
+                cleaned = []
+                for s in syms:
+                    s = str(s).strip().upper().replace('/', '')
+                    if s and s not in cleaned:
+                        cleaned.append(s)
+                if cleaned:
+                    table[cur_u] = cleaned
+        except (TypeError, ValueError, AttributeError) as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+    else:
+        return jsonify({"status": "error",
+                        "message": "instrument_routing: expected dict or string"}), 400
+    for cur, syms in table.items():
+        for s in syms:
+            if not is_forex_root(s) and profile_for(s) is None:
+                return jsonify({"status": "error",
+                                "message": f"{s}: no instrument profile — add it to "
+                                           f"instrument_profiles.py before routing to it"}), 400
+    cfg.INSTRUMENT_ROUTING = table
+    cfg.save_runtime_overrides({"instrument_routing": table})
+    logger.info(f"Instrument routing set via dashboard (persisted): {table}")
+    return jsonify({"status": "ok", "instrument_routing": table, "live": _live_status()})
+
+
 @app.route('/api/decisions/history', methods=['GET'])
 def get_decision_history():
     """Get decision audit log — all LLM decisions (BUY/SELL/SKIP)"""
@@ -1080,6 +1156,30 @@ def _market_data_age_seconds(entry) -> float:
     return entry_age_seconds(entry)
 
 
+def _pick_routed_market_entry(currency: str):
+    """(symbol, market_entry) for the FIRST instrument in
+    config.INSTRUMENT_ROUTING[currency] whose EA chart has pushed fresh
+    market data — or None (routing off / no routed chart alive), in which
+    case the caller keeps the DEFAULT_PAIRS flow untouched.
+
+    Exact root match only (normalize_pair): a routed non-forex symbol must
+    never be satisfied by the base-currency fallback of _find_pair_data, and
+    a dead routed chart must never claim decision.pair (no EA would receive
+    the signal). Caller holds market_data_lock.
+    """
+    import config as cfg
+    for symbol in cfg.routing_candidates(currency):
+        entry = _find_pair_data(market_data_reports, symbol)
+        if entry is None:
+            continue
+        if _market_data_age_seconds(entry) > MARKET_DATA_MAX_AGE_SECONDS:
+            logger.info(f"Routed instrument {symbol} for {currency} has stale data "
+                        f"({int(_market_data_age_seconds(entry) // 60)} min) — skipping")
+            continue
+        return normalize_pair(symbol), entry
+    return None
+
+
 # Timeframes to try for stop-cluster (equal-high/low) detection, best first.
 # M15/M5 recent swings are where a news trade's retail stops actually cluster;
 # H1 is a coarse fallback. ZoneAnalyzer.analyze() needs >= 10 bars.
@@ -1138,7 +1238,18 @@ def _build_market_context_for_event(event):
         spread_pips = None
 
         with market_data_lock:
-            market_entry = _find_pair_data(market_data_reports, suggested, currency)
+            # Event -> instrument routing (config.INSTRUMENT_ROUTING): a routed
+            # instrument (e.g. XAUUSD for USD prints) claims the decision only
+            # when ITS chart has pushed fresh data — exact symbol match, no
+            # base-currency fallback. Otherwise: today's DEFAULT_PAIRS flow.
+            routed = _pick_routed_market_entry(currency)
+            if routed is not None:
+                suggested, market_entry = routed
+                pair_name = normalize_pair(suggested)
+                logger.info(f"Routing {currency} event to {pair_name} "
+                            f"(instrument routing, fresh EA data)")
+            else:
+                market_entry = _find_pair_data(market_data_reports, suggested, currency)
             if market_entry and _market_data_age_seconds(market_entry) > MARKET_DATA_MAX_AGE_SECONDS:
                 logger.info(f"Ignoring stale market data for {market_entry.get('pair')} "
                             f"({int(_market_data_age_seconds(market_entry) // 60)} min old)")

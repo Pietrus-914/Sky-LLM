@@ -1090,6 +1090,28 @@
                 </div>
             </div>
 
+            <!-- Event -> instrument routing (multi-instrument) -->
+            <div class="config-section">
+                <h3>Instrument Routing (event → instrument)</h3>
+                <div class="config-row">
+                    <label for="routingInput">Routing table</label>
+                    <input type="text" id="routingInput" placeholder="USD:XAUUSD;GBP:XAUUSD,GBPUSD"
+                           style="min-width:260px">
+                    <button class="btn btn-small" id="btnSaveRouting" type="button">Zapisz</button>
+                </div>
+                <div id="routingStatus" style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
+                    Routing OFF — decyzje idą na pary z DEFAULT_PAIRS.
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
+                    Dla eventu w danej walucie serwer próbuje najpierw instrumentów z tej listy
+                    (po kolei) i bierze PIERWSZY, którego wykres z EA pcha świeże dane
+                    (&le; 30 min). Brak danych = dzisiejszy przepływ (para FX). Instrumenty
+                    nie-FX (XAUUSD, GER40, US500) muszą mieć profil w
+                    <code>instrument_profiles.py</code>, a EA na ich wykresie musi mieć
+                    <code>InpPipSizeOverride</code> = pip profilu (XAUUSD 0.10). Puste = wyłączone.
+                </div>
+            </div>
+
             <!-- Active Currencies -->
             <div class="config-section">
                 <h3>Active Currencies</h3>
@@ -2087,6 +2109,51 @@
                     showToast('Serwer nieosiągalny — przełącznik niezapisany', false);
                 }
             });
+
+            // Instrument routing persists immediately on its own button
+            // (same reason as trade-all: never reset by a racing bulk Save)
+            $('btnSaveRouting').addEventListener('click', async function() {
+                try {
+                    var resp = await fetch(BASE_URL + '/api/config/routing', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ instrument_routing: $('routingInput').value })
+                    });
+                    var body = await resp.json();
+                    showToast(resp.ok ? 'Routing zapisany' : ('Routing odrzucony: ' + (body.message || '')), resp.ok);
+                    if (resp.ok) renderRouting(body);
+                } catch(e) {
+                    showToast('Serwer nieosiągalny — routing niezapisany', false);
+                }
+            });
+        }
+
+        function renderRouting(data) {
+            var table = data.instrument_routing || {};
+            var parts = [];
+            Object.keys(table).forEach(function(cur) {
+                parts.push(cur + ':' + table[cur].join(','));
+            });
+            $('routingInput').value = parts.join(';');
+            var live = data.live || {};
+            var lines = [];
+            Object.keys(live).forEach(function(cur) {
+                var rows = live[cur].map(function(r) {
+                    var st = r.fresh ? 'świeże dane' : (r.has_data ? 'dane nieświeże (' + Math.round((r.age_seconds||0)/60) + ' min)' : 'BRAK danych z EA');
+                    return r.symbol + ' [' + st + (r.profile ? ', profil ' + r.profile : '') + ']';
+                });
+                lines.push(cur + ' → ' + rows.join(' → '));
+            });
+            $('routingStatus').textContent = lines.length
+                ? lines.join(' | ')
+                : 'Routing OFF — decyzje idą na pary z DEFAULT_PAIRS.';
+        }
+
+        async function loadRoutingConfig() {
+            try {
+                var data = await apiFetch('/api/config/routing');
+                renderRouting(data);
+            } catch(e) { /* offline */ }
         }
 
         function getConfigState() {
@@ -2936,6 +3003,7 @@
                 } catch(e) { /* offline */ }
                 loadRiskConfig();
                 loadModelsConfig();
+                loadRoutingConfig();
                 loadRegimes();
                 loadProposals();
             })();

@@ -132,7 +132,10 @@ register(InstrumentProfile(
     price_digits=2,
     quote_currency="USD",
     base_tag="XAU",
-    sl_range=(50.0, 250.0),          # $5 .. $25
+    sl_range=(50.0, 100.0),          # $5 .. $10 — the EA's own SL sanity bound is
+                                     # 20-100 pips (EA:1786), so a wider server
+                                     # range would silently be cut there; widen
+                                     # BOTH sides together if gold noise demands it
     tp_range=(30.0, 400.0),          # $3 .. $40
     exit_range=(5, 15),
     lot_max=85,
@@ -159,7 +162,7 @@ register(InstrumentProfile(
     price_digits=1,
     quote_currency="EUR",
     base_tag="DAX",
-    sl_range=(20.0, 150.0),
+    sl_range=(20.0, 100.0),          # EA SL sanity bound 20-100 (see XAUUSD note)
     tp_range=(15.0, 250.0),
     exit_range=(5, 30),
     lot_max=85,

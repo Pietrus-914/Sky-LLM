@@ -636,6 +636,92 @@ def _apply_model_runtime_overrides():
 _apply_model_runtime_overrides()
 
 # =============================================================================
+# EVENT -> INSTRUMENT ROUTING (multi-instrument)
+# =============================================================================
+# For an event of currency X, the decision is normally made for
+# DEFAULT_PAIRS[X] (a forex pair). INSTRUMENT_ROUTING lets the operator put
+# OTHER instruments in front of that default: the first routed symbol whose
+# EA chart has pushed FRESH market data wins; if none has data the flow is
+# exactly today's (DEFAULT_PAIRS + base-currency fallback). Why: the same USD
+# print moves gold/US500 as much as the forex pairs in %, at 2-8% of the move
+# in cost instead of 40-100% (research/DAX_OPEN_PLAN.md §10). Non-forex
+# symbols MUST have an instrument profile (instrument_profiles.py) and the EA
+# on that chart MUST run with the matching InpPipSizeOverride.
+#
+#   SKYTOWER_INSTRUMENT_ROUTING="USD:XAUUSD;GBP:XAUUSD,GBPUSD"
+#     -> {"USD": ["XAUUSD"], "GBP": ["XAUUSD", "GBPUSD"]}
+#
+# Empty (default) = routing OFF = byte-identical behaviour. Panel-persisted
+# value (runtime_overrides.json key "instrument_routing") outranks env.
+
+
+def parse_instrument_routing(text: str) -> dict:
+    """'USD:XAUUSD;GBP:XAUUSD,GBPUSD' -> {'USD': ['XAUUSD'], 'GBP': [...]}.
+    Junk is dropped silently (never raises); symbols upper-cased, de-duped,
+    order preserved."""
+    out = {}
+    for chunk in str(text or "").split(";"):
+        if ":" not in chunk:
+            continue
+        cur, syms = chunk.split(":", 1)
+        cur = cur.strip().upper()
+        if len(cur) != 3 or not cur.isalpha():
+            continue
+        seen = []
+        for s in syms.split(","):
+            s = s.strip().upper().replace("/", "")
+            if s and s not in seen:
+                seen.append(s)
+        if seen:
+            out[cur] = seen
+    return out
+
+
+def routing_candidates(currency: str, routing: dict = None) -> list:
+    """Ordered instrument roots to try before DEFAULT_PAIRS for this currency
+    (empty list = routing off for that currency)."""
+    table = INSTRUMENT_ROUTING if routing is None else routing
+    return list(table.get((currency or "").upper(), []) or [])
+
+
+INSTRUMENT_ROUTING = parse_instrument_routing(os.getenv("SKYTOWER_INSTRUMENT_ROUTING", ""))
+
+
+def _apply_routing_runtime_overrides():
+    """Panel-set routing table (endpoint /api/config/routing). Same late-pass
+    pattern as the model overrides: default < env < panel."""
+    import json
+    global INSTRUMENT_ROUTING
+    try:
+        if not os.path.exists(_OVERRIDES_FILE):
+            return
+        with open(_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    value = data.get('instrument_routing')
+    if isinstance(value, dict):
+        cleaned = {}
+        for cur, syms in value.items():
+            if not (isinstance(cur, str) and len(cur) == 3 and cur.isalpha()):
+                continue
+            if not isinstance(syms, list):
+                continue
+            seen = []
+            for s in syms:
+                s = str(s).strip().upper().replace("/", "")
+                if s and s not in seen:
+                    seen.append(s)
+            if seen:
+                cleaned[cur.upper()] = seen
+        INSTRUMENT_ROUTING = cleaned
+    elif isinstance(value, str):
+        INSTRUMENT_ROUTING = parse_instrument_routing(value)
+
+
+_apply_routing_runtime_overrides()
+
+# =============================================================================
 # TEST MODE: FORCE DECISION (never SKIP)
 # =============================================================================
 # When enabled, the entry decision engine must always pick BUY or SELL —

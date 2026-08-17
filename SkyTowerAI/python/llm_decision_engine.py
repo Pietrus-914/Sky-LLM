@@ -487,7 +487,12 @@ confidence — do NOT inflate it just because a direction is required."""
             logger.warning(f"Reflections lookup failed: {e}")
         source_status["reflections"] = "ok" if reflections else "no_data"
 
-        return {
+        # Non-forex instrument (event->instrument routing): the model must
+        # know the unit it is quoting SL/TP in and the contract ranges for
+        # THIS instrument. Absent for forex (prompt-invisibility).
+        instrument = self._instrument_brief(suggested, currency)
+
+        ctx = {
             "event": {
                 "name": event.event_name,
                 "currency": currency,
@@ -512,6 +517,65 @@ confidence — do NOT inflate it just because a direction is required."""
             "reflections": reflections,
             "_source_status": source_status,
         }
+        if instrument:
+            ctx["instrument"] = instrument
+            source_status["instrument"] = instrument["name"]
+        return ctx
+
+    @staticmethod
+    def _instrument_brief(pair: Optional[str], event_currency: str) -> Optional[Dict]:
+        """Prompt-facing facts for a NON-forex decision instrument, or None
+        for forex. Stored in data_summary so replay re-renders the same
+        prompt. Direction semantics are spelled out because the forex
+        prompt's base/quote reasoning does not carry over by itself."""
+        from instrument_profiles import profile_for
+        prof = profile_for(pair)
+        if prof is None:
+            return None
+        cur = (event_currency or "").upper()
+        if cur == prof.quote_currency:
+            side = (f"{cur} is the QUOTE currency of {prof.name}: a {cur}-POSITIVE "
+                    f"surprise (stronger {cur}) normally means SELL {prof.name}, a "
+                    f"{cur}-negative surprise means BUY {prof.name}")
+        else:
+            side = (f"{cur} is not a leg of {prof.name}; reason about how the "
+                    f"release transmits to {prof.name} ({prof.asset_class}) explicitly")
+        return {
+            "name": prof.name,
+            "asset_class": prof.asset_class,
+            "units": prof.units_label,
+            "pip_size": prof.pip_size,
+            "quote_currency": prof.quote_currency,
+            "sl_range_pips": [prof.sl_range[0], prof.sl_range[1]],
+            "tp_range_pips": [prof.tp_range[0], prof.tp_range[1]],
+            "exit_range_minutes": [prof.exit_range[0], prof.exit_range[1]],
+            "direction_semantics": side,
+        }
+
+    def _instrument_section(self, data_context: Dict) -> str:
+        inst = data_context.get('instrument')
+        if not inst:
+            return ""
+        pip = float(inst.get('pip_size') or 0)
+        sl_lo, sl_hi = inst['sl_range_pips']
+        tp_lo, tp_hi = inst['tp_range_pips']
+        ex_lo, ex_hi = inst['exit_range_minutes']
+
+        def _px(v):
+            return f"{v * pip:g}" if pip else "?"
+
+        return (f"\nINSTRUMENT (this decision is for a NON-forex CFD — the ranges below "
+                f"OVERRIDE the forex defaults in the schema):\n"
+                f"- symbol: {inst['name']} ({inst['asset_class']}), quoted in {inst['quote_currency']}\n"
+                f"- units: {inst['units']}; every *_pips field you return and every pip figure "
+                f"in the market data above uses this unit\n"
+                f"- stop_loss_pips: {sl_lo:g}-{sl_hi:g} (= {_px(sl_lo)}-{_px(sl_hi)} price units); "
+                f"take_profit_pips: {tp_lo:g}-{tp_hi:g} (= {_px(tp_lo)}-{_px(tp_hi)}); "
+                f"exit_minutes: {ex_lo}-{ex_hi}\n"
+                f"- direction: {inst['direction_semantics']}\n"
+                f"- playbook/statistics blocks measured on FOREX pairs do not transfer 1:1 "
+                f"(no 'fade the last candles' edge is established for this instrument); "
+                f"prefer statistics that name {inst['name']} explicitly\n")
 
     def _market_context_section(self, data_context: Dict) -> str:
         """Prompt section for live market data (summary + raw candles)."""
@@ -1201,7 +1265,7 @@ RECENT TRADE OUTCOMES ({data_context['event']['currency']}, realized P/L):
 {data_context.get('trade_outcomes') or "No completed trades for this currency yet"}
 {reflections_block}
 SUGGESTED PAIR: {data_context['suggested_pair']}
-{calibration_block}{recap_block}
+{self._instrument_section(data_context)}{calibration_block}{recap_block}
 Work through the ANALYSIS CHECKLIST against this data, then provide your trading
 decision in JSON format."""
         return prompt

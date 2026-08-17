@@ -169,7 +169,7 @@ class TestEngineClamps:
         fx = engine._limits_for("USD/CAD")
         assert (fx["sl"], fx["tp"], fx["exit"], fx["lot_max"]) == ((25.0, 80.0), (8.0, 120.0), (5, 15), 85)
         gold = engine._limits_for("XAUUSD")
-        assert gold["sl"] == (50.0, 250.0) and gold["tp"] == (30.0, 400.0)
+        assert gold["sl"] == (50.0, 100.0) and gold["tp"] == (30.0, 400.0)
         assert engine._limits_for(None) == fx
 
     def test_single_call_clamps_forex_unchanged(self, tmp_path, monkeypatch):
@@ -188,12 +188,13 @@ class TestEngineClamps:
         monkeypatch.setattr(lde, "ENSEMBLE_K", 1)
         monkeypatch.setattr(lde, "ENSEMBLE_MODELS", [])
         monkeypatch.setattr(lde, "FORCE_DECISION", False)
-        engine._chat = lambda prompt: reply(sl=120, tp=300, exit_m=12)
+        engine._chat = lambda prompt: reply(sl=95, tp=300, exit_m=12)
         ctx = engine._gather_data(make_event(), {"pair": "XAUUSD"})
         assert ctx["suggested_pair"] == "XAUUSD"
+        assert ctx["instrument"]["name"] == "XAUUSD"
         d = engine._llm_decision(make_event(), ctx)
         assert d.pair == "XAUUSD"
-        assert d.stop_loss_pips == 120.0 and d.take_profit_pips == 300.0   # $12 / $30 kept
+        assert d.stop_loss_pips == 95.0 and d.take_profit_pips == 300.0    # $9.5 / $30 kept (forex: 80/120)
         assert d.exit_minutes_after == 12
 
     def test_ensemble_clamps_gold_use_profile(self, tmp_path, monkeypatch):
@@ -204,7 +205,7 @@ class TestEngineClamps:
         engine._chat = lambda prompt: reply(sl=150, tp=20)
         ctx = engine._gather_data(make_event(), {"pair": "XAUUSD.pro"})
         d = engine._llm_decision(make_event(), ctx)
-        assert d.stop_loss_pips == 150.0          # forex would clamp to 80
+        assert d.stop_loss_pips == 100.0          # gold cap $10 (forex would clamp to 80)
         assert d.take_profit_pips == 30.0         # gold TP floor $3 (forex floor 8 would keep 20)
 
 
