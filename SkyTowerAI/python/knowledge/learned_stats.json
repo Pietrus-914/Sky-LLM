@@ -3,11 +3,11 @@
   "attribution": {
    "ambiguous_groups": 117,
    "ambiguous_records": 285,
-   "bundle_groups": 7573,
-   "bundled_records": 13835
+   "bundle_groups": 8384,
+   "bundled_records": 15242
   },
-  "built_at": "2026-08-05T07:04:07Z",
-  "input_records_deduped": 44293,
+  "built_at": "2026-08-17T14:44:57Z",
+  "input_records_deduped": 48986,
   "n_events": 203,
   "params": {
    "alias_min_bundled": 5,
@@ -18,7 +18,7 @@
   },
   "schema_version": 1,
   "sources": {
-   "historical": 44679
+   "historical": 49400
   }
  },
  "bundle_alias": {
@@ -219,15 +219,15 @@
    "to": "USD|advance gdp q/q"
   },
   "USD|average hourly earnings m/m": {
-   "n": 65,
+   "n": 66,
    "to": "USD|non-farm employment change"
   },
   "USD|core cpi m/m": {
-   "n": 63,
+   "n": 64,
    "to": "USD|cpi m/m"
   },
   "USD|core cpi y/y": {
-   "n": 63,
+   "n": 64,
    "to": "USD|cpi m/m"
   },
   "USD|core durable goods orders m/m": {
@@ -235,15 +235,15 @@
    "to": "USD|durable goods orders m/m"
   },
   "USD|core ppi m/m": {
-   "n": 54,
+   "n": 55,
    "to": "USD|ppi m/m"
   },
   "USD|core retail sales m/m": {
-   "n": 61,
+   "n": 62,
    "to": "USD|retail sales m/m"
   },
   "USD|cpi y/y": {
-   "n": 61,
+   "n": 62,
    "to": "USD|cpi m/m"
   },
   "USD|final gdp price index q/q": {
@@ -259,11 +259,11 @@
    "to": "USD|federal funds rate"
   },
   "USD|housing starts": {
-   "n": 44,
+   "n": 45,
    "to": "USD|building permits"
   },
   "USD|ism manufacturing prices": {
-   "n": 66,
+   "n": 67,
    "to": "USD|ism manufacturing pmi"
   },
   "USD|personal income m/m": {
@@ -287,7 +287,7 @@
    "to": "USD|unemployment claims"
   },
   "USD|prelim uom inflation expectations": {
-   "n": 61,
+   "n": 63,
    "to": "USD|prelim uom consumer sentiment"
   },
   "USD|prelim wholesale inventories m/m": {
@@ -307,7 +307,7 @@
    "to": "USD|revised uom consumer sentiment"
   },
   "USD|unemployment rate": {
-   "n": 64,
+   "n": 65,
    "to": "USD|non-farm employment change"
   }
  },
@@ -15228,7 +15228,7 @@
   "USD|10-y bond auction": {
    "currency": "USD",
    "event_name": "10-y Bond Auction",
-   "n_releases": 66,
+   "n_releases": 67,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -15699,17 +15699,111 @@
       "p25": 3.5,
       "p75": 7.8
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 12.1,
+      "n": 40,
+      "p25": 7.3,
+      "p75": 22.7
+     },
+     "abs_move_1min": {
+      "median": 3.8,
+      "n": 40,
+      "p25": 1.7,
+      "p75": 10.8
+     },
+     "abs_move_30min": {
+      "median": 20.1,
+      "n": 40,
+      "p25": 11.4,
+      "p75": 67.5
+     },
+     "abs_move_5min": {
+      "median": 7.8,
+      "n": 40,
+      "p25": 5.7,
+      "p75": 15.7
+     },
+     "adverse_wick_5min": {
+      "median": 4.7,
+      "n": 36,
+      "p25": 1.8,
+      "p75": 8.3,
+      "p80": 11.8,
+      "p90": 18.0
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 11.6,
+        "n": 12,
+        "p25": 6.8,
+        "p75": 17.0
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 8.3,
+        "n": 7,
+        "p25": 7.0,
+        "p75": 13.8
+       },
+       "n": 7
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 7.4,
+        "n": 21,
+        "p25": 2.5,
+        "p75": 15.8
+       },
+       "n": 21
+      }
+     },
+     "continuation_5to30": {
+      "n": 36,
+      "rate": 0.75
+     },
+     "fade_pre_drift": {
+      "n": 31,
+      "rate": 0.65
+     },
+     "favorable_run_30min": {
+      "median": 34.5,
+      "n": 40,
+      "p25": 21.7,
+      "p75": 85.5,
+      "p80": 108.2,
+      "p90": 152.4
+     },
+     "favorable_run_5min": {
+      "median": 18.9,
+      "n": 36,
+      "p25": 12.1,
+      "p75": 21.9,
+      "p80": 24.4,
+      "p90": 46.1
+     },
+     "n": 40,
+     "range_5min": {
+      "median": 21.9,
+      "n": 40,
+      "p25": 17.7,
+      "p75": 33.5
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ]
   },
   "USD|30-y bond auction": {
    "currency": "USD",
    "event_name": "30-y Bond Auction",
-   "n_releases": 66,
+   "n_releases": 67,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -16180,17 +16274,111 @@
       "p25": 4.1,
       "p75": 9.6
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 19.8,
+      "n": 41,
+      "p25": 12.0,
+      "p75": 32.5
+     },
+     "abs_move_1min": {
+      "median": 5.6,
+      "n": 41,
+      "p25": 2.9,
+      "p75": 9.5
+     },
+     "abs_move_30min": {
+      "median": 19.1,
+      "n": 41,
+      "p25": 12.4,
+      "p75": 40.0
+     },
+     "abs_move_5min": {
+      "median": 13.9,
+      "n": 41,
+      "p25": 8.9,
+      "p75": 20.7
+     },
+     "adverse_wick_5min": {
+      "median": 4.4,
+      "n": 37,
+      "p25": 1.2,
+      "p75": 10.0,
+      "p80": 13.4,
+      "p90": 26.7
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 21.1,
+        "n": 12,
+        "p25": 9.0,
+        "p75": 27.2
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 10.1,
+        "n": 8,
+        "p25": 4.5,
+        "p75": 13.9
+       },
+       "n": 8
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 13.9,
+        "n": 21,
+        "p25": 9.8,
+        "p75": 18.5
+       },
+       "n": 21
+      }
+     },
+     "continuation_5to30": {
+      "n": 37,
+      "rate": 0.73
+     },
+     "fade_pre_drift": {
+      "n": 28,
+      "rate": 0.57
+     },
+     "favorable_run_30min": {
+      "median": 41.5,
+      "n": 40,
+      "p25": 34.2,
+      "p75": 65.1,
+      "p80": 71.2,
+      "p90": 117.4
+     },
+     "favorable_run_5min": {
+      "median": 23.6,
+      "n": 37,
+      "p25": 13.9,
+      "p75": 33.7,
+      "p80": 38.5,
+      "p90": 48.7
+     },
+     "n": 41,
+     "range_5min": {
+      "median": 27.8,
+      "n": 41,
+      "p25": 22.3,
+      "p75": 38.8
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ]
   },
   "USD|adp non-farm employment change": {
    "currency": "USD",
    "event_name": "ADP Non-Farm Employment Change",
-   "n_releases": 64,
+   "n_releases": 65,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -16821,19 +17009,145 @@
       "p25": 5.9,
       "p75": 11.9
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 28.4,
+      "n": 43,
+      "p25": 16.1,
+      "p75": 65.6
+     },
+     "abs_move_1min": {
+      "median": 23.2,
+      "n": 43,
+      "p25": 9.1,
+      "p75": 43.9
+     },
+     "abs_move_30min": {
+      "median": 49.2,
+      "n": 43,
+      "p25": 22.5,
+      "p75": 76.0
+     },
+     "abs_move_5min": {
+      "median": 19.6,
+      "n": 43,
+      "p25": 8.8,
+      "p75": 44.1
+     },
+     "adverse_wick_5min": {
+      "median": 3.5,
+      "n": 40,
+      "p25": 0.2,
+      "p75": 7.9,
+      "p80": 10.0,
+      "p90": 16.2
+     },
+     "beat_currency_up_5min": {
+      "n": 18,
+      "rate": 1.0
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 30.7,
+        "n": 12,
+        "p25": 14.9,
+        "p75": 46.8
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 7,
+        "rate": 1.0
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 20.5,
+        "n": 11,
+        "p25": 8.8,
+        "p75": 35.6
+       },
+       "beat_currency_up_5min": {
+        "n": 6,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 5,
+        "rate": 0.8
+       },
+       "n": 11
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 15.3,
+        "n": 20,
+        "p25": 8.4,
+        "p75": 31.1
+       },
+       "beat_currency_up_5min": {
+        "n": 7,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 11,
+        "rate": 0.91
+       },
+       "n": 20
+      }
+     },
+     "continuation_5to30": {
+      "n": 40,
+      "rate": 0.8
+     },
+     "fade_pre_drift": {
+      "n": 32,
+      "rate": 0.62
+     },
+     "favorable_run_30min": {
+      "median": 80.3,
+      "n": 41,
+      "p25": 54.6,
+      "p75": 129.8,
+      "p80": 134.6,
+      "p90": 165.6
+     },
+     "favorable_run_5min": {
+      "median": 44.5,
+      "n": 40,
+      "p25": 24.1,
+      "p75": 67.6,
+      "p80": 71.6,
+      "p90": 107.6
+     },
+     "miss_currency_down_5min": {
+      "n": 23,
+      "rate": 0.91
+     },
+     "n": 43,
+     "range_5min": {
+      "median": 48.0,
+      "n": 43,
+      "p25": 28.1,
+      "p75": 75.3
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 134738.2363,
-   "surprise_sigma_n": 64
+   "surprise_sigma": 133708.6031,
+   "surprise_sigma_n": 65
   },
   "USD|adp weekly employment change": {
    "currency": "USD",
    "event_name": "ADP Weekly Employment Change",
-   "n_releases": 34,
+   "n_releases": 37,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -17259,11 +17573,96 @@
       "p25": 3.2,
       "p75": 4.4
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 40.6,
+      "n": 37,
+      "p25": 26.1,
+      "p75": 92.4
+     },
+     "abs_move_1min": {
+      "median": 10.8,
+      "n": 37,
+      "p25": 5.6,
+      "p75": 20.8
+     },
+     "abs_move_30min": {
+      "median": 65.2,
+      "n": 37,
+      "p25": 37.8,
+      "p75": 121.6
+     },
+     "abs_move_5min": {
+      "median": 27.7,
+      "n": 37,
+      "p25": 14.1,
+      "p75": 50.4
+     },
+     "adverse_wick_5min": {
+      "median": 20.3,
+      "n": 35,
+      "p25": 12.1,
+      "p75": 28.9,
+      "p80": 29.4,
+      "p90": 33.6
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 28.1,
+        "n": 20,
+        "p25": 15.2,
+        "p75": 56.2
+       },
+       "n": 20
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 27.7,
+        "n": 17,
+        "p25": 13.0,
+        "p75": 46.0
+       },
+       "n": 17
+      }
+     },
+     "continuation_5to30": {
+      "n": 35,
+      "rate": 0.63
+     },
+     "fade_pre_drift": {
+      "n": 35,
+      "rate": 0.71
+     },
+     "favorable_run_30min": {
+      "median": 154.8,
+      "n": 36,
+      "p25": 82.9,
+      "p75": 192.0,
+      "p80": 213.9,
+      "p90": 271.4
+     },
+     "favorable_run_5min": {
+      "median": 42.9,
+      "n": 35,
+      "p25": 28.6,
+      "p75": 68.0,
+      "p80": 79.0,
+      "p90": 100.4
+     },
+     "n": 37,
+     "range_5min": {
+      "median": 63.1,
+      "n": 37,
+      "p25": 49.5,
+      "p75": 88.0
+     }
     }
    },
    "span": [
     "2025-10",
-    "2026-06"
+    "2026-07"
    ]
   },
   "USD|advance gdp q/q": {
@@ -17885,6 +18284,111 @@
       "p25": 11.3,
       "p75": 20.8
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 36.7,
+      "n": 11,
+      "p25": 28.0,
+      "p75": 42.3
+     },
+     "abs_move_1min": {
+      "median": 20.1,
+      "n": 11,
+      "p25": 12.4,
+      "p75": 26.5
+     },
+     "abs_move_30min": {
+      "median": 40.2,
+      "n": 11,
+      "p25": 28.2,
+      "p75": 93.6
+     },
+     "abs_move_5min": {
+      "median": 24.9,
+      "n": 11,
+      "p25": 15.1,
+      "p75": 43.9
+     },
+     "adverse_wick_5min": {
+      "median": 24.6,
+      "n": 11,
+      "p25": 10.8,
+      "p75": 43.4,
+      "p80": 52.7,
+      "p90": 66.4
+     },
+     "beat_currency_up_5min": {
+      "n": 5,
+      "rate": 0.8
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 46.0,
+        "n": 3,
+        "p25": 26.5,
+        "p75": 54.1
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.0
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 22.6,
+        "n": 6,
+        "p25": 17.9,
+        "p75": 37.6
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.0
+       },
+       "n": 6
+      }
+     },
+     "continuation_5to30": {
+      "n": 11,
+      "rate": 0.55
+     },
+     "fade_pre_drift": {
+      "n": 9,
+      "rate": 0.22
+     },
+     "favorable_run_30min": {
+      "median": 93.5,
+      "n": 10,
+      "p25": 81.8,
+      "p75": 139.5,
+      "p80": 156.1,
+      "p90": 175.9
+     },
+     "favorable_run_5min": {
+      "median": 52.4,
+      "n": 11,
+      "p25": 37.4,
+      "p75": 72.5,
+      "p80": 78.6,
+      "p90": 89.9
+     },
+     "miss_currency_down_5min": {
+      "n": 6,
+      "rate": 0.0
+     },
+     "n": 11,
+     "range_5min": {
+      "median": 78.6,
+      "n": 11,
+      "p25": 61.9,
+      "p75": 114.7
+     }
     }
    },
    "span": [
@@ -17900,7 +18404,7 @@
    ],
    "currency": "USD",
    "event_name": "API Weekly Statistical Bulletin",
-   "n_releases": 284,
+   "n_releases": 287,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -18371,11 +18875,87 @@
       "p25": 1.5,
       "p75": 3.2
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 6.3,
+      "n": 160,
+      "p25": 2.7,
+      "p75": 13.8
+     },
+     "abs_move_1min": {
+      "median": 2.0,
+      "n": 160,
+      "p25": 0.9,
+      "p75": 3.8
+     },
+     "abs_move_5min": {
+      "median": 4.0,
+      "n": 160,
+      "p25": 1.8,
+      "p75": 8.0
+     },
+     "adverse_wick_5min": {
+      "median": 1.5,
+      "n": 117,
+      "p25": 0.5,
+      "p75": 3.9,
+      "p80": 5.7,
+      "p90": 9.7
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 5.5,
+        "n": 45,
+        "p25": 2.1,
+        "p75": 11.6
+       },
+       "n": 45
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 2.3,
+        "n": 31,
+        "p25": 1.4,
+        "p75": 4.5
+       },
+       "n": 31
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 4.3,
+        "n": 84,
+        "p25": 1.8,
+        "p75": 9.0
+       },
+       "n": 84
+      }
+     },
+     "fade_pre_drift": {
+      "n": 71,
+      "rate": 0.54
+     },
+     "favorable_run_5min": {
+      "median": 8.0,
+      "n": 117,
+      "p25": 4.6,
+      "p75": 15.7,
+      "p80": 17.4,
+      "p90": 30.2
+     },
+     "n": 160,
+     "range_5min": {
+      "median": 8.6,
+      "n": 160,
+      "p25": 4.6,
+      "p75": 18.1
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ]
   },
   "USD|bank stress test results": {
@@ -18686,6 +19266,72 @@
       "p25": 1.2,
       "p75": 2.6
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 1.1,
+      "n": 3,
+      "p25": 1.0,
+      "p75": 37.5
+     },
+     "abs_move_1min": {
+      "median": 1.4,
+      "n": 3,
+      "p25": 0.8,
+      "p75": 2.0
+     },
+     "abs_move_30min": {
+      "median": 121.5,
+      "n": 1
+     },
+     "abs_move_5min": {
+      "median": 3.3,
+      "n": 3,
+      "p25": 2.7,
+      "p75": 48.9
+     },
+     "adverse_wick_5min": {
+      "median": 4.0,
+      "n": 3,
+      "p25": 3.1,
+      "p75": 18.1
+     },
+     "by_regime": {
+      "hold": {
+       "abs_move_5min": {
+        "median": 3.3,
+        "n": 3,
+        "p25": 2.7,
+        "p75": 48.9
+       },
+       "n": 3
+      }
+     },
+     "continuation_5to30": {
+      "n": 1,
+      "rate": 1.0
+     },
+     "fade_pre_drift": {
+      "n": 2,
+      "rate": 1.0
+     },
+     "favorable_run_30min": {
+      "median": 149.9,
+      "n": 1
+     },
+     "favorable_run_5min": {
+      "median": 6.2,
+      "n": 3,
+      "p25": 5.0,
+      "p75": 55.5
+     },
+     "n": 3,
+     "range_5min": {
+      "median": 8.5,
+      "n": 3,
+      "p25": 8.1,
+      "p75": 72.7
+     }
     }
    },
    "span": [
@@ -18701,7 +19347,7 @@
    ],
    "currency": "USD",
    "event_name": "Beige Book",
-   "n_releases": 44,
+   "n_releases": 45,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -19172,22 +19818,116 @@
       "p25": 3.8,
       "p75": 6.5
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 20.3,
+      "n": 28,
+      "p25": 8.1,
+      "p75": 35.8
+     },
+     "abs_move_1min": {
+      "median": 5.1,
+      "n": 28,
+      "p25": 3.1,
+      "p75": 11.1
+     },
+     "abs_move_30min": {
+      "median": 12.1,
+      "n": 28,
+      "p25": 6.1,
+      "p75": 26.2
+     },
+     "abs_move_5min": {
+      "median": 7.7,
+      "n": 28,
+      "p25": 3.3,
+      "p75": 23.4
+     },
+     "adverse_wick_5min": {
+      "median": 3.0,
+      "n": 25,
+      "p25": 0.8,
+      "p75": 9.7,
+      "p80": 12.5,
+      "p90": 20.0
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 17.3,
+        "n": 8,
+        "p25": 5.8,
+        "p75": 31.1
+       },
+       "n": 8
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 4.0,
+        "n": 6,
+        "p25": 1.1,
+        "p75": 11.3
+       },
+       "n": 6
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 7.7,
+        "n": 14,
+        "p25": 6.0,
+        "p75": 29.0
+       },
+       "n": 14
+      }
+     },
+     "continuation_5to30": {
+      "n": 25,
+      "rate": 0.76
+     },
+     "fade_pre_drift": {
+      "n": 21,
+      "rate": 0.33
+     },
+     "favorable_run_30min": {
+      "median": 25.2,
+      "n": 26,
+      "p25": 17.7,
+      "p75": 60.4,
+      "p80": 63.9,
+      "p90": 76.1
+     },
+     "favorable_run_5min": {
+      "median": 16.4,
+      "n": 25,
+      "p25": 8.4,
+      "p75": 36.6,
+      "p80": 37.7,
+      "p90": 59.4
+     },
+     "n": 28,
+     "range_5min": {
+      "median": 19.1,
+      "n": 28,
+      "p25": 13.0,
+      "p75": 39.2
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ]
   },
   "USD|building permits": {
    "bundled_with": [
     "housing starts",
-    "foreign securities purchases",
-    "import prices m/m"
+    "import prices m/m",
+    "foreign securities purchases"
    ],
    "currency": "USD",
    "event_name": "Building Permits",
-   "n_releases": 45,
+   "n_releases": 46,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -19806,11 +20546,137 @@
       "p25": 4.1,
       "p75": 6.9
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 30.0,
+      "n": 25,
+      "p25": 13.2,
+      "p75": 43.5
+     },
+     "abs_move_1min": {
+      "median": 7.4,
+      "n": 25,
+      "p25": 4.7,
+      "p75": 13.3
+     },
+     "abs_move_30min": {
+      "median": 36.7,
+      "n": 25,
+      "p25": 18.5,
+      "p75": 51.6
+     },
+     "abs_move_5min": {
+      "median": 12.6,
+      "n": 25,
+      "p25": 7.0,
+      "p75": 18.2
+     },
+     "adverse_wick_5min": {
+      "median": 4.9,
+      "n": 24,
+      "p25": 0.6,
+      "p75": 12.0,
+      "p80": 14.6,
+      "p90": 20.9
+     },
+     "beat_currency_up_5min": {
+      "n": 11,
+      "rate": 0.64
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 16.5,
+        "n": 8,
+        "p25": 11.2,
+        "p75": 25.5
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "n": 8
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 5.7,
+        "n": 3,
+        "p25": 3.1,
+        "p75": 11.9
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 11.8,
+        "n": 14,
+        "p25": 8.2,
+        "p75": 13.6
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "miss_currency_down_5min": {
+        "n": 7,
+        "rate": 0.57
+       },
+       "n": 14
+      }
+     },
+     "continuation_5to30": {
+      "n": 24,
+      "rate": 0.67
+     },
+     "fade_pre_drift": {
+      "n": 21,
+      "rate": 0.43
+     },
+     "favorable_run_30min": {
+      "median": 64.0,
+      "n": 23,
+      "p25": 36.3,
+      "p75": 91.8,
+      "p80": 105.7,
+      "p90": 206.2
+     },
+     "favorable_run_5min": {
+      "median": 23.4,
+      "n": 24,
+      "p25": 19.3,
+      "p75": 30.4,
+      "p80": 34.9,
+      "p90": 53.3
+     },
+     "miss_currency_down_5min": {
+      "n": 10,
+      "rate": 0.7
+     },
+     "n": 25,
+     "range_5min": {
+      "median": 28.5,
+      "n": 25,
+      "p25": 21.9,
+      "p75": 43.1
+     }
     }
    },
    "span": [
     "2021-02",
-    "2026-06"
+    "2026-07"
    ],
    "surprise_sigma": 66939.5892,
    "surprise_sigma_n": 43
@@ -19819,11 +20685,11 @@
    "bundled_with": [
     "nahb housing market index",
     "fomc member barr speaks",
-    "existing home sales"
+    "pending home sales m/m"
    ],
    "currency": "USD",
    "event_name": "Business Inventories m/m",
-   "n_releases": 54,
+   "n_releases": 55,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -20454,14 +21320,136 @@
       "p25": 5.2,
       "p75": 10.1
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 28.2,
+      "n": 37,
+      "p25": 11.3,
+      "p75": 52.1
+     },
+     "abs_move_1min": {
+      "median": 11.3,
+      "n": 37,
+      "p25": 7.0,
+      "p75": 19.7
+     },
+     "abs_move_30min": {
+      "median": 33.4,
+      "n": 37,
+      "p25": 26.5,
+      "p75": 85.0
+     },
+     "abs_move_5min": {
+      "median": 16.6,
+      "n": 37,
+      "p25": 7.1,
+      "p75": 28.5
+     },
+     "adverse_wick_5min": {
+      "median": 7.7,
+      "n": 34,
+      "p25": 1.5,
+      "p75": 14.4,
+      "p80": 16.8,
+      "p90": 22.1
+     },
+     "beat_currency_up_5min": {
+      "n": 6,
+      "rate": 0.33
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 18.7,
+        "n": 10,
+        "p25": 7.8,
+        "p75": 49.0
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "n": 10
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 14.2,
+        "n": 8,
+        "p25": 5.8,
+        "p75": 20.8
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.0
+       },
+       "n": 8
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 16.6,
+        "n": 19,
+        "p25": 7.7,
+        "p75": 28.0
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.25
+       },
+       "miss_currency_down_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "n": 19
+      }
+     },
+     "continuation_5to30": {
+      "n": 34,
+      "rate": 0.74
+     },
+     "fade_pre_drift": {
+      "n": 28,
+      "rate": 0.54
+     },
+     "favorable_run_30min": {
+      "median": 64.0,
+      "n": 37,
+      "p25": 38.1,
+      "p75": 108.8,
+      "p80": 118.6,
+      "p90": 218.5
+     },
+     "favorable_run_5min": {
+      "median": 25.4,
+      "n": 34,
+      "p25": 16.6,
+      "p75": 51.8,
+      "p80": 62.7,
+      "p90": 92.8
+     },
+     "miss_currency_down_5min": {
+      "n": 11,
+      "rate": 0.36
+     },
+     "n": 37,
+     "range_5min": {
+      "median": 34.0,
+      "n": 37,
+      "p25": 25.9,
+      "p75": 55.0
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 0.0883,
-   "surprise_sigma_n": 54
+   "surprise_sigma": 0.0875,
+   "surprise_sigma_n": 55
   },
   "USD|capacity utilization rate": {
    "bundled_with": [
@@ -20470,7 +21458,7 @@
    ],
    "currency": "USD",
    "event_name": "Capacity Utilization Rate",
-   "n_releases": 41,
+   "n_releases": 42,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -21101,11 +22089,133 @@
       "p25": 4.2,
       "p75": 10.2
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 27.7,
+      "n": 27,
+      "p25": 13.4,
+      "p75": 44.8
+     },
+     "abs_move_1min": {
+      "median": 11.4,
+      "n": 27,
+      "p25": 3.4,
+      "p75": 20.1
+     },
+     "abs_move_30min": {
+      "median": 42.9,
+      "n": 27,
+      "p25": 23.9,
+      "p75": 107.4
+     },
+     "abs_move_5min": {
+      "median": 17.0,
+      "n": 27,
+      "p25": 8.1,
+      "p75": 39.0
+     },
+     "adverse_wick_5min": {
+      "median": 6.2,
+      "n": 25,
+      "p25": 2.0,
+      "p75": 8.3,
+      "p80": 16.0,
+      "p90": 21.9
+     },
+     "beat_currency_up_5min": {
+      "n": 9,
+      "rate": 0.56
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 18.0,
+        "n": 12,
+        "p25": 10.3,
+        "p75": 27.5
+       },
+       "beat_currency_up_5min": {
+        "n": 6,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.75
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 8.1,
+        "n": 3,
+        "p25": 4.2,
+        "p75": 24.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 15.4,
+        "n": 12,
+        "p25": 9.2,
+        "p75": 40.4
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "miss_currency_down_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "n": 12
+      }
+     },
+     "continuation_5to30": {
+      "n": 25,
+      "rate": 0.76
+     },
+     "fade_pre_drift": {
+      "n": 22,
+      "rate": 0.41
+     },
+     "favorable_run_30min": {
+      "median": 64.8,
+      "n": 26,
+      "p25": 45.7,
+      "p75": 181.9,
+      "p80": 220.2,
+      "p90": 272.9
+     },
+     "favorable_run_5min": {
+      "median": 31.2,
+      "n": 25,
+      "p25": 25.8,
+      "p75": 48.7,
+      "p80": 51.1,
+      "p90": 56.2
+     },
+     "miss_currency_down_5min": {
+      "n": 10,
+      "rate": 0.7
+     },
+     "n": 27,
+     "range_5min": {
+      "median": 46.5,
+      "n": 27,
+      "p25": 29.4,
+      "p75": 55.2
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
    "surprise_sigma": 0.5602,
    "surprise_sigma_n": 40
@@ -21118,7 +22228,7 @@
    ],
    "currency": "USD",
    "event_name": "CB Consumer Confidence",
-   "n_releases": 56,
+   "n_releases": 57,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -21749,14 +22859,140 @@
       "p25": 6.5,
       "p75": 13.6
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 32.4,
+      "n": 36,
+      "p25": 22.3,
+      "p75": 45.7
+     },
+     "abs_move_1min": {
+      "median": 14.9,
+      "n": 36,
+      "p25": 4.5,
+      "p75": 27.4
+     },
+     "abs_move_30min": {
+      "median": 34.0,
+      "n": 36,
+      "p25": 14.2,
+      "p75": 67.6
+     },
+     "abs_move_5min": {
+      "median": 21.1,
+      "n": 36,
+      "p25": 7.8,
+      "p75": 45.3
+     },
+     "adverse_wick_5min": {
+      "median": 7.5,
+      "n": 35,
+      "p25": 4.0,
+      "p75": 19.5,
+      "p80": 22.5,
+      "p90": 30.5
+     },
+     "beat_currency_up_5min": {
+      "n": 19,
+      "rate": 0.74
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 23.4,
+        "n": 11,
+        "p25": 8.7,
+        "p75": 32.1
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 8,
+        "rate": 0.38
+       },
+       "n": 11
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 8.5,
+        "n": 9,
+        "p25": 4.3,
+        "p75": 46.2
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 1.0
+       },
+       "n": 9
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 28.8,
+        "n": 16,
+        "p25": 9.5,
+        "p75": 45.3
+       },
+       "beat_currency_up_5min": {
+        "n": 11,
+        "rate": 0.82
+       },
+       "miss_currency_down_5min": {
+        "n": 5,
+        "rate": 0.2
+       },
+       "n": 16
+      }
+     },
+     "continuation_5to30": {
+      "n": 35,
+      "rate": 0.66
+     },
+     "fade_pre_drift": {
+      "n": 26,
+      "rate": 0.62
+     },
+     "favorable_run_30min": {
+      "median": 62.7,
+      "n": 36,
+      "p25": 43.7,
+      "p75": 110.8,
+      "p80": 136.3,
+      "p90": 178.9
+     },
+     "favorable_run_5min": {
+      "median": 33.4,
+      "n": 35,
+      "p25": 22.4,
+      "p75": 63.1,
+      "p80": 66.9,
+      "p90": 103.1
+     },
+     "miss_currency_down_5min": {
+      "n": 16,
+      "rate": 0.44
+     },
+     "n": 36,
+     "range_5min": {
+      "median": 45.1,
+      "n": 36,
+      "p25": 35.1,
+      "p75": 68.7
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-05"
+    "2026-06"
    ],
-   "surprise_sigma": 5.0372,
-   "surprise_sigma_n": 56
+   "surprise_sigma": 5.0199,
+   "surprise_sigma_n": 57
   },
   "USD|cb leading index m/m": {
    "bundled_with": [
@@ -22357,6 +23593,124 @@
       "p25": 6.3,
       "p75": 11.7
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 24.4,
+      "n": 23,
+      "p25": 13.8,
+      "p75": 69.7
+     },
+     "abs_move_1min": {
+      "median": 10.1,
+      "n": 23,
+      "p25": 6.5,
+      "p75": 20.0
+     },
+     "abs_move_30min": {
+      "median": 42.2,
+      "n": 23,
+      "p25": 15.7,
+      "p75": 85.4
+     },
+     "abs_move_5min": {
+      "median": 22.7,
+      "n": 23,
+      "p25": 9.1,
+      "p75": 38.6
+     },
+     "adverse_wick_5min": {
+      "median": 5.7,
+      "n": 22,
+      "p25": 3.5,
+      "p75": 12.3,
+      "p80": 12.6,
+      "p90": 13.9
+     },
+     "beat_currency_up_5min": {
+      "n": 2,
+      "rate": 1.0
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 19.5,
+        "n": 6,
+        "p25": 15.9,
+        "p75": 26.7
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "n": 6
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 25.6,
+        "n": 3,
+        "p25": 17.5,
+        "p75": 36.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 21.5,
+        "n": 14,
+        "p25": 7.0,
+        "p75": 63.8
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 8,
+        "rate": 0.88
+       },
+       "n": 14
+      }
+     },
+     "continuation_5to30": {
+      "n": 22,
+      "rate": 0.68
+     },
+     "fade_pre_drift": {
+      "n": 19,
+      "rate": 0.37
+     },
+     "favorable_run_30min": {
+      "median": 53.4,
+      "n": 23,
+      "p25": 33.6,
+      "p75": 101.2,
+      "p80": 119.2,
+      "p90": 186.5
+     },
+     "favorable_run_5min": {
+      "median": 34.2,
+      "n": 22,
+      "p25": 20.4,
+      "p75": 48.0,
+      "p80": 53.2,
+      "p90": 116.5
+     },
+     "miss_currency_down_5min": {
+      "n": 13,
+      "rate": 0.69
+     },
+     "n": 23,
+     "range_5min": {
+      "median": 37.6,
+      "n": 23,
+      "p25": 25.3,
+      "p75": 54.2
+     }
     }
    },
    "span": [
@@ -22369,7 +23723,7 @@
   "USD|challenger job cuts y/y": {
    "currency": "USD",
    "event_name": "Challenger Job Cuts y/y",
-   "n_releases": 66,
+   "n_releases": 67,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -22840,17 +24194,111 @@
       "p25": 3.0,
       "p75": 5.8
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 11.9,
+      "n": 40,
+      "p25": 6.1,
+      "p75": 20.8
+     },
+     "abs_move_1min": {
+      "median": 7.2,
+      "n": 40,
+      "p25": 2.8,
+      "p75": 12.0
+     },
+     "abs_move_30min": {
+      "median": 19.2,
+      "n": 39,
+      "p25": 12.4,
+      "p75": 39.6
+     },
+     "abs_move_5min": {
+      "median": 7.8,
+      "n": 40,
+      "p25": 3.5,
+      "p75": 16.9
+     },
+     "adverse_wick_5min": {
+      "median": 3.4,
+      "n": 34,
+      "p25": 0.4,
+      "p75": 7.3,
+      "p80": 9.1,
+      "p90": 19.8
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 21.5,
+        "n": 12,
+        "p25": 9.0,
+        "p75": 39.8
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 3.3,
+        "n": 7,
+        "p25": 2.0,
+        "p75": 7.4
+       },
+       "n": 7
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 7.1,
+        "n": 21,
+        "p25": 5.0,
+        "p75": 12.9
+       },
+       "n": 21
+      }
+     },
+     "continuation_5to30": {
+      "n": 33,
+      "rate": 0.61
+     },
+     "fade_pre_drift": {
+      "n": 31,
+      "rate": 0.48
+     },
+     "favorable_run_30min": {
+      "median": 41.6,
+      "n": 39,
+      "p25": 21.4,
+      "p75": 56.3,
+      "p80": 67.2,
+      "p90": 104.0
+     },
+     "favorable_run_5min": {
+      "median": 20.1,
+      "n": 34,
+      "p25": 9.8,
+      "p75": 35.1,
+      "p80": 40.2,
+      "p90": 46.9
+     },
+     "n": 40,
+     "range_5min": {
+      "median": 22.0,
+      "n": 40,
+      "p25": 11.9,
+      "p75": 37.0
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ]
   },
   "USD|chicago pmi": {
    "currency": "USD",
    "event_name": "Chicago PMI",
-   "n_releases": 65,
+   "n_releases": 66,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -23481,14 +24929,136 @@
       "p25": 5.9,
       "p75": 11.0
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 33.7,
+      "n": 37,
+      "p25": 22.3,
+      "p75": 49.0
+     },
+     "abs_move_1min": {
+      "median": 11.0,
+      "n": 37,
+      "p25": 4.6,
+      "p75": 20.7
+     },
+     "abs_move_30min": {
+      "median": 39.0,
+      "n": 37,
+      "p25": 12.9,
+      "p75": 106.1
+     },
+     "abs_move_5min": {
+      "median": 18.3,
+      "n": 37,
+      "p25": 12.8,
+      "p75": 27.5
+     },
+     "adverse_wick_5min": {
+      "median": 8.8,
+      "n": 36,
+      "p25": 3.4,
+      "p75": 14.0,
+      "p80": 16.5,
+      "p90": 28.4
+     },
+     "beat_currency_up_5min": {
+      "n": 14,
+      "rate": 0.64
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 23.9,
+        "n": 12,
+        "p25": 14.1,
+        "p75": 31.4
+       },
+       "beat_currency_up_5min": {
+        "n": 6,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 6,
+        "rate": 0.5
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 14.2,
+        "n": 5,
+        "p25": 8.5,
+        "p75": 19.7
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "n": 5
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 17.6,
+        "n": 20,
+        "p25": 12.4,
+        "p75": 27.9
+       },
+       "beat_currency_up_5min": {
+        "n": 8,
+        "rate": 0.62
+       },
+       "miss_currency_down_5min": {
+        "n": 12,
+        "rate": 0.67
+       },
+       "n": 20
+      }
+     },
+     "continuation_5to30": {
+      "n": 36,
+      "rate": 0.64
+     },
+     "fade_pre_drift": {
+      "n": 34,
+      "rate": 0.56
+     },
+     "favorable_run_30min": {
+      "median": 94.5,
+      "n": 35,
+      "p25": 38.7,
+      "p75": 155.6,
+      "p80": 165.0,
+      "p90": 214.1
+     },
+     "favorable_run_5min": {
+      "median": 29.2,
+      "n": 36,
+      "p25": 20.1,
+      "p75": 39.6,
+      "p80": 44.1,
+      "p90": 75.4
+     },
+     "miss_currency_down_5min": {
+      "n": 22,
+      "rate": 0.59
+     },
+     "n": 37,
+     "range_5min": {
+      "median": 40.8,
+      "n": 37,
+      "p25": 28.2,
+      "p75": 51.9
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-05"
+    "2026-06"
    ],
-   "surprise_sigma": 5.0086,
-   "surprise_sigma_n": 65
+   "surprise_sigma": 4.9722,
+   "surprise_sigma_n": 66
   },
   "USD|cleveland fed inflation expectations": {
    "bundled_with": [
@@ -23883,6 +25453,91 @@
       "n": 13,
       "p25": 4.0,
       "p75": 5.6
+     }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 27.0,
+      "n": 12,
+      "p25": 20.8,
+      "p75": 48.2
+     },
+     "abs_move_1min": {
+      "median": 4.9,
+      "n": 12,
+      "p25": 2.4,
+      "p75": 15.9
+     },
+     "abs_move_30min": {
+      "median": 48.8,
+      "n": 12,
+      "p25": 13.8,
+      "p75": 84.1
+     },
+     "abs_move_5min": {
+      "median": 18.8,
+      "n": 12,
+      "p25": 11.7,
+      "p75": 38.1
+     },
+     "adverse_wick_5min": {
+      "median": 10.8,
+      "n": 12,
+      "p25": 2.2,
+      "p75": 26.4,
+      "p80": 38.1,
+      "p90": 49.1
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 10.8,
+        "n": 4,
+        "p25": 7.9,
+        "p75": 20.6
+       },
+       "n": 4
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 21.1,
+        "n": 7,
+        "p25": 15.9,
+        "p75": 43.6
+       },
+       "n": 7
+      }
+     },
+     "continuation_5to30": {
+      "n": 12,
+      "rate": 0.42
+     },
+     "fade_pre_drift": {
+      "n": 11,
+      "rate": 0.73
+     },
+     "favorable_run_30min": {
+      "median": 81.2,
+      "n": 12,
+      "p25": 38.1,
+      "p75": 118.9,
+      "p80": 125.4,
+      "p90": 205.6
+     },
+     "favorable_run_5min": {
+      "median": 31.1,
+      "n": 12,
+      "p25": 17.6,
+      "p75": 54.6,
+      "p80": 55.5,
+      "p90": 71.6
+     },
+     "n": 12,
+     "range_5min": {
+      "median": 38.7,
+      "n": 12,
+      "p25": 27.4,
+      "p75": 65.8
      }
     }
    },
@@ -24414,6 +26069,111 @@
       "p25": 6.4,
       "p75": 8.5
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 53.8,
+      "n": 10,
+      "p25": 32.6,
+      "p75": 69.6
+     },
+     "abs_move_1min": {
+      "median": 12.6,
+      "n": 10,
+      "p25": 8.5,
+      "p75": 18.9
+     },
+     "abs_move_30min": {
+      "median": 84.4,
+      "n": 10,
+      "p25": 43.1,
+      "p75": 110.8
+     },
+     "abs_move_5min": {
+      "median": 19.4,
+      "n": 10,
+      "p25": 8.5,
+      "p75": 45.9
+     },
+     "adverse_wick_5min": {
+      "median": 27.8,
+      "n": 9,
+      "p25": 12.3,
+      "p75": 41.8
+     },
+     "beat_currency_up_5min": {
+      "n": 4,
+      "rate": 1.0
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 10.1,
+        "n": 5,
+        "p25": 7.9,
+        "p75": 52.8
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "n": 5
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 24.7,
+        "n": 4,
+        "p25": 19.1,
+        "p75": 39.2
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "n": 4
+      }
+     },
+     "continuation_5to30": {
+      "n": 9,
+      "rate": 0.33
+     },
+     "fade_pre_drift": {
+      "n": 9,
+      "rate": 0.67
+     },
+     "favorable_run_30min": {
+      "median": 142.0,
+      "n": 10,
+      "p25": 115.5,
+      "p75": 163.1,
+      "p80": 201.1,
+      "p90": 353.2
+     },
+     "favorable_run_5min": {
+      "median": 47.2,
+      "n": 9,
+      "p25": 33.1,
+      "p75": 66.2
+     },
+     "miss_currency_down_5min": {
+      "n": 3,
+      "rate": 0.67
+     },
+     "n": 10,
+     "range_5min": {
+      "median": 73.2,
+      "n": 10,
+      "p25": 46.6,
+      "p75": 82.2
+     }
     }
    },
    "span": [
@@ -24427,7 +26187,7 @@
    ],
    "currency": "USD",
    "event_name": "Consumer Credit m/m",
-   "n_releases": 63,
+   "n_releases": 65,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -25054,14 +26814,140 @@
       "p25": 3.1,
       "p75": 5.8
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 16.5,
+      "n": 38,
+      "p25": 9.0,
+      "p75": 37.8
+     },
+     "abs_move_1min": {
+      "median": 3.2,
+      "n": 38,
+      "p25": 1.7,
+      "p75": 8.9
+     },
+     "abs_move_30min": {
+      "median": 20.3,
+      "n": 38,
+      "p25": 8.7,
+      "p75": 41.0
+     },
+     "abs_move_5min": {
+      "median": 10.1,
+      "n": 38,
+      "p25": 3.6,
+      "p75": 22.5
+     },
+     "adverse_wick_5min": {
+      "median": 4.1,
+      "n": 31,
+      "p25": 0.8,
+      "p75": 6.5,
+      "p80": 13.1,
+      "p90": 15.0
+     },
+     "beat_currency_up_5min": {
+      "n": 17,
+      "rate": 0.71
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 14.7,
+        "n": 10,
+        "p25": 9.7,
+        "p75": 29.5
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 6,
+        "rate": 0.83
+       },
+       "n": 10
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 3.4,
+        "n": 7,
+        "p25": 1.4,
+        "p75": 17.9
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.0
+       },
+       "n": 7
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 7.7,
+        "n": 21,
+        "p25": 4.2,
+        "p75": 15.3
+       },
+       "beat_currency_up_5min": {
+        "n": 10,
+        "rate": 0.8
+       },
+       "miss_currency_down_5min": {
+        "n": 9,
+        "rate": 0.56
+       },
+       "n": 21
+      }
+     },
+     "continuation_5to30": {
+      "n": 31,
+      "rate": 0.68
+     },
+     "fade_pre_drift": {
+      "n": 20,
+      "rate": 0.3
+     },
+     "favorable_run_30min": {
+      "median": 31.9,
+      "n": 37,
+      "p25": 15.3,
+      "p75": 72.2,
+      "p80": 92.9,
+      "p90": 137.3
+     },
+     "favorable_run_5min": {
+      "median": 19.0,
+      "n": 31,
+      "p25": 10.8,
+      "p75": 46.9,
+      "p80": 56.1,
+      "p90": 62.4
+     },
+     "miss_currency_down_5min": {
+      "n": 17,
+      "rate": 0.59
+     },
+     "n": 38,
+     "range_5min": {
+      "median": 18.9,
+      "n": 38,
+      "p25": 12.1,
+      "p75": 53.4
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 11388861567.3584,
-   "surprise_sigma_n": 63
+   "surprise_sigma": 11475685022.9327,
+   "surprise_sigma_n": 65
   },
   "USD|core pce price index m/m": {
    "bundled_with": [
@@ -25678,6 +27564,124 @@
       "p25": 7.5,
       "p75": 21.3
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 29.9,
+      "n": 25,
+      "p25": 14.7,
+      "p75": 58.3
+     },
+     "abs_move_1min": {
+      "median": 24.0,
+      "n": 25,
+      "p25": 11.0,
+      "p75": 29.2
+     },
+     "abs_move_30min": {
+      "median": 51.8,
+      "n": 23,
+      "p25": 34.2,
+      "p75": 88.9
+     },
+     "abs_move_5min": {
+      "median": 28.5,
+      "n": 25,
+      "p25": 17.6,
+      "p75": 42.5
+     },
+     "adverse_wick_5min": {
+      "median": 15.0,
+      "n": 25,
+      "p25": 7.6,
+      "p75": 20.7,
+      "p80": 24.3,
+      "p90": 29.7
+     },
+     "beat_currency_up_5min": {
+      "n": 2,
+      "rate": 1.0
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 37.3,
+        "n": 8,
+        "p25": 17.0,
+        "p75": 50.4
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "n": 8
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 16.5,
+        "n": 5,
+        "p25": 15.7,
+        "p75": 31.9
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "n": 5
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 27.0,
+        "n": 12,
+        "p25": 21.2,
+        "p75": 34.4
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "n": 12
+      }
+     },
+     "continuation_5to30": {
+      "n": 23,
+      "rate": 0.57
+     },
+     "fade_pre_drift": {
+      "n": 22,
+      "rate": 0.64
+     },
+     "favorable_run_30min": {
+      "median": 81.0,
+      "n": 23,
+      "p25": 63.2,
+      "p75": 103.0,
+      "p80": 119.2,
+      "p90": 152.0
+     },
+     "favorable_run_5min": {
+      "median": 49.8,
+      "n": 25,
+      "p25": 34.2,
+      "p75": 71.9,
+      "p80": 90.6,
+      "p90": 98.2
+     },
+     "miss_currency_down_5min": {
+      "n": 7,
+      "rate": 0.57
+     },
+     "n": 25,
+     "range_5min": {
+      "median": 64.6,
+      "n": 25,
+      "p25": 53.4,
+      "p75": 98.2
+     }
     }
    },
    "span": [
@@ -25695,7 +27699,7 @@
    ],
    "currency": "USD",
    "event_name": "CPI m/m",
-   "n_releases": 63,
+   "n_releases": 64,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -26326,14 +28330,140 @@
       "p25": 21.9,
       "p75": 48.7
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 96.1,
+      "n": 40,
+      "p25": 49.9,
+      "p75": 151.5
+     },
+     "abs_move_1min": {
+      "median": 80.6,
+      "n": 40,
+      "p25": 36.1,
+      "p75": 111.7
+     },
+     "abs_move_30min": {
+      "median": 78.2,
+      "n": 38,
+      "p25": 46.7,
+      "p75": 115.5
+     },
+     "abs_move_5min": {
+      "median": 78.7,
+      "n": 40,
+      "p25": 42.7,
+      "p75": 142.2
+     },
+     "adverse_wick_5min": {
+      "median": 7.3,
+      "n": 40,
+      "p25": 1.1,
+      "p75": 53.8,
+      "p80": 64.6,
+      "p90": 87.4
+     },
+     "beat_currency_up_5min": {
+      "n": 8,
+      "rate": 0.75
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 71.7,
+        "n": 10,
+        "p25": 48.7,
+        "p75": 124.5
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 1.0
+       },
+       "n": 10
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 53.4,
+        "n": 9,
+        "p25": 34.9,
+        "p75": 88.9
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "n": 9
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 100.4,
+        "n": 21,
+        "p25": 44.0,
+        "p75": 165.0
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.8
+       },
+       "miss_currency_down_5min": {
+        "n": 9,
+        "rate": 0.89
+       },
+       "n": 21
+      }
+     },
+     "continuation_5to30": {
+      "n": 38,
+      "rate": 0.89
+     },
+     "fade_pre_drift": {
+      "n": 32,
+      "rate": 0.5
+     },
+     "favorable_run_30min": {
+      "median": 144.4,
+      "n": 38,
+      "p25": 89.7,
+      "p75": 211.4,
+      "p80": 222.6,
+      "p90": 319.9
+     },
+     "favorable_run_5min": {
+      "median": 118.5,
+      "n": 40,
+      "p25": 67.6,
+      "p75": 176.2,
+      "p80": 183.7,
+      "p90": 236.8
+     },
+     "miss_currency_down_5min": {
+      "n": 14,
+      "rate": 0.93
+     },
+     "n": 40,
+     "range_5min": {
+      "median": 158.1,
+      "n": 40,
+      "p25": 101.9,
+      "p75": 209.9
+     }
     }
    },
    "span": [
     "2021-02",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 0.1461,
-   "surprise_sigma_n": 63
+   "surprise_sigma": 0.1505,
+   "surprise_sigma_n": 64
   },
   "USD|cpi y/y": {
    "bundled_with": [
@@ -26725,7 +28855,7 @@
    ],
    "currency": "USD",
    "event_name": "Crude Oil Inventories",
-   "n_releases": 286,
+   "n_releases": 289,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -27356,14 +29486,140 @@
       "p25": 5.1,
       "p75": 10.2
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 21.1,
+      "n": 173,
+      "p25": 9.9,
+      "p75": 38.1
+     },
+     "abs_move_1min": {
+      "median": 6.7,
+      "n": 173,
+      "p25": 3.2,
+      "p75": 12.5
+     },
+     "abs_move_30min": {
+      "median": 28.9,
+      "n": 164,
+      "p25": 13.1,
+      "p75": 54.3
+     },
+     "abs_move_5min": {
+      "median": 12.2,
+      "n": 173,
+      "p25": 5.7,
+      "p75": 27.3
+     },
+     "adverse_wick_5min": {
+      "median": 6.8,
+      "n": 160,
+      "p25": 3.2,
+      "p75": 13.7,
+      "p80": 15.2,
+      "p90": 22.0
+     },
+     "beat_currency_up_5min": {
+      "n": 81,
+      "rate": 0.47
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 18.9,
+        "n": 51,
+        "p25": 6.8,
+        "p75": 31.0
+       },
+       "beat_currency_up_5min": {
+        "n": 28,
+        "rate": 0.36
+       },
+       "miss_currency_down_5min": {
+        "n": 21,
+        "rate": 0.62
+       },
+       "n": 51
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 7.3,
+        "n": 33,
+        "p25": 4.0,
+        "p75": 13.5
+       },
+       "beat_currency_up_5min": {
+        "n": 14,
+        "rate": 0.79
+       },
+       "miss_currency_down_5min": {
+        "n": 17,
+        "rate": 0.35
+       },
+       "n": 33
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 13.3,
+        "n": 89,
+        "p25": 7.2,
+        "p75": 31.8
+       },
+       "beat_currency_up_5min": {
+        "n": 39,
+        "rate": 0.44
+       },
+       "miss_currency_down_5min": {
+        "n": 45,
+        "rate": 0.64
+       },
+       "n": 89
+      }
+     },
+     "continuation_5to30": {
+      "n": 151,
+      "rate": 0.58
+     },
+     "fade_pre_drift": {
+      "n": 147,
+      "rate": 0.46
+     },
+     "favorable_run_30min": {
+      "median": 48.7,
+      "n": 159,
+      "p25": 30.3,
+      "p75": 86.9,
+      "p80": 99.5,
+      "p90": 181.7
+     },
+     "favorable_run_5min": {
+      "median": 24.9,
+      "n": 160,
+      "p25": 14.1,
+      "p75": 43.9,
+      "p80": 47.2,
+      "p90": 61.7
+     },
+     "miss_currency_down_5min": {
+      "n": 83,
+      "rate": 0.58
+     },
+     "n": 173,
+     "range_5min": {
+      "median": 32.0,
+      "n": 173,
+      "p25": 20.8,
+      "p75": 53.6
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 5166515.3405,
-   "surprise_sigma_n": 285
+   "surprise_sigma": 5147016.7986,
+   "surprise_sigma_n": 288
   },
   "USD|current account": {
    "bundled_with": [
@@ -27782,6 +30038,92 @@
       "n": 4,
       "p25": 3.9,
       "p75": 5.1
+     }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 32.8,
+      "n": 5,
+      "p25": 20.4,
+      "p75": 34.2
+     },
+     "abs_move_1min": {
+      "median": 10.9,
+      "n": 5,
+      "p25": 3.4,
+      "p75": 30.8
+     },
+     "abs_move_30min": {
+      "median": 39.1,
+      "n": 5,
+      "p25": 32.7,
+      "p75": 243.6
+     },
+     "abs_move_5min": {
+      "median": 20.0,
+      "n": 5,
+      "p25": 5.8,
+      "p75": 37.5
+     },
+     "adverse_wick_5min": {
+      "median": 16.8,
+      "n": 5,
+      "p25": 0.0,
+      "p75": 64.4
+     },
+     "beat_currency_up_5min": {
+      "n": 2,
+      "rate": 0.5
+     },
+     "by_regime": {
+      "hold": {
+       "abs_move_5min": {
+        "median": 21.6,
+        "n": 4,
+        "p25": 5.8,
+        "p75": 42.5
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "n": 4
+      }
+     },
+     "continuation_5to30": {
+      "n": 5,
+      "rate": 0.6
+     },
+     "fade_pre_drift": {
+      "n": 5,
+      "rate": 0.8
+     },
+     "favorable_run_30min": {
+      "median": 43.1,
+      "n": 5,
+      "p25": 41.7,
+      "p75": 280.5
+     },
+     "favorable_run_5min": {
+      "median": 52.3,
+      "n": 5,
+      "p25": 25.3,
+      "p75": 67.9
+     },
+     "miss_currency_down_5min": {
+      "n": 3,
+      "rate": 0.67
+     },
+     "n": 5,
+     "range_5min": {
+      "median": 67.9,
+      "n": 5,
+      "p25": 42.1,
+      "p75": 116.7
      }
     }
    },
@@ -28429,6 +30771,115 @@
       "p25": 5.6,
       "p75": 9.5
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 11.2,
+      "n": 17,
+      "p25": 5.4,
+      "p75": 27.6
+     },
+     "abs_move_1min": {
+      "median": 5.6,
+      "n": 17,
+      "p25": 3.3,
+      "p75": 10.9
+     },
+     "abs_move_30min": {
+      "median": 23.0,
+      "n": 16,
+      "p25": 9.9,
+      "p75": 57.1
+     },
+     "abs_move_5min": {
+      "median": 13.7,
+      "n": 17,
+      "p25": 7.8,
+      "p75": 17.8
+     },
+     "adverse_wick_5min": {
+      "median": 10.3,
+      "n": 16,
+      "p25": 5.4,
+      "p75": 14.3,
+      "p80": 14.8,
+      "p90": 18.9
+     },
+     "beat_currency_up_5min": {
+      "n": 12,
+      "rate": 0.58
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 17.8,
+        "n": 5,
+        "p25": 17.4,
+        "p75": 28.2
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "n": 5
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 11.3,
+        "n": 10,
+        "p25": 7.3,
+        "p75": 16.9
+       },
+       "beat_currency_up_5min": {
+        "n": 7,
+        "rate": 0.71
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "n": 10
+      }
+     },
+     "continuation_5to30": {
+      "n": 15,
+      "rate": 0.73
+     },
+     "fade_pre_drift": {
+      "n": 14,
+      "rate": 0.36
+     },
+     "favorable_run_30min": {
+      "median": 52.3,
+      "n": 16,
+      "p25": 30.4,
+      "p75": 81.5,
+      "p80": 89.6,
+      "p90": 137.1
+     },
+     "favorable_run_5min": {
+      "median": 17.4,
+      "n": 16,
+      "p25": 14.4,
+      "p75": 29.1,
+      "p80": 34.3,
+      "p90": 46.5
+     },
+     "miss_currency_down_5min": {
+      "n": 4,
+      "rate": 0.75
+     },
+     "n": 17,
+     "range_5min": {
+      "median": 28.3,
+      "n": 17,
+      "p25": 23.8,
+      "p75": 36.7
+     }
     }
    },
    "span": [
@@ -29060,6 +31511,132 @@
       "p25": 4.9,
       "p75": 7.5
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 20.2,
+      "n": 24,
+      "p25": 11.1,
+      "p75": 73.5
+     },
+     "abs_move_1min": {
+      "median": 11.7,
+      "n": 24,
+      "p25": 6.0,
+      "p75": 17.4
+     },
+     "abs_move_30min": {
+      "median": 37.9,
+      "n": 23,
+      "p25": 13.8,
+      "p75": 94.2
+     },
+     "abs_move_5min": {
+      "median": 12.5,
+      "n": 24,
+      "p25": 6.2,
+      "p75": 50.4
+     },
+     "adverse_wick_5min": {
+      "median": 6.8,
+      "n": 23,
+      "p25": 1.4,
+      "p75": 22.9,
+      "p80": 24.0,
+      "p90": 31.1
+     },
+     "beat_currency_up_5min": {
+      "n": 12,
+      "rate": 0.75
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 10.1,
+        "n": 8,
+        "p25": 4.6,
+        "p75": 56.9
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.75
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "n": 8
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 18.4,
+        "n": 4,
+        "p25": 5.8,
+        "p75": 35.4
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "n": 4
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 12.6,
+        "n": 12,
+        "p25": 7.9,
+        "p75": 49.4
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "miss_currency_down_5min": {
+        "n": 7,
+        "rate": 0.43
+       },
+       "n": 12
+      }
+     },
+     "continuation_5to30": {
+      "n": 22,
+      "rate": 0.68
+     },
+     "fade_pre_drift": {
+      "n": 19,
+      "rate": 0.53
+     },
+     "favorable_run_30min": {
+      "median": 56.0,
+      "n": 23,
+      "p25": 28.7,
+      "p75": 124.0,
+      "p80": 129.8,
+      "p90": 138.1
+     },
+     "favorable_run_5min": {
+      "median": 32.3,
+      "n": 23,
+      "p25": 17.6,
+      "p75": 57.2,
+      "p80": 59.6,
+      "p90": 78.9
+     },
+     "miss_currency_down_5min": {
+      "n": 12,
+      "rate": 0.5
+     },
+     "n": 24,
+     "range_5min": {
+      "median": 40.5,
+      "n": 24,
+      "p25": 25.1,
+      "p75": 73.8
+     }
     }
    },
    "span": [
@@ -29558,6 +32135,122 @@
       "p25": 5.7,
       "p75": 13.2
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 18.8,
+      "n": 10,
+      "p25": 13.6,
+      "p75": 33.2
+     },
+     "abs_move_1min": {
+      "median": 10.2,
+      "n": 10,
+      "p25": 6.6,
+      "p75": 19.1
+     },
+     "abs_move_30min": {
+      "median": 38.3,
+      "n": 9,
+      "p25": 26.4,
+      "p75": 62.9
+     },
+     "abs_move_5min": {
+      "median": 20.6,
+      "n": 10,
+      "p25": 12.4,
+      "p75": 21.9
+     },
+     "adverse_wick_5min": {
+      "median": 8.6,
+      "n": 9,
+      "p25": 2.8,
+      "p75": 12.9
+     },
+     "beat_currency_up_5min": {
+      "n": 4,
+      "rate": 0.25
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 20.4,
+        "n": 3,
+        "p25": 12.5,
+        "p75": 20.9
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "n": 3
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 13.1,
+        "n": 3,
+        "p25": 7.0,
+        "p75": 17.6
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 0.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 22.9,
+        "n": 4,
+        "p25": 18.7,
+        "p75": 25.1
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "n": 4
+      }
+     },
+     "continuation_5to30": {
+      "n": 8,
+      "rate": 1.0
+     },
+     "fade_pre_drift": {
+      "n": 8,
+      "rate": 0.62
+     },
+     "favorable_run_30min": {
+      "median": 63.0,
+      "n": 8,
+      "p25": 50.6,
+      "p75": 79.8
+     },
+     "favorable_run_5min": {
+      "median": 30.4,
+      "n": 9,
+      "p25": 25.3,
+      "p75": 49.8
+     },
+     "miss_currency_down_5min": {
+      "n": 5,
+      "rate": 0.8
+     },
+     "n": 10,
+     "range_5min": {
+      "median": 38.6,
+      "n": 10,
+      "p25": 30.5,
+      "p75": 52.6
+     }
     }
    },
    "span": [
@@ -29575,7 +32268,7 @@
    ],
    "currency": "USD",
    "event_name": "Existing Home Sales",
-   "n_releases": 56,
+   "n_releases": 57,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -30206,14 +32899,140 @@
       "p25": 5.5,
       "p75": 9.8
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 38.8,
+      "n": 36,
+      "p25": 10.5,
+      "p75": 54.5
+     },
+     "abs_move_1min": {
+      "median": 13.8,
+      "n": 36,
+      "p25": 8.0,
+      "p75": 19.4
+     },
+     "abs_move_30min": {
+      "median": 45.9,
+      "n": 36,
+      "p25": 21.7,
+      "p75": 91.2
+     },
+     "abs_move_5min": {
+      "median": 21.8,
+      "n": 36,
+      "p25": 7.2,
+      "p75": 46.3
+     },
+     "adverse_wick_5min": {
+      "median": 11.9,
+      "n": 34,
+      "p25": 2.2,
+      "p75": 22.1,
+      "p80": 25.9,
+      "p90": 35.1
+     },
+     "beat_currency_up_5min": {
+      "n": 16,
+      "rate": 0.62
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 20.4,
+        "n": 12,
+        "p25": 5.9,
+        "p75": 62.8
+       },
+       "beat_currency_up_5min": {
+        "n": 6,
+        "rate": 0.33
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.75
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 11.2,
+        "n": 6,
+        "p25": 8.1,
+        "p75": 14.9
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "n": 6
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 31.4,
+        "n": 18,
+        "p25": 12.1,
+        "p75": 49.3
+       },
+       "beat_currency_up_5min": {
+        "n": 8,
+        "rate": 0.75
+       },
+       "miss_currency_down_5min": {
+        "n": 9,
+        "rate": 0.33
+       },
+       "n": 18
+      }
+     },
+     "continuation_5to30": {
+      "n": 34,
+      "rate": 0.74
+     },
+     "fade_pre_drift": {
+      "n": 29,
+      "rate": 0.45
+     },
+     "favorable_run_30min": {
+      "median": 72.2,
+      "n": 34,
+      "p25": 47.4,
+      "p75": 140.5,
+      "p80": 153.7,
+      "p90": 216.7
+     },
+     "favorable_run_5min": {
+      "median": 39.5,
+      "n": 34,
+      "p25": 26.7,
+      "p75": 71.8,
+      "p80": 73.7,
+      "p90": 89.5
+     },
+     "miss_currency_down_5min": {
+      "n": 17,
+      "rate": 0.47
+     },
+     "n": 36,
+     "range_5min": {
+      "median": 49.5,
+      "n": 36,
+      "p25": 31.4,
+      "p75": 83.6
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 141397.4533,
-   "surprise_sigma_n": 56
+   "surprise_sigma": 140787.2602,
+   "surprise_sigma_n": 57
   },
   "USD|factory orders m/m": {
    "bundled_with": [
@@ -30222,7 +33041,7 @@
    ],
    "currency": "USD",
    "event_name": "Factory Orders m/m",
-   "n_releases": 32,
+   "n_releases": 33,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -30853,14 +33672,123 @@
       "p25": 7.2,
       "p75": 11.5
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 20.8,
+      "n": 18,
+      "p25": 13.6,
+      "p75": 55.5
+     },
+     "abs_move_1min": {
+      "median": 7.3,
+      "n": 18,
+      "p25": 4.3,
+      "p75": 13.8
+     },
+     "abs_move_30min": {
+      "median": 47.6,
+      "n": 18,
+      "p25": 30.8,
+      "p75": 68.9
+     },
+     "abs_move_5min": {
+      "median": 19.6,
+      "n": 18,
+      "p25": 10.8,
+      "p75": 49.0
+     },
+     "adverse_wick_5min": {
+      "median": 13.7,
+      "n": 18,
+      "p25": 12.0,
+      "p75": 18.4,
+      "p80": 18.6,
+      "p90": 21.4
+     },
+     "beat_currency_up_5min": {
+      "n": 7,
+      "rate": 0.86
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 35.0,
+        "n": 7,
+        "p25": 12.9,
+        "p75": 62.6
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "n": 7
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 23.4,
+        "n": 9,
+        "p25": 13.0,
+        "p75": 37.7
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.8
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "n": 9
+      }
+     },
+     "continuation_5to30": {
+      "n": 18,
+      "rate": 0.5
+     },
+     "fade_pre_drift": {
+      "n": 16,
+      "rate": 0.56
+     },
+     "favorable_run_30min": {
+      "median": 80.6,
+      "n": 18,
+      "p25": 58.6,
+      "p75": 116.1,
+      "p80": 155.9,
+      "p90": 232.0
+     },
+     "favorable_run_5min": {
+      "median": 33.9,
+      "n": 18,
+      "p25": 22.3,
+      "p75": 86.2,
+      "p80": 90.7,
+      "p90": 113.4
+     },
+     "miss_currency_down_5min": {
+      "n": 7,
+      "rate": 0.57
+     },
+     "n": 18,
+     "range_5min": {
+      "median": 51.0,
+      "n": 18,
+      "p25": 34.9,
+      "p75": 102.2
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-05"
+    "2026-07"
    ],
-   "surprise_sigma": 0.5063,
-   "surprise_sigma_n": 31
+   "surprise_sigma": 0.5025,
+   "surprise_sigma_n": 32
   },
   "USD|fed announcement": {
    "bundled_with": [
@@ -30994,7 +33922,7 @@
    ],
    "currency": "USD",
    "event_name": "Fed Monetary Policy Report",
-   "n_releases": 10,
+   "n_releases": 11,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -31374,11 +34302,81 @@
       "p25": 6.9,
       "p75": 10.0
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 41.8,
+      "n": 5,
+      "p25": 23.9,
+      "p75": 44.6
+     },
+     "abs_move_1min": {
+      "median": 14.5,
+      "n": 5,
+      "p25": 13.2,
+      "p75": 14.8
+     },
+     "abs_move_30min": {
+      "median": 50.2,
+      "n": 5,
+      "p25": 39.8,
+      "p75": 87.5
+     },
+     "abs_move_5min": {
+      "median": 20.0,
+      "n": 5,
+      "p25": 18.9,
+      "p75": 41.1
+     },
+     "adverse_wick_5min": {
+      "median": 0.6,
+      "n": 5,
+      "p25": 0.0,
+      "p75": 11.0
+     },
+     "by_regime": {
+      "hold": {
+       "abs_move_5min": {
+        "median": 19.4,
+        "n": 4,
+        "p25": 17.6,
+        "p75": 25.3
+       },
+       "n": 4
+      }
+     },
+     "continuation_5to30": {
+      "n": 5,
+      "rate": 0.6
+     },
+     "fade_pre_drift": {
+      "n": 5,
+      "rate": 0.6
+     },
+     "favorable_run_30min": {
+      "median": 73.8,
+      "n": 5,
+      "p25": 56.3,
+      "p75": 142.6
+     },
+     "favorable_run_5min": {
+      "median": 24.9,
+      "n": 5,
+      "p25": 21.3,
+      "p75": 58.4
+     },
+     "n": 5,
+     "range_5min": {
+      "median": 24.9,
+      "n": 5,
+      "p25": 21.9,
+      "p75": 77.6
+     }
     }
    },
    "span": [
     "2021-02",
-    "2025-06"
+    "2026-07"
    ]
   },
   "USD|federal budget balance": {
@@ -31388,7 +34386,7 @@
    ],
    "currency": "USD",
    "event_name": "Federal Budget Balance",
-   "n_releases": 58,
+   "n_releases": 59,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -32019,14 +35017,140 @@
       "p25": 2.9,
       "p75": 5.3
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 9.2,
+      "n": 37,
+      "p25": 2.4,
+      "p75": 26.4
+     },
+     "abs_move_1min": {
+      "median": 3.5,
+      "n": 38,
+      "p25": 1.5,
+      "p75": 6.7
+     },
+     "abs_move_30min": {
+      "median": 18.1,
+      "n": 37,
+      "p25": 7.2,
+      "p75": 33.7
+     },
+     "abs_move_5min": {
+      "median": 6.9,
+      "n": 38,
+      "p25": 3.1,
+      "p75": 13.3
+     },
+     "adverse_wick_5min": {
+      "median": 4.0,
+      "n": 32,
+      "p25": 1.1,
+      "p75": 7.5,
+      "p80": 8.0,
+      "p90": 12.0
+     },
+     "beat_currency_up_5min": {
+      "n": 10,
+      "rate": 0.7
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 8.7,
+        "n": 11,
+        "p25": 5.1,
+        "p75": 13.2
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 7,
+        "rate": 0.29
+       },
+       "n": 11
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 3.1,
+        "n": 8,
+        "p25": 2.2,
+        "p75": 4.1
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 6,
+        "rate": 0.83
+       },
+       "n": 8
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 7.7,
+        "n": 19,
+        "p25": 2.5,
+        "p75": 17.8
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "miss_currency_down_5min": {
+        "n": 10,
+        "rate": 0.8
+       },
+       "n": 19
+      }
+     },
+     "continuation_5to30": {
+      "n": 31,
+      "rate": 0.65
+     },
+     "fade_pre_drift": {
+      "n": 22,
+      "rate": 0.41
+     },
+     "favorable_run_30min": {
+      "median": 27.7,
+      "n": 36,
+      "p25": 19.2,
+      "p75": 60.9,
+      "p80": 80.5,
+      "p90": 103.5
+     },
+     "favorable_run_5min": {
+      "median": 11.3,
+      "n": 32,
+      "p25": 7.2,
+      "p75": 27.9,
+      "p80": 32.1,
+      "p90": 51.6
+     },
+     "miss_currency_down_5min": {
+      "n": 23,
+      "rate": 0.65
+     },
+     "n": 38,
+     "range_5min": {
+      "median": 17.0,
+      "n": 38,
+      "p25": 9.1,
+      "p75": 30.3
+     }
     }
    },
    "span": [
     "2021-03",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 73594254500.481,
-   "surprise_sigma_n": 58
+   "surprise_sigma": 72991190592.0883,
+   "surprise_sigma_n": 59
   },
   "USD|federal funds rate": {
    "bundled_with": [
@@ -32586,6 +35710,108 @@
       "n": 37,
       "p25": 13.9,
       "p75": 33.0
+     }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 40.4,
+      "n": 27,
+      "p25": 16.0,
+      "p75": 146.9
+     },
+     "abs_move_1min": {
+      "median": 34.5,
+      "n": 27,
+      "p25": 26.9,
+      "p75": 64.2
+     },
+     "abs_move_30min": {
+      "median": 45.6,
+      "n": 27,
+      "p25": 37.5,
+      "p75": 111.9
+     },
+     "abs_move_5min": {
+      "median": 49.5,
+      "n": 27,
+      "p25": 23.4,
+      "p75": 71.9
+     },
+     "adverse_wick_5min": {
+      "median": 8.2,
+      "n": 26,
+      "p25": 0.9,
+      "p75": 39.0,
+      "p80": 39.3,
+      "p90": 101.5
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 49.9,
+        "n": 8,
+        "p25": 39.3,
+        "p75": 107.8
+       },
+       "n": 8
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 41.2,
+        "n": 6,
+        "p25": 22.2,
+        "p75": 58.4
+       },
+       "n": 6
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 50.6,
+        "n": 13,
+        "p25": 21.0,
+        "p75": 66.1
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "n": 13
+      }
+     },
+     "continuation_5to30": {
+      "n": 26,
+      "rate": 0.73
+     },
+     "fade_pre_drift": {
+      "n": 19,
+      "rate": 0.68
+     },
+     "favorable_run_30min": {
+      "median": 108.3,
+      "n": 27,
+      "p25": 62.2,
+      "p75": 210.6,
+      "p80": 221.4,
+      "p90": 279.2
+     },
+     "favorable_run_5min": {
+      "median": 84.0,
+      "n": 26,
+      "p25": 51.0,
+      "p75": 115.2,
+      "p80": 127.3,
+      "p90": 169.9
+     },
+     "miss_currency_down_5min": {
+      "n": 1,
+      "rate": 1.0
+     },
+     "n": 27,
+     "range_5min": {
+      "median": 104.4,
+      "n": 27,
+      "p25": 71.7,
+      "p75": 151.7
      }
     }
    },
@@ -33215,6 +36441,128 @@
       "p25": 8.2,
       "p75": 12.8
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 60.8,
+      "n": 14,
+      "p25": 50.3,
+      "p75": 101.8
+     },
+     "abs_move_1min": {
+      "median": 27.2,
+      "n": 14,
+      "p25": 16.1,
+      "p75": 46.4
+     },
+     "abs_move_30min": {
+      "median": 56.2,
+      "n": 12,
+      "p25": 34.5,
+      "p75": 99.9
+     },
+     "abs_move_5min": {
+      "median": 41.2,
+      "n": 14,
+      "p25": 30.8,
+      "p75": 80.6
+     },
+     "adverse_wick_5min": {
+      "median": 7.4,
+      "n": 14,
+      "p25": 1.5,
+      "p75": 15.4,
+      "p80": 17.5,
+      "p90": 23.0
+     },
+     "beat_currency_up_5min": {
+      "n": 7,
+      "rate": 0.86
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 56.8,
+        "n": 4,
+        "p25": 43.0,
+        "p75": 73.6
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 1.0
+       },
+       "n": 4
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 30.2,
+        "n": 3,
+        "p25": 24.9,
+        "p75": 64.4
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 41.0,
+        "n": 7,
+        "p25": 27.5,
+        "p75": 63.3
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "n": 7
+      }
+     },
+     "continuation_5to30": {
+      "n": 12,
+      "rate": 0.92
+     },
+     "fade_pre_drift": {
+      "n": 12,
+      "rate": 0.42
+     },
+     "favorable_run_30min": {
+      "median": 98.4,
+      "n": 12,
+      "p25": 85.1,
+      "p75": 175.2,
+      "p80": 198.8,
+      "p90": 229.0
+     },
+     "favorable_run_5min": {
+      "median": 53.0,
+      "n": 14,
+      "p25": 40.9,
+      "p75": 94.4,
+      "p80": 99.8,
+      "p90": 105.4
+     },
+     "miss_currency_down_5min": {
+      "n": 5,
+      "rate": 0.6
+     },
+     "n": 14,
+     "range_5min": {
+      "median": 84.0,
+      "n": 14,
+      "p25": 49.6,
+      "p75": 96.6
+     }
     }
    },
    "span": [
@@ -33227,7 +36575,7 @@
   "USD|final manufacturing pmi": {
    "currency": "USD",
    "event_name": "Final Manufacturing PMI",
-   "n_releases": 66,
+   "n_releases": 67,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -33838,14 +37186,136 @@
       "p25": 5.9,
       "p75": 11.0
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 38.8,
+      "n": 38,
+      "p25": 17.1,
+      "p75": 60.6
+     },
+     "abs_move_1min": {
+      "median": 12.9,
+      "n": 39,
+      "p25": 5.3,
+      "p75": 27.1
+     },
+     "abs_move_30min": {
+      "median": 50.9,
+      "n": 38,
+      "p25": 22.3,
+      "p75": 84.3
+     },
+     "abs_move_5min": {
+      "median": 22.7,
+      "n": 39,
+      "p25": 11.5,
+      "p75": 49.4
+     },
+     "adverse_wick_5min": {
+      "median": 8.6,
+      "n": 38,
+      "p25": 2.9,
+      "p75": 24.3,
+      "p80": 25.8,
+      "p90": 43.2
+     },
+     "beat_currency_up_5min": {
+      "n": 22,
+      "rate": 0.64
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 50.2,
+        "n": 12,
+        "p25": 22.6,
+        "p75": 77.7
+       },
+       "beat_currency_up_5min": {
+        "n": 10,
+        "rate": 0.4
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 20.6,
+        "n": 7,
+        "p25": 13.9,
+        "p75": 23.3
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "n": 7
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 18.6,
+        "n": 20,
+        "p25": 9.9,
+        "p75": 40.2
+       },
+       "beat_currency_up_5min": {
+        "n": 9,
+        "rate": 0.78
+       },
+       "miss_currency_down_5min": {
+        "n": 9,
+        "rate": 0.22
+       },
+       "n": 20
+      }
+     },
+     "continuation_5to30": {
+      "n": 37,
+      "rate": 0.73
+     },
+     "fade_pre_drift": {
+      "n": 33,
+      "rate": 0.45
+     },
+     "favorable_run_30min": {
+      "median": 86.3,
+      "n": 38,
+      "p25": 60.8,
+      "p75": 126.8,
+      "p80": 147.7,
+      "p90": 205.2
+     },
+     "favorable_run_5min": {
+      "median": 36.0,
+      "n": 38,
+      "p25": 23.0,
+      "p75": 65.5,
+      "p80": 73.9,
+      "p90": 113.5
+     },
+     "miss_currency_down_5min": {
+      "n": 10,
+      "rate": 0.3
+     },
+     "n": 39,
+     "range_5min": {
+      "median": 52.1,
+      "n": 39,
+      "p25": 32.0,
+      "p75": 83.0
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 0.4499,
-   "surprise_sigma_n": 66
+   "surprise_sigma": 0.5046,
+   "surprise_sigma_n": 67
   },
   "USD|final services pmi": {
    "bundled_with": [
@@ -33853,7 +37323,7 @@
    ],
    "currency": "USD",
    "event_name": "Final Services PMI",
-   "n_releases": 66,
+   "n_releases": 67,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -34484,19 +37954,145 @@
       "p25": 5.3,
       "p75": 11.4
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 29.9,
+      "n": 38,
+      "p25": 14.3,
+      "p75": 52.0
+     },
+     "abs_move_1min": {
+      "median": 14.5,
+      "n": 39,
+      "p25": 7.2,
+      "p75": 29.4
+     },
+     "abs_move_30min": {
+      "median": 52.9,
+      "n": 38,
+      "p25": 23.9,
+      "p75": 75.6
+     },
+     "abs_move_5min": {
+      "median": 22.9,
+      "n": 39,
+      "p25": 10.5,
+      "p75": 38.0
+     },
+     "adverse_wick_5min": {
+      "median": 5.5,
+      "n": 37,
+      "p25": 2.3,
+      "p75": 17.9,
+      "p80": 23.1,
+      "p90": 36.1
+     },
+     "beat_currency_up_5min": {
+      "n": 13,
+      "rate": 0.38
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 32.0,
+        "n": 12,
+        "p25": 19.2,
+        "p75": 46.0
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "miss_currency_down_5min": {
+        "n": 8,
+        "rate": 0.25
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 20.9,
+        "n": 7,
+        "p25": 9.3,
+        "p75": 27.6
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "n": 7
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 21.7,
+        "n": 20,
+        "p25": 10.8,
+        "p75": 34.8
+       },
+       "beat_currency_up_5min": {
+        "n": 7,
+        "rate": 0.43
+       },
+       "miss_currency_down_5min": {
+        "n": 9,
+        "rate": 0.67
+       },
+       "n": 20
+      }
+     },
+     "continuation_5to30": {
+      "n": 36,
+      "rate": 0.78
+     },
+     "fade_pre_drift": {
+      "n": 32,
+      "rate": 0.44
+     },
+     "favorable_run_30min": {
+      "median": 101.6,
+      "n": 38,
+      "p25": 58.0,
+      "p75": 152.2,
+      "p80": 158.3,
+      "p90": 226.2
+     },
+     "favorable_run_5min": {
+      "median": 34.9,
+      "n": 37,
+      "p25": 22.1,
+      "p75": 65.0,
+      "p80": 66.5,
+      "p90": 71.4
+     },
+     "miss_currency_down_5min": {
+      "n": 21,
+      "rate": 0.48
+     },
+     "n": 39,
+     "range_5min": {
+      "median": 45.1,
+      "n": 39,
+      "p25": 32.5,
+      "p75": 72.2
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 0.6527,
-   "surprise_sigma_n": 66
+   "surprise_sigma": 0.6484,
+   "surprise_sigma_n": 67
   },
   "USD|final wholesale inventories m/m": {
    "currency": "USD",
    "event_name": "Final Wholesale Inventories m/m",
-   "n_releases": 44,
+   "n_releases": 45,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -35115,14 +38711,140 @@
       "p25": 5.7,
       "p75": 11.3
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 26.2,
+      "n": 23,
+      "p25": 13.1,
+      "p75": 60.6
+     },
+     "abs_move_1min": {
+      "median": 5.5,
+      "n": 23,
+      "p25": 3.1,
+      "p75": 10.6
+     },
+     "abs_move_30min": {
+      "median": 29.8,
+      "n": 23,
+      "p25": 15.2,
+      "p75": 84.2
+     },
+     "abs_move_5min": {
+      "median": 17.3,
+      "n": 23,
+      "p25": 5.4,
+      "p75": 22.5
+     },
+     "adverse_wick_5min": {
+      "median": 11.7,
+      "n": 22,
+      "p25": 5.0,
+      "p75": 19.7,
+      "p80": 21.1,
+      "p90": 25.9
+     },
+     "beat_currency_up_5min": {
+      "n": 6,
+      "rate": 0.33
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 23.6,
+        "n": 6,
+        "p25": 7.4,
+        "p75": 36.6
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 0.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "n": 6
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 5.3,
+        "n": 3,
+        "p25": 4.5,
+        "p75": 5.3
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 17.4,
+        "n": 14,
+        "p25": 15.8,
+        "p75": 20.8
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "miss_currency_down_5min": {
+        "n": 7,
+        "rate": 0.57
+       },
+       "n": 14
+      }
+     },
+     "continuation_5to30": {
+      "n": 22,
+      "rate": 0.64
+     },
+     "fade_pre_drift": {
+      "n": 19,
+      "rate": 0.47
+     },
+     "favorable_run_30min": {
+      "median": 73.1,
+      "n": 21,
+      "p25": 39.7,
+      "p75": 111.0,
+      "p80": 118.9,
+      "p90": 184.2
+     },
+     "favorable_run_5min": {
+      "median": 22.3,
+      "n": 22,
+      "p25": 15.4,
+      "p75": 39.2,
+      "p80": 42.0,
+      "p90": 66.1
+     },
+     "miss_currency_down_5min": {
+      "n": 9,
+      "rate": 0.56
+     },
+     "n": 23,
+     "range_5min": {
+      "median": 33.5,
+      "n": 23,
+      "p25": 25.0,
+      "p75": 54.5
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-04"
+    "2026-07"
    ],
-   "surprise_sigma": 0.1947,
-   "surprise_sigma_n": 44
+   "surprise_sigma": 0.1958,
+   "surprise_sigma_n": 45
   },
   "USD|flash manufacturing pmi": {
    "bundled_with": [
@@ -35761,6 +39483,132 @@
       "n": 52,
       "p25": 6.4,
       "p75": 11.7
+     }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 18.7,
+      "n": 35,
+      "p25": 8.8,
+      "p75": 78.2
+     },
+     "abs_move_1min": {
+      "median": 22.0,
+      "n": 35,
+      "p25": 12.8,
+      "p75": 35.2
+     },
+     "abs_move_30min": {
+      "median": 57.8,
+      "n": 35,
+      "p25": 23.2,
+      "p75": 102.3
+     },
+     "abs_move_5min": {
+      "median": 26.4,
+      "n": 35,
+      "p25": 10.0,
+      "p75": 54.2
+     },
+     "adverse_wick_5min": {
+      "median": 8.8,
+      "n": 34,
+      "p25": 0.6,
+      "p75": 25.2,
+      "p80": 27.1,
+      "p90": 40.4
+     },
+     "beat_currency_up_5min": {
+      "n": 18,
+      "rate": 0.61
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 29.4,
+        "n": 12,
+        "p25": 10.0,
+        "p75": 49.9
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 6,
+        "rate": 0.83
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 7.7,
+        "n": 3,
+        "p25": 4.1,
+        "p75": 37.1
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 30.1,
+        "n": 20,
+        "p25": 20.7,
+        "p75": 57.4
+       },
+       "beat_currency_up_5min": {
+        "n": 13,
+        "rate": 0.62
+       },
+       "miss_currency_down_5min": {
+        "n": 7,
+        "rate": 0.57
+       },
+       "n": 20
+      }
+     },
+     "continuation_5to30": {
+      "n": 34,
+      "rate": 0.65
+     },
+     "fade_pre_drift": {
+      "n": 29,
+      "rate": 0.55
+     },
+     "favorable_run_30min": {
+      "median": 100.9,
+      "n": 32,
+      "p25": 47.3,
+      "p75": 163.7,
+      "p80": 184.0,
+      "p90": 294.2
+     },
+     "favorable_run_5min": {
+      "median": 51.2,
+      "n": 34,
+      "p25": 34.0,
+      "p75": 77.6,
+      "p80": 84.5,
+      "p90": 90.5
+     },
+     "miss_currency_down_5min": {
+      "n": 14,
+      "rate": 0.71
+     },
+     "n": 35,
+     "range_5min": {
+      "median": 69.5,
+      "n": 35,
+      "p25": 49.5,
+      "p75": 87.1
      }
     }
    },
@@ -36570,6 +40418,76 @@
       "p25": 1.9,
       "p75": 5.8
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 30.1,
+      "n": 5,
+      "p25": 21.8,
+      "p75": 49.6
+     },
+     "abs_move_1min": {
+      "median": 7.9,
+      "n": 5,
+      "p25": 6.2,
+      "p75": 11.3
+     },
+     "abs_move_30min": {
+      "median": 33.8,
+      "n": 5,
+      "p25": 28.1,
+      "p75": 36.2
+     },
+     "abs_move_5min": {
+      "median": 8.4,
+      "n": 5,
+      "p25": 7.3,
+      "p75": 10.5
+     },
+     "adverse_wick_5min": {
+      "median": 3.5,
+      "n": 5,
+      "p25": 2.8,
+      "p75": 4.3
+     },
+     "by_regime": {
+      "hold": {
+       "abs_move_5min": {
+        "median": 8.4,
+        "n": 3,
+        "p25": 6.6,
+        "p75": 11.1
+       },
+       "n": 3
+      }
+     },
+     "continuation_5to30": {
+      "n": 5,
+      "rate": 0.8
+     },
+     "fade_pre_drift": {
+      "n": 4,
+      "rate": 0.75
+     },
+     "favorable_run_30min": {
+      "median": 39.5,
+      "n": 5,
+      "p25": 36.1,
+      "p75": 58.2
+     },
+     "favorable_run_5min": {
+      "median": 12.4,
+      "n": 5,
+      "p25": 12.2,
+      "p75": 17.9
+     },
+     "n": 5,
+     "range_5min": {
+      "median": 18.4,
+      "n": 5,
+      "p25": 16.7,
+      "p75": 21.4
+     }
     }
    },
    "span": [
@@ -36584,7 +40502,7 @@
    ],
    "currency": "USD",
    "event_name": "FOMC Meeting Minutes",
-   "n_releases": 44,
+   "n_releases": 45,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -37055,11 +40973,105 @@
       "p25": 4.6,
       "p75": 20.1
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 28.6,
+      "n": 26,
+      "p25": 16.0,
+      "p75": 51.5
+     },
+     "abs_move_1min": {
+      "median": 7.8,
+      "n": 26,
+      "p25": 3.3,
+      "p75": 14.5
+     },
+     "abs_move_30min": {
+      "median": 28.6,
+      "n": 26,
+      "p25": 18.8,
+      "p75": 57.2
+     },
+     "abs_move_5min": {
+      "median": 18.1,
+      "n": 26,
+      "p25": 8.8,
+      "p75": 33.9
+     },
+     "adverse_wick_5min": {
+      "median": 9.7,
+      "n": 26,
+      "p25": 2.9,
+      "p75": 18.9,
+      "p80": 19.7,
+      "p90": 27.6
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 30.6,
+        "n": 8,
+        "p25": 10.1,
+        "p75": 35.6
+       },
+       "n": 8
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 17.7,
+        "n": 4,
+        "p25": 13.6,
+        "p75": 18.5
+       },
+       "n": 4
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 17.0,
+        "n": 14,
+        "p25": 8.8,
+        "p75": 35.8
+       },
+       "n": 14
+      }
+     },
+     "continuation_5to30": {
+      "n": 26,
+      "rate": 0.69
+     },
+     "fade_pre_drift": {
+      "n": 20,
+      "rate": 0.55
+     },
+     "favorable_run_30min": {
+      "median": 54.5,
+      "n": 25,
+      "p25": 34.4,
+      "p75": 97.6,
+      "p80": 101.5,
+      "p90": 132.2
+     },
+     "favorable_run_5min": {
+      "median": 26.7,
+      "n": 26,
+      "p25": 15.1,
+      "p75": 40.7,
+      "p80": 47.8,
+      "p90": 75.8
+     },
+     "n": 26,
+     "range_5min": {
+      "median": 39.7,
+      "n": 26,
+      "p25": 26.6,
+      "p75": 56.6
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-05"
+    "2026-07"
    ]
   },
   "USD|fomc statement": {
@@ -38033,6 +42045,126 @@
       "p25": 4.1,
       "p75": 7.9
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 18.8,
+      "n": 12,
+      "p25": 5.6,
+      "p75": 34.3
+     },
+     "abs_move_1min": {
+      "median": 4.7,
+      "n": 12,
+      "p25": 3.4,
+      "p75": 12.9
+     },
+     "abs_move_30min": {
+      "median": 37.6,
+      "n": 9,
+      "p25": 15.5,
+      "p75": 54.1
+     },
+     "abs_move_5min": {
+      "median": 13.8,
+      "n": 12,
+      "p25": 11.5,
+      "p75": 22.6
+     },
+     "adverse_wick_5min": {
+      "median": 8.8,
+      "n": 12,
+      "p25": 3.2,
+      "p75": 12.7,
+      "p80": 13.1,
+      "p90": 25.4
+     },
+     "beat_currency_up_5min": {
+      "n": 4,
+      "rate": 0.5
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 13.7,
+        "n": 3,
+        "p25": 13.1,
+        "p75": 14.2
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "n": 3
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 3.3,
+        "n": 3,
+        "p25": 3.0,
+        "p75": 5.8
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 24.1,
+        "n": 6,
+        "p25": 15.7,
+        "p75": 37.8
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.0
+       },
+       "n": 6
+      }
+     },
+     "continuation_5to30": {
+      "n": 9,
+      "rate": 0.56
+     },
+     "fade_pre_drift": {
+      "n": 9,
+      "rate": 0.67
+     },
+     "favorable_run_30min": {
+      "median": 44.6,
+      "n": 9,
+      "p25": 29.7,
+      "p75": 88.5
+     },
+     "favorable_run_5min": {
+      "median": 24.0,
+      "n": 12,
+      "p25": 15.7,
+      "p75": 39.7,
+      "p80": 48.3,
+      "p90": 73.9
+     },
+     "miss_currency_down_5min": {
+      "n": 8,
+      "rate": 0.38
+     },
+     "n": 12,
+     "range_5min": {
+      "median": 35.0,
+      "n": 12,
+      "p25": 23.3,
+      "p75": 61.9
+     }
     }
    },
    "span": [
@@ -38048,7 +42180,7 @@
    ],
    "currency": "USD",
    "event_name": "HPI m/m",
-   "n_releases": 40,
+   "n_releases": 41,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -38671,14 +42803,132 @@
       "p25": 4.3,
       "p75": 8.1
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 26.2,
+      "n": 17,
+      "p25": 15.6,
+      "p75": 49.9
+     },
+     "abs_move_1min": {
+      "median": 14.7,
+      "n": 17,
+      "p25": 10.3,
+      "p75": 28.7
+     },
+     "abs_move_30min": {
+      "median": 33.4,
+      "n": 17,
+      "p25": 19.9,
+      "p75": 112.8
+     },
+     "abs_move_5min": {
+      "median": 21.2,
+      "n": 17,
+      "p25": 9.7,
+      "p75": 46.0
+     },
+     "adverse_wick_5min": {
+      "median": 9.3,
+      "n": 17,
+      "p25": 3.8,
+      "p75": 14.9,
+      "p80": 21.0,
+      "p90": 30.1
+     },
+     "beat_currency_up_5min": {
+      "n": 7,
+      "rate": 0.86
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 38.2,
+        "n": 4,
+        "p25": 24.5,
+        "p75": 61.6
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "n": 4
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 13.6,
+        "n": 4,
+        "p25": 8.2,
+        "p75": 18.0
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 1.0
+       },
+       "n": 4
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 32.1,
+        "n": 9,
+        "p25": 9.2,
+        "p75": 46.0
+       },
+       "miss_currency_down_5min": {
+        "n": 7,
+        "rate": 0.43
+       },
+       "n": 9
+      }
+     },
+     "continuation_5to30": {
+      "n": 17,
+      "rate": 0.82
+     },
+     "fade_pre_drift": {
+      "n": 13,
+      "rate": 0.69
+     },
+     "favorable_run_30min": {
+      "median": 50.7,
+      "n": 17,
+      "p25": 37.3,
+      "p75": 115.8,
+      "p80": 136.2,
+      "p90": 229.2
+     },
+     "favorable_run_5min": {
+      "median": 33.4,
+      "n": 17,
+      "p25": 21.2,
+      "p75": 60.7,
+      "p80": 66.6,
+      "p90": 87.3
+     },
+     "miss_currency_down_5min": {
+      "n": 8,
+      "rate": 0.38
+     },
+     "n": 17,
+     "range_5min": {
+      "median": 43.3,
+      "n": 17,
+      "p25": 34.1,
+      "p75": 80.0
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-05"
+    "2026-06"
    ],
-   "surprise_sigma": 0.3908,
-   "surprise_sigma_n": 40
+   "surprise_sigma": 0.3904,
+   "surprise_sigma_n": 41
   },
   "USD|import prices m/m": {
    "bundled_with": [
@@ -38686,7 +42936,7 @@
    ],
    "currency": "USD",
    "event_name": "Import Prices m/m",
-   "n_releases": 16,
+   "n_releases": 17,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -39280,14 +43530,138 @@
       "p25": 4.4,
       "p75": 5.5
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 21.1,
+      "n": 11,
+      "p25": 13.3,
+      "p75": 33.8
+     },
+     "abs_move_1min": {
+      "median": 4.7,
+      "n": 11,
+      "p25": 3.0,
+      "p75": 13.0
+     },
+     "abs_move_30min": {
+      "median": 19.9,
+      "n": 9,
+      "p25": 7.4,
+      "p75": 65.5
+     },
+     "abs_move_5min": {
+      "median": 10.1,
+      "n": 11,
+      "p25": 4.8,
+      "p75": 17.9
+     },
+     "adverse_wick_5min": {
+      "median": 6.5,
+      "n": 10,
+      "p25": 2.6,
+      "p75": 12.9,
+      "p80": 16.2,
+      "p90": 24.3
+     },
+     "beat_currency_up_5min": {
+      "n": 4,
+      "rate": 0.5
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 10.1,
+        "n": 3,
+        "p25": 10.1,
+        "p75": 13.4
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.0
+       },
+       "n": 3
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 13.2,
+        "n": 5,
+        "p25": 7.0,
+        "p75": 19.6
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "n": 5
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 2.7,
+        "n": 3,
+        "p25": 2.4,
+        "p75": 10.9
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "n": 3
+      }
+     },
+     "continuation_5to30": {
+      "n": 8,
+      "rate": 0.62
+     },
+     "fade_pre_drift": {
+      "n": 8,
+      "rate": 0.5
+     },
+     "favorable_run_30min": {
+      "median": 60.4,
+      "n": 7,
+      "p25": 23.2,
+      "p75": 104.8
+     },
+     "favorable_run_5min": {
+      "median": 19.1,
+      "n": 10,
+      "p25": 17.0,
+      "p75": 22.3,
+      "p80": 25.1,
+      "p90": 41.7
+     },
+     "miss_currency_down_5min": {
+      "n": 7,
+      "rate": 0.29
+     },
+     "n": 11,
+     "range_5min": {
+      "median": 26.8,
+      "n": 11,
+      "p25": 22.9,
+      "p75": 37.2
+     }
     }
    },
    "span": [
     "2021-01",
     "2025-12"
    ],
-   "surprise_sigma": 0.4343,
-   "surprise_sigma_n": 16
+   "surprise_sigma": 0.4216,
+   "surprise_sigma_n": 17
   },
   "USD|industrial production m/m": {
    "bundled_with": [
@@ -39837,6 +44211,111 @@
       "p25": 4.3,
       "p75": 7.1
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 15.4,
+      "n": 12,
+      "p25": 11.3,
+      "p75": 19.9
+     },
+     "abs_move_1min": {
+      "median": 8.3,
+      "n": 12,
+      "p25": 5.5,
+      "p75": 11.4
+     },
+     "abs_move_30min": {
+      "median": 24.1,
+      "n": 12,
+      "p25": 10.3,
+      "p75": 42.9
+     },
+     "abs_move_5min": {
+      "median": 11.6,
+      "n": 12,
+      "p25": 9.4,
+      "p75": 19.0
+     },
+     "adverse_wick_5min": {
+      "median": 4.2,
+      "n": 12,
+      "p25": 0.7,
+      "p75": 8.1,
+      "p80": 9.8,
+      "p90": 14.8
+     },
+     "beat_currency_up_5min": {
+      "n": 7,
+      "rate": 0.43
+     },
+     "by_regime": {
+      "hiking": {
+       "abs_move_5min": {
+        "median": 8.1,
+        "n": 3,
+        "p25": 7.8,
+        "p75": 12.8
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.0
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 11.7,
+        "n": 9,
+        "p25": 10.1,
+        "p75": 20.6
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.75
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "n": 9
+      }
+     },
+     "continuation_5to30": {
+      "n": 12,
+      "rate": 0.67
+     },
+     "fade_pre_drift": {
+      "n": 10,
+      "rate": 0.6
+     },
+     "favorable_run_30min": {
+      "median": 46.6,
+      "n": 12,
+      "p25": 27.6,
+      "p75": 57.8,
+      "p80": 63.3,
+      "p90": 72.1
+     },
+     "favorable_run_5min": {
+      "median": 22.1,
+      "n": 12,
+      "p25": 17.8,
+      "p75": 28.0,
+      "p80": 28.4,
+      "p90": 35.6
+     },
+     "miss_currency_down_5min": {
+      "n": 4,
+      "rate": 0.5
+     },
+     "n": 12,
+     "range_5min": {
+      "median": 27.1,
+      "n": 12,
+      "p25": 22.4,
+      "p75": 31.8
+     }
     }
    },
    "span": [
@@ -39854,7 +44333,7 @@
    ],
    "currency": "USD",
    "event_name": "ISM Manufacturing PMI",
-   "n_releases": 66,
+   "n_releases": 67,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -40485,14 +44964,140 @@
       "p25": 9.5,
       "p75": 19.3
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 33.0,
+      "n": 41,
+      "p25": 19.3,
+      "p75": 71.6
+     },
+     "abs_move_1min": {
+      "median": 32.3,
+      "n": 41,
+      "p25": 12.9,
+      "p75": 52.2
+     },
+     "abs_move_30min": {
+      "median": 41.5,
+      "n": 41,
+      "p25": 25.8,
+      "p75": 85.7
+     },
+     "abs_move_5min": {
+      "median": 26.1,
+      "n": 41,
+      "p25": 13.4,
+      "p75": 63.6
+     },
+     "adverse_wick_5min": {
+      "median": 7.8,
+      "n": 41,
+      "p25": 2.8,
+      "p75": 24.2,
+      "p80": 30.7,
+      "p90": 48.8
+     },
+     "beat_currency_up_5min": {
+      "n": 16,
+      "rate": 0.62
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 23.6,
+        "n": 12,
+        "p25": 15.8,
+        "p75": 32.4
+       },
+       "beat_currency_up_5min": {
+        "n": 6,
+        "rate": 0.83
+       },
+       "miss_currency_down_5min": {
+        "n": 6,
+        "rate": 0.67
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 22.8,
+        "n": 9,
+        "p25": 6.9,
+        "p75": 28.1
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 6,
+        "rate": 0.5
+       },
+       "n": 9
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 46.5,
+        "n": 20,
+        "p25": 13.8,
+        "p75": 64.7
+       },
+       "beat_currency_up_5min": {
+        "n": 7,
+        "rate": 0.29
+       },
+       "miss_currency_down_5min": {
+        "n": 13,
+        "rate": 0.85
+       },
+       "n": 20
+      }
+     },
+     "continuation_5to30": {
+      "n": 41,
+      "rate": 0.63
+     },
+     "fade_pre_drift": {
+      "n": 34,
+      "rate": 0.62
+     },
+     "favorable_run_30min": {
+      "median": 101.3,
+      "n": 39,
+      "p25": 58.0,
+      "p75": 165.0,
+      "p80": 170.6,
+      "p90": 195.3
+     },
+     "favorable_run_5min": {
+      "median": 58.3,
+      "n": 41,
+      "p25": 38.8,
+      "p75": 88.7,
+      "p80": 93.4,
+      "p90": 112.1
+     },
+     "miss_currency_down_5min": {
+      "n": 25,
+      "rate": 0.72
+     },
+     "n": 41,
+     "range_5min": {
+      "median": 67.8,
+      "n": 41,
+      "p25": 55.2,
+      "p75": 95.2
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 1.4259,
-   "surprise_sigma_n": 66
+   "surprise_sigma": 1.4162,
+   "surprise_sigma_n": 67
   },
   "USD|ism services pmi": {
    "bundled_with": [
@@ -40502,7 +45107,7 @@
    ],
    "currency": "USD",
    "event_name": "ISM Services PMI",
-   "n_releases": 64,
+   "n_releases": 65,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -41133,14 +45738,140 @@
       "p25": 9.2,
       "p75": 21.2
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 48.4,
+      "n": 42,
+      "p25": 15.7,
+      "p75": 85.8
+     },
+     "abs_move_1min": {
+      "median": 37.1,
+      "n": 42,
+      "p25": 13.4,
+      "p75": 53.8
+     },
+     "abs_move_30min": {
+      "median": 54.9,
+      "n": 42,
+      "p25": 29.7,
+      "p75": 72.0
+     },
+     "abs_move_5min": {
+      "median": 42.2,
+      "n": 42,
+      "p25": 24.1,
+      "p75": 67.5
+     },
+     "adverse_wick_5min": {
+      "median": 1.4,
+      "n": 41,
+      "p25": 0.0,
+      "p75": 18.1,
+      "p80": 29.9,
+      "p90": 46.1
+     },
+     "beat_currency_up_5min": {
+      "n": 22,
+      "rate": 0.64
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 39.4,
+        "n": 12,
+        "p25": 28.6,
+        "p75": 54.0
+       },
+       "beat_currency_up_5min": {
+        "n": 9,
+        "rate": 0.56
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 45.3,
+        "n": 9,
+        "p25": 26.5,
+        "p75": 83.7
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.8
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 1.0
+       },
+       "n": 9
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 40.0,
+        "n": 21,
+        "p25": 16.5,
+        "p75": 63.7
+       },
+       "beat_currency_up_5min": {
+        "n": 8,
+        "rate": 0.62
+       },
+       "miss_currency_down_5min": {
+        "n": 11,
+        "rate": 0.82
+       },
+       "n": 21
+      }
+     },
+     "continuation_5to30": {
+      "n": 41,
+      "rate": 0.76
+     },
+     "fade_pre_drift": {
+      "n": 34,
+      "rate": 0.59
+     },
+     "favorable_run_30min": {
+      "median": 96.8,
+      "n": 42,
+      "p25": 68.4,
+      "p75": 144.6,
+      "p80": 161.6,
+      "p90": 184.2
+     },
+     "favorable_run_5min": {
+      "median": 72.1,
+      "n": 41,
+      "p25": 57.3,
+      "p75": 110.9,
+      "p80": 113.0,
+      "p90": 124.3
+     },
+     "miss_currency_down_5min": {
+      "n": 18,
+      "rate": 0.83
+     },
+     "n": 42,
+     "range_5min": {
+      "median": 87.4,
+      "n": 42,
+      "p25": 67.7,
+      "p75": 110.7
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 2.4242,
-   "surprise_sigma_n": 64
+   "surprise_sigma": 2.4059,
+   "surprise_sigma_n": 65
   },
   "USD|jolts job openings": {
    "bundled_with": [
@@ -41781,6 +46512,132 @@
       "p25": 9.0,
       "p75": 16.2
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 65.1,
+      "n": 21,
+      "p25": 47.8,
+      "p75": 86.7
+     },
+     "abs_move_1min": {
+      "median": 32.0,
+      "n": 21,
+      "p25": 14.3,
+      "p75": 56.6
+     },
+     "abs_move_30min": {
+      "median": 74.2,
+      "n": 21,
+      "p25": 36.4,
+      "p75": 99.4
+     },
+     "abs_move_5min": {
+      "median": 54.3,
+      "n": 21,
+      "p25": 32.4,
+      "p75": 77.8
+     },
+     "adverse_wick_5min": {
+      "median": 7.6,
+      "n": 20,
+      "p25": 1.5,
+      "p75": 25.9,
+      "p80": 27.4,
+      "p90": 45.8
+     },
+     "beat_currency_up_5min": {
+      "n": 9,
+      "rate": 0.67
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 52.8,
+        "n": 8,
+        "p25": 42.8,
+        "p75": 65.9
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.4
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "n": 8
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 74.0,
+        "n": 3,
+        "p25": 73.8,
+        "p75": 77.2
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 42.5,
+        "n": 10,
+        "p25": 23.6,
+        "p75": 77.0
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 6,
+        "rate": 0.67
+       },
+       "n": 10
+      }
+     },
+     "continuation_5to30": {
+      "n": 20,
+      "rate": 0.7
+     },
+     "fade_pre_drift": {
+      "n": 16,
+      "rate": 0.56
+     },
+     "favorable_run_30min": {
+      "median": 107.4,
+      "n": 21,
+      "p25": 82.5,
+      "p75": 141.6,
+      "p80": 169.8,
+      "p90": 297.2
+     },
+     "favorable_run_5min": {
+      "median": 77.5,
+      "n": 20,
+      "p25": 53.3,
+      "p75": 97.1,
+      "p80": 101.3,
+      "p90": 146.1
+     },
+     "miss_currency_down_5min": {
+      "n": 9,
+      "rate": 0.67
+     },
+     "n": 21,
+     "range_5min": {
+      "median": 81.9,
+      "n": 21,
+      "p25": 64.3,
+      "p75": 113.7
+     }
     }
    },
    "span": [
@@ -42194,6 +47051,76 @@
       "n": 17,
       "p25": 3.2,
       "p75": 6.5
+     }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 13.2,
+      "n": 9,
+      "p25": 7.1,
+      "p75": 23.4
+     },
+     "abs_move_1min": {
+      "median": 1.9,
+      "n": 9,
+      "p25": 0.6,
+      "p75": 6.1
+     },
+     "abs_move_30min": {
+      "median": 18.9,
+      "n": 9,
+      "p25": 12.8,
+      "p75": 23.6
+     },
+     "abs_move_5min": {
+      "median": 8.0,
+      "n": 9,
+      "p25": 4.0,
+      "p75": 11.2
+     },
+     "adverse_wick_5min": {
+      "median": 1.1,
+      "n": 8,
+      "p25": 0.8,
+      "p75": 3.7
+     },
+     "by_regime": {
+      "hold": {
+       "abs_move_5min": {
+        "median": 8.0,
+        "n": 5,
+        "p25": 4.0,
+        "p75": 9.6
+       },
+       "n": 5
+      }
+     },
+     "continuation_5to30": {
+      "n": 8,
+      "rate": 0.75
+     },
+     "fade_pre_drift": {
+      "n": 6,
+      "rate": 0.67
+     },
+     "favorable_run_30min": {
+      "median": 29.0,
+      "n": 8,
+      "p25": 23.5,
+      "p75": 60.9
+     },
+     "favorable_run_5min": {
+      "median": 10.8,
+      "n": 8,
+      "p25": 7.2,
+      "p75": 17.5
+     },
+     "n": 9,
+     "range_5min": {
+      "median": 11.9,
+      "n": 9,
+      "p25": 10.9,
+      "p75": 13.6
      }
     }
    },
@@ -42678,6 +47605,91 @@
       "n": 18,
       "p25": 4.7,
       "p75": 12.1
+     }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 21.5,
+      "n": 13,
+      "p25": 10.1,
+      "p75": 47.9
+     },
+     "abs_move_1min": {
+      "median": 9.8,
+      "n": 13,
+      "p25": 5.1,
+      "p75": 13.7
+     },
+     "abs_move_30min": {
+      "median": 56.3,
+      "n": 13,
+      "p25": 29.8,
+      "p75": 82.5
+     },
+     "abs_move_5min": {
+      "median": 19.8,
+      "n": 13,
+      "p25": 15.1,
+      "p75": 32.8
+     },
+     "adverse_wick_5min": {
+      "median": 9.8,
+      "n": 12,
+      "p25": 4.1,
+      "p75": 24.6,
+      "p80": 32.2,
+      "p90": 40.9
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 26.6,
+        "n": 4,
+        "p25": 19.3,
+        "p75": 39.5
+       },
+       "n": 4
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 19.8,
+        "n": 7,
+        "p25": 14.8,
+        "p75": 32.8
+       },
+       "n": 7
+      }
+     },
+     "continuation_5to30": {
+      "n": 12,
+      "rate": 0.67
+     },
+     "fade_pre_drift": {
+      "n": 11,
+      "rate": 0.45
+     },
+     "favorable_run_30min": {
+      "median": 81.3,
+      "n": 13,
+      "p25": 50.1,
+      "p75": 120.5,
+      "p80": 130.8,
+      "p90": 200.2
+     },
+     "favorable_run_5min": {
+      "median": 31.4,
+      "n": 12,
+      "p25": 19.9,
+      "p75": 40.8,
+      "p80": 41.5,
+      "p90": 69.5
+     },
+     "n": 13,
+     "range_5min": {
+      "median": 35.8,
+      "n": 13,
+      "p25": 25.2,
+      "p75": 54.9
      }
     }
    },
@@ -43292,6 +48304,132 @@
       "p25": 4.6,
       "p75": 10.2
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 18.6,
+      "n": 16,
+      "p25": 11.0,
+      "p75": 28.6
+     },
+     "abs_move_1min": {
+      "median": 8.4,
+      "n": 16,
+      "p25": 3.9,
+      "p75": 22.2
+     },
+     "abs_move_30min": {
+      "median": 31.1,
+      "n": 16,
+      "p25": 16.6,
+      "p75": 60.8
+     },
+     "abs_move_5min": {
+      "median": 26.0,
+      "n": 16,
+      "p25": 8.8,
+      "p75": 36.9
+     },
+     "adverse_wick_5min": {
+      "median": 7.0,
+      "n": 15,
+      "p25": 3.4,
+      "p75": 12.9,
+      "p80": 14.6,
+      "p90": 28.5
+     },
+     "beat_currency_up_5min": {
+      "n": 5,
+      "rate": 0.6
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 36.8,
+        "n": 5,
+        "p25": 28.8,
+        "p75": 55.1
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "n": 5
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 8.9,
+        "n": 3,
+        "p25": 8.3,
+        "p75": 11.3
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 19.3,
+        "n": 8,
+        "p25": 8.4,
+        "p75": 35.6
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "n": 8
+      }
+     },
+     "continuation_5to30": {
+      "n": 15,
+      "rate": 0.67
+     },
+     "fade_pre_drift": {
+      "n": 12,
+      "rate": 0.58
+     },
+     "favorable_run_30min": {
+      "median": 64.1,
+      "n": 15,
+      "p25": 39.5,
+      "p75": 132.1,
+      "p80": 143.4,
+      "p90": 185.3
+     },
+     "favorable_run_5min": {
+      "median": 40.2,
+      "n": 15,
+      "p25": 14.4,
+      "p75": 71.8,
+      "p80": 81.1,
+      "p90": 101.0
+     },
+     "miss_currency_down_5min": {
+      "n": 9,
+      "rate": 0.56
+     },
+     "n": 16,
+     "range_5min": {
+      "median": 44.6,
+      "n": 16,
+      "p25": 23.9,
+      "p75": 95.9
+     }
     }
    },
    "span": [
@@ -43304,7 +48442,7 @@
   "USD|natural gas storage": {
    "currency": "USD",
    "event_name": "Natural Gas Storage",
-   "n_releases": 278,
+   "n_releases": 281,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -43935,14 +49073,140 @@
       "p25": 5.0,
       "p75": 9.8
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 25.9,
+      "n": 171,
+      "p25": 14.1,
+      "p75": 52.1
+     },
+     "abs_move_1min": {
+      "median": 7.2,
+      "n": 171,
+      "p25": 3.1,
+      "p75": 14.8
+     },
+     "abs_move_30min": {
+      "median": 28.9,
+      "n": 158,
+      "p25": 12.2,
+      "p75": 60.1
+     },
+     "abs_move_5min": {
+      "median": 17.3,
+      "n": 171,
+      "p25": 7.5,
+      "p75": 31.5
+     },
+     "adverse_wick_5min": {
+      "median": 5.6,
+      "n": 160,
+      "p25": 3.0,
+      "p75": 12.1,
+      "p80": 15.4,
+      "p90": 21.4
+     },
+     "beat_currency_up_5min": {
+      "n": 75,
+      "rate": 0.44
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 22.6,
+        "n": 48,
+        "p25": 11.6,
+        "p75": 37.5
+       },
+       "beat_currency_up_5min": {
+        "n": 24,
+        "rate": 0.42
+       },
+       "miss_currency_down_5min": {
+        "n": 21,
+        "rate": 0.52
+       },
+       "n": 48
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 11.9,
+        "n": 34,
+        "p25": 6.5,
+        "p75": 17.8
+       },
+       "beat_currency_up_5min": {
+        "n": 10,
+        "rate": 0.3
+       },
+       "miss_currency_down_5min": {
+        "n": 20,
+        "rate": 0.5
+       },
+       "n": 34
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 18.9,
+        "n": 89,
+        "p25": 6.9,
+        "p75": 34.4
+       },
+       "beat_currency_up_5min": {
+        "n": 41,
+        "rate": 0.49
+       },
+       "miss_currency_down_5min": {
+        "n": 44,
+        "rate": 0.5
+       },
+       "n": 89
+      }
+     },
+     "continuation_5to30": {
+      "n": 147,
+      "rate": 0.64
+     },
+     "fade_pre_drift": {
+      "n": 138,
+      "rate": 0.51
+     },
+     "favorable_run_30min": {
+      "median": 52.8,
+      "n": 153,
+      "p25": 35.5,
+      "p75": 86.0,
+      "p80": 103.2,
+      "p90": 183.2
+     },
+     "favorable_run_5min": {
+      "median": 26.9,
+      "n": 160,
+      "p25": 17.0,
+      "p75": 45.5,
+      "p80": 51.2,
+      "p90": 77.1
+     },
+     "miss_currency_down_5min": {
+      "n": 85,
+      "rate": 0.51
+     },
+     "n": 171,
+     "range_5min": {
+      "median": 33.4,
+      "n": 171,
+      "p25": 22.9,
+      "p75": 51.6
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 10577975869.0359,
-   "surprise_sigma_n": 277
+   "surprise_sigma": 10529719238.6548,
+   "surprise_sigma_n": 280
   },
   "USD|new home sales": {
    "bundled_with": [
@@ -44583,6 +49847,132 @@
       "p25": 6.1,
       "p75": 10.4
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 41.1,
+      "n": 29,
+      "p25": 12.9,
+      "p75": 83.7
+     },
+     "abs_move_1min": {
+      "median": 12.0,
+      "n": 29,
+      "p25": 4.4,
+      "p75": 23.4
+     },
+     "abs_move_30min": {
+      "median": 67.8,
+      "n": 29,
+      "p25": 16.9,
+      "p75": 104.8
+     },
+     "abs_move_5min": {
+      "median": 23.9,
+      "n": 29,
+      "p25": 6.8,
+      "p75": 77.0
+     },
+     "adverse_wick_5min": {
+      "median": 13.4,
+      "n": 28,
+      "p25": 4.8,
+      "p75": 28.9,
+      "p80": 33.0,
+      "p90": 61.3
+     },
+     "beat_currency_up_5min": {
+      "n": 14,
+      "rate": 0.5
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 77.0,
+        "n": 9,
+        "p25": 6.8,
+        "p75": 164.3
+       },
+       "beat_currency_up_5min": {
+        "n": 6,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "n": 9
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 15.1,
+        "n": 4,
+        "p25": 11.6,
+        "p75": 17.6
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "n": 4
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 23.9,
+        "n": 16,
+        "p25": 9.9,
+        "p75": 49.5
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "miss_currency_down_5min": {
+        "n": 10,
+        "rate": 0.6
+       },
+       "n": 16
+      }
+     },
+     "continuation_5to30": {
+      "n": 28,
+      "rate": 0.71
+     },
+     "fade_pre_drift": {
+      "n": 24,
+      "rate": 0.58
+     },
+     "favorable_run_30min": {
+      "median": 84.3,
+      "n": 29,
+      "p25": 36.5,
+      "p75": 163.0,
+      "p80": 257.6,
+      "p90": 384.0
+     },
+     "favorable_run_5min": {
+      "median": 35.5,
+      "n": 28,
+      "p25": 23.4,
+      "p75": 105.4,
+      "p80": 144.5,
+      "p90": 165.8
+     },
+     "miss_currency_down_5min": {
+      "n": 12,
+      "rate": 0.58
+     },
+     "n": 29,
+     "range_5min": {
+      "median": 55.7,
+      "n": 29,
+      "p25": 35.8,
+      "p75": 123.9
+     }
     }
    },
    "span": [
@@ -44595,7 +49985,7 @@
   "USD|nfib small business index": {
    "currency": "USD",
    "event_name": "NFIB Small Business Index",
-   "n_releases": 65,
+   "n_releases": 66,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -45226,14 +50616,140 @@
       "p25": 2.4,
       "p75": 4.5
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 15.0,
+      "n": 39,
+      "p25": 6.2,
+      "p75": 26.1
+     },
+     "abs_move_1min": {
+      "median": 4.2,
+      "n": 41,
+      "p25": 3.0,
+      "p75": 7.4
+     },
+     "abs_move_30min": {
+      "median": 12.8,
+      "n": 39,
+      "p25": 8.1,
+      "p75": 30.9
+     },
+     "abs_move_5min": {
+      "median": 5.5,
+      "n": 41,
+      "p25": 2.6,
+      "p75": 11.9
+     },
+     "adverse_wick_5min": {
+      "median": 4.9,
+      "n": 34,
+      "p25": 1.8,
+      "p75": 8.1,
+      "p80": 9.0,
+      "p90": 11.2
+     },
+     "beat_currency_up_5min": {
+      "n": 19,
+      "rate": 0.68
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 7.0,
+        "n": 12,
+        "p25": 2.1,
+        "p75": 12.8
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 6,
+        "rate": 0.5
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 2.9,
+        "n": 8,
+        "p25": 2.4,
+        "p75": 5.1
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.75
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "n": 8
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 8.0,
+        "n": 21,
+        "p25": 3.2,
+        "p75": 14.2
+       },
+       "beat_currency_up_5min": {
+        "n": 11,
+        "rate": 0.73
+       },
+       "miss_currency_down_5min": {
+        "n": 8,
+        "rate": 0.62
+       },
+       "n": 21
+      }
+     },
+     "continuation_5to30": {
+      "n": 32,
+      "rate": 0.69
+     },
+     "fade_pre_drift": {
+      "n": 27,
+      "rate": 0.44
+     },
+     "favorable_run_30min": {
+      "median": 29.0,
+      "n": 37,
+      "p25": 17.6,
+      "p75": 56.7,
+      "p80": 58.9,
+      "p90": 73.9
+     },
+     "favorable_run_5min": {
+      "median": 15.0,
+      "n": 34,
+      "p25": 7.2,
+      "p75": 22.1,
+      "p80": 23.2,
+      "p90": 33.2
+     },
+     "miss_currency_down_5min": {
+      "n": 17,
+      "rate": 0.59
+     },
+     "n": 41,
+     "range_5min": {
+      "median": 18.5,
+      "n": 41,
+      "p25": 11.0,
+      "p75": 27.7
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 1.6927,
-   "surprise_sigma_n": 65
+   "surprise_sigma": 1.6919,
+   "surprise_sigma_n": 66
   },
   "USD|non-farm employment change": {
    "bundled_with": [
@@ -45243,7 +50759,7 @@
    ],
    "currency": "USD",
    "event_name": "Non-Farm Employment Change",
-   "n_releases": 65,
+   "n_releases": 66,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -45874,19 +51390,145 @@
       "p25": 22.8,
       "p75": 44.4
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 83.9,
+      "n": 38,
+      "p25": 46.6,
+      "p75": 155.4
+     },
+     "abs_move_1min": {
+      "median": 73.5,
+      "n": 38,
+      "p25": 29.7,
+      "p75": 129.1
+     },
+     "abs_move_30min": {
+      "median": 88.5,
+      "n": 37,
+      "p25": 50.5,
+      "p75": 169.2
+     },
+     "abs_move_5min": {
+      "median": 102.3,
+      "n": 38,
+      "p25": 47.5,
+      "p75": 152.1
+     },
+     "adverse_wick_5min": {
+      "median": 9.7,
+      "n": 38,
+      "p25": 0.9,
+      "p75": 46.0,
+      "p80": 62.4,
+      "p90": 82.4
+     },
+     "beat_currency_up_5min": {
+      "n": 23,
+      "rate": 0.7
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 106.3,
+        "n": 12,
+        "p25": 49.4,
+        "p75": 145.2
+       },
+       "beat_currency_up_5min": {
+        "n": 6,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 5,
+        "rate": 0.8
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 51.4,
+        "n": 6,
+        "p25": 44.6,
+        "p75": 75.0
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "n": 6
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 113.2,
+        "n": 20,
+        "p25": 77.2,
+        "p75": 180.6
+       },
+       "beat_currency_up_5min": {
+        "n": 13,
+        "rate": 0.77
+       },
+       "miss_currency_down_5min": {
+        "n": 7,
+        "rate": 1.0
+       },
+       "n": 20
+      }
+     },
+     "continuation_5to30": {
+      "n": 37,
+      "rate": 0.92
+     },
+     "fade_pre_drift": {
+      "n": 32,
+      "rate": 0.56
+     },
+     "favorable_run_30min": {
+      "median": 169.6,
+      "n": 37,
+      "p25": 104.7,
+      "p75": 248.9,
+      "p80": 300.0,
+      "p90": 458.2
+     },
+     "favorable_run_5min": {
+      "median": 130.8,
+      "n": 38,
+      "p25": 87.4,
+      "p75": 190.7,
+      "p80": 197.6,
+      "p90": 294.5
+     },
+     "miss_currency_down_5min": {
+      "n": 14,
+      "rate": 0.93
+     },
+     "n": 38,
+     "range_5min": {
+      "median": 175.6,
+      "n": 38,
+      "p25": 120.1,
+      "p75": 226.3
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 168334.4391,
-   "surprise_sigma_n": 64
+   "surprise_sigma": 167281.194,
+   "surprise_sigma_n": 65
   },
   "USD|omdia total vehicle sales": {
    "currency": "USD",
    "event_name": "Omdia Total Vehicle Sales",
-   "n_releases": 64,
+   "n_releases": 65,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -46517,14 +52159,140 @@
       "p25": 6.4,
       "p75": 10.7
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 34.1,
+      "n": 39,
+      "p25": 20.2,
+      "p75": 56.4
+     },
+     "abs_move_1min": {
+      "median": 10.0,
+      "n": 39,
+      "p25": 4.0,
+      "p75": 19.0
+     },
+     "abs_move_30min": {
+      "median": 41.9,
+      "n": 39,
+      "p25": 20.8,
+      "p75": 74.8
+     },
+     "abs_move_5min": {
+      "median": 20.7,
+      "n": 39,
+      "p25": 12.1,
+      "p75": 37.4
+     },
+     "adverse_wick_5min": {
+      "median": 9.8,
+      "n": 39,
+      "p25": 2.0,
+      "p75": 20.4,
+      "p80": 23.3,
+      "p90": 40.1
+     },
+     "beat_currency_up_5min": {
+      "n": 20,
+      "rate": 0.45
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 33.5,
+        "n": 12,
+        "p25": 20.3,
+        "p75": 73.3
+       },
+       "beat_currency_up_5min": {
+        "n": 8,
+        "rate": 0.62
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 12.8,
+        "n": 9,
+        "p25": 7.4,
+        "p75": 16.9
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.25
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "n": 9
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 21.1,
+        "n": 18,
+        "p25": 12.8,
+        "p75": 33.5
+       },
+       "beat_currency_up_5min": {
+        "n": 8,
+        "rate": 0.38
+       },
+       "miss_currency_down_5min": {
+        "n": 8,
+        "rate": 0.25
+       },
+       "n": 18
+      }
+     },
+     "continuation_5to30": {
+      "n": 39,
+      "rate": 0.62
+     },
+     "fade_pre_drift": {
+      "n": 37,
+      "rate": 0.51
+     },
+     "favorable_run_30min": {
+      "median": 75.5,
+      "n": 37,
+      "p25": 47.6,
+      "p75": 120.2,
+      "p80": 123.7,
+      "p90": 229.5
+     },
+     "favorable_run_5min": {
+      "median": 31.4,
+      "n": 39,
+      "p25": 18.9,
+      "p75": 50.5,
+      "p80": 61.8,
+      "p90": 87.0
+     },
+     "miss_currency_down_5min": {
+      "n": 16,
+      "rate": 0.38
+     },
+     "n": 39,
+     "range_5min": {
+      "median": 41.1,
+      "n": 39,
+      "p25": 31.6,
+      "p75": 68.8
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 588222.6274,
-   "surprise_sigma_n": 64
+   "surprise_sigma": 585594.3221,
+   "surprise_sigma_n": 65
   },
   "USD|pending home sales m/m": {
    "bundled_with": [
@@ -47165,6 +52933,132 @@
       "p25": 6.3,
       "p75": 12.1
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 29.7,
+      "n": 33,
+      "p25": 16.4,
+      "p75": 51.0
+     },
+     "abs_move_1min": {
+      "median": 10.0,
+      "n": 33,
+      "p25": 3.8,
+      "p75": 17.0
+     },
+     "abs_move_30min": {
+      "median": 29.9,
+      "n": 33,
+      "p25": 11.3,
+      "p75": 60.0
+     },
+     "abs_move_5min": {
+      "median": 17.7,
+      "n": 33,
+      "p25": 8.4,
+      "p75": 38.8
+     },
+     "adverse_wick_5min": {
+      "median": 7.8,
+      "n": 29,
+      "p25": 2.6,
+      "p75": 13.6,
+      "p80": 18.1,
+      "p90": 27.0
+     },
+     "beat_currency_up_5min": {
+      "n": 15,
+      "rate": 0.73
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 41.8,
+        "n": 11,
+        "p25": 20.6,
+        "p75": 79.8
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "miss_currency_down_5min": {
+        "n": 6,
+        "rate": 0.67
+       },
+       "n": 11
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 15.6,
+        "n": 6,
+        "p25": 14.0,
+        "p75": 18.1
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 1.0
+       },
+       "n": 6
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 12.6,
+        "n": 16,
+        "p25": 3.3,
+        "p75": 21.7
+       },
+       "beat_currency_up_5min": {
+        "n": 7,
+        "rate": 0.86
+       },
+       "miss_currency_down_5min": {
+        "n": 6,
+        "rate": 1.0
+       },
+       "n": 16
+      }
+     },
+     "continuation_5to30": {
+      "n": 29,
+      "rate": 0.79
+     },
+     "fade_pre_drift": {
+      "n": 25,
+      "rate": 0.48
+     },
+     "favorable_run_30min": {
+      "median": 54.4,
+      "n": 31,
+      "p25": 40.5,
+      "p75": 100.4,
+      "p80": 105.0,
+      "p90": 137.4
+     },
+     "favorable_run_5min": {
+      "median": 28.9,
+      "n": 29,
+      "p25": 20.3,
+      "p75": 60.3,
+      "p80": 71.2,
+      "p90": 98.5
+     },
+     "miss_currency_down_5min": {
+      "n": 15,
+      "rate": 0.87
+     },
+     "n": 33,
+     "range_5min": {
+      "median": 39.6,
+      "n": 33,
+      "p25": 26.3,
+      "p75": 60.8
+     }
     }
    },
    "span": [
@@ -47728,6 +53622,92 @@
       "p25": 5.9,
       "p75": 12.1
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 19.5,
+      "n": 6,
+      "p25": 14.2,
+      "p75": 68.4
+     },
+     "abs_move_1min": {
+      "median": 7.2,
+      "n": 6,
+      "p25": 4.5,
+      "p75": 17.4
+     },
+     "abs_move_30min": {
+      "median": 24.5,
+      "n": 6,
+      "p25": 17.2,
+      "p75": 33.3
+     },
+     "abs_move_5min": {
+      "median": 46.8,
+      "n": 6,
+      "p25": 27.2,
+      "p75": 72.1
+     },
+     "adverse_wick_5min": {
+      "median": 8.8,
+      "n": 6,
+      "p25": 6.8,
+      "p75": 23.9
+     },
+     "beat_currency_up_5min": {
+      "n": 3,
+      "rate": 0.67
+     },
+     "by_regime": {
+      "hold": {
+       "abs_move_5min": {
+        "median": 46.8,
+        "n": 4,
+        "p25": 38.6,
+        "p75": 57.0
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "n": 4
+      }
+     },
+     "continuation_5to30": {
+      "n": 6,
+      "rate": 0.5
+     },
+     "fade_pre_drift": {
+      "n": 5,
+      "rate": 0.4
+     },
+     "favorable_run_30min": {
+      "median": 61.2,
+      "n": 6,
+      "p25": 49.5,
+      "p75": 98.6
+     },
+     "favorable_run_5min": {
+      "median": 60.7,
+      "n": 6,
+      "p25": 56.5,
+      "p75": 88.2
+     },
+     "miss_currency_down_5min": {
+      "n": 3,
+      "rate": 0.67
+     },
+     "n": 6,
+     "range_5min": {
+      "median": 88.7,
+      "n": 6,
+      "p25": 71.6,
+      "p75": 101.2
+     }
     }
    },
    "span": [
@@ -47745,7 +53725,7 @@
    ],
    "currency": "USD",
    "event_name": "PPI m/m",
-   "n_releases": 54,
+   "n_releases": 55,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -48376,14 +54356,140 @@
       "p25": 8.0,
       "p75": 19.0
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 46.4,
+      "n": 34,
+      "p25": 15.3,
+      "p75": 77.6
+     },
+     "abs_move_1min": {
+      "median": 34.5,
+      "n": 34,
+      "p25": 17.6,
+      "p75": 59.6
+     },
+     "abs_move_30min": {
+      "median": 47.9,
+      "n": 31,
+      "p25": 28.6,
+      "p75": 79.3
+     },
+     "abs_move_5min": {
+      "median": 34.4,
+      "n": 34,
+      "p25": 15.4,
+      "p75": 56.5
+     },
+     "adverse_wick_5min": {
+      "median": 6.4,
+      "n": 32,
+      "p25": 0.3,
+      "p75": 21.7,
+      "p80": 23.7,
+      "p90": 34.8
+     },
+     "beat_currency_up_5min": {
+      "n": 13,
+      "rate": 0.77
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 24.6,
+        "n": 10,
+        "p25": 11.2,
+        "p75": 38.1
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 1.0
+       },
+       "n": 10
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 15.6,
+        "n": 6,
+        "p25": 8.3,
+        "p75": 29.4
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 1.0
+       },
+       "n": 6
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 44.5,
+        "n": 18,
+        "p25": 29.1,
+        "p75": 69.7
+       },
+       "beat_currency_up_5min": {
+        "n": 7,
+        "rate": 0.86
+       },
+       "miss_currency_down_5min": {
+        "n": 10,
+        "rate": 1.0
+       },
+       "n": 18
+      }
+     },
+     "continuation_5to30": {
+      "n": 29,
+      "rate": 0.69
+     },
+     "fade_pre_drift": {
+      "n": 28,
+      "rate": 0.43
+     },
+     "favorable_run_30min": {
+      "median": 80.2,
+      "n": 30,
+      "p25": 59.1,
+      "p75": 115.9,
+      "p80": 153.3,
+      "p90": 243.3
+     },
+     "favorable_run_5min": {
+      "median": 75.0,
+      "n": 32,
+      "p25": 53.3,
+      "p75": 95.6,
+      "p80": 109.6,
+      "p90": 127.5
+     },
+     "miss_currency_down_5min": {
+      "n": 16,
+      "rate": 1.0
+     },
+     "n": 34,
+     "range_5min": {
+      "median": 76.0,
+      "n": 34,
+      "p25": 58.9,
+      "p75": 109.7
+     }
     }
    },
    "span": [
     "2021-03",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 0.3152,
-   "surprise_sigma_n": 53
+   "surprise_sigma": 0.3156,
+   "surprise_sigma_n": 54
   },
   "USD|prelim benchmark payrolls revision": {
    "bundled_with": [
@@ -48734,6 +54840,65 @@
       "n": 5,
       "p25": 5.4,
       "p75": 8.2
+     }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 25.9,
+      "n": 3,
+      "p25": 20.3,
+      "p75": 83.1
+     },
+     "abs_move_1min": {
+      "median": 46.8,
+      "n": 3,
+      "p25": 32.5,
+      "p75": 53.8
+     },
+     "abs_move_30min": {
+      "median": 30.8,
+      "n": 3,
+      "p25": 17.3,
+      "p75": 77.1
+     },
+     "abs_move_5min": {
+      "median": 31.8,
+      "n": 3,
+      "p25": 31.6,
+      "p75": 42.8
+     },
+     "adverse_wick_5min": {
+      "median": 1.5,
+      "n": 3,
+      "p25": 1.3,
+      "p75": 41.9
+     },
+     "continuation_5to30": {
+      "n": 3,
+      "rate": 1.0
+     },
+     "fade_pre_drift": {
+      "n": 3,
+      "rate": 0.33
+     },
+     "favorable_run_30min": {
+      "median": 91.7,
+      "n": 3,
+      "p25": 63.0,
+      "p75": 165.1
+     },
+     "favorable_run_5min": {
+      "median": 91.7,
+      "n": 3,
+      "p25": 62.7,
+      "p75": 102.5
+     },
+     "n": 3,
+     "range_5min": {
+      "median": 92.8,
+      "n": 3,
+      "p25": 64.0,
+      "p75": 144.2
      }
     }
    },
@@ -49369,6 +55534,132 @@
       "p25": 6.8,
       "p75": 13.4
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 37.8,
+      "n": 14,
+      "p25": 29.0,
+      "p75": 56.4
+     },
+     "abs_move_1min": {
+      "median": 21.4,
+      "n": 14,
+      "p25": 17.4,
+      "p75": 39.7
+     },
+     "abs_move_30min": {
+      "median": 69.7,
+      "n": 12,
+      "p25": 40.5,
+      "p75": 81.1
+     },
+     "abs_move_5min": {
+      "median": 38.3,
+      "n": 14,
+      "p25": 18.7,
+      "p75": 51.4
+     },
+     "adverse_wick_5min": {
+      "median": 6.5,
+      "n": 14,
+      "p25": 1.8,
+      "p75": 11.2,
+      "p80": 14.0,
+      "p90": 33.1
+     },
+     "beat_currency_up_5min": {
+      "n": 7,
+      "rate": 0.57
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 35.4,
+        "n": 4,
+        "p25": 24.5,
+        "p75": 47.6
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "n": 4
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 38.9,
+        "n": 3,
+        "p25": 26.2,
+        "p75": 63.0
+       },
+       "beat_currency_up_5min": {
+        "n": 1,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 37.7,
+        "n": 7,
+        "p25": 19.2,
+        "p75": 49.8
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "n": 7
+      }
+     },
+     "continuation_5to30": {
+      "n": 12,
+      "rate": 0.83
+     },
+     "fade_pre_drift": {
+      "n": 11,
+      "rate": 0.36
+     },
+     "favorable_run_30min": {
+      "median": 87.6,
+      "n": 12,
+      "p25": 50.4,
+      "p75": 121.6,
+      "p80": 122.8,
+      "p90": 152.9
+     },
+     "favorable_run_5min": {
+      "median": 51.5,
+      "n": 14,
+      "p25": 44.1,
+      "p75": 71.3,
+      "p80": 76.3,
+      "p90": 86.5
+     },
+     "miss_currency_down_5min": {
+      "n": 5,
+      "rate": 0.6
+     },
+     "n": 14,
+     "range_5min": {
+      "median": 56.0,
+      "n": 14,
+      "p25": 49.4,
+      "p75": 89.6
+     }
     }
    },
    "span": [
@@ -49386,7 +55677,7 @@
    ],
    "currency": "USD",
    "event_name": "Prelim UoM Consumer Sentiment",
-   "n_releases": 61,
+   "n_releases": 63,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -50017,14 +56308,140 @@
       "p25": 7.2,
       "p75": 14.5
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 35.7,
+      "n": 41,
+      "p25": 20.0,
+      "p75": 55.7
+     },
+     "abs_move_1min": {
+      "median": 16.1,
+      "n": 41,
+      "p25": 8.7,
+      "p75": 24.7
+     },
+     "abs_move_30min": {
+      "median": 37.3,
+      "n": 41,
+      "p25": 24.9,
+      "p75": 72.5
+     },
+     "abs_move_5min": {
+      "median": 23.1,
+      "n": 41,
+      "p25": 7.9,
+      "p75": 29.1
+     },
+     "adverse_wick_5min": {
+      "median": 14.6,
+      "n": 37,
+      "p25": 4.5,
+      "p75": 24.0,
+      "p80": 29.6,
+      "p90": 42.7
+     },
+     "beat_currency_up_5min": {
+      "n": 16,
+      "rate": 0.69
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 25.8,
+        "n": 10,
+        "p25": 20.2,
+        "p75": 34.2
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "miss_currency_down_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "n": 10
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 15.5,
+        "n": 10,
+        "p25": 8.5,
+        "p75": 24.3
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.8
+       },
+       "miss_currency_down_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "n": 10
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 23.1,
+        "n": 21,
+        "p25": 6.5,
+        "p75": 27.0
+       },
+       "beat_currency_up_5min": {
+        "n": 6,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 13,
+        "rate": 0.69
+       },
+       "n": 21
+      }
+     },
+     "continuation_5to30": {
+      "n": 37,
+      "rate": 0.62
+     },
+     "fade_pre_drift": {
+      "n": 32,
+      "rate": 0.56
+     },
+     "favorable_run_30min": {
+      "median": 72.5,
+      "n": 40,
+      "p25": 54.3,
+      "p75": 107.0,
+      "p80": 135.2,
+      "p90": 167.4
+     },
+     "favorable_run_5min": {
+      "median": 41.6,
+      "n": 37,
+      "p25": 24.9,
+      "p75": 57.5,
+      "p80": 68.0,
+      "p90": 89.2
+     },
+     "miss_currency_down_5min": {
+      "n": 23,
+      "rate": 0.65
+     },
+     "n": 41,
+     "range_5min": {
+      "median": 55.4,
+      "n": 41,
+      "p25": 36.4,
+      "p75": 77.1
+     }
     }
    },
    "span": [
     "2021-02",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 3.9767,
-   "surprise_sigma_n": 61
+   "surprise_sigma": 4.0744,
+   "surprise_sigma_n": 62
   },
   "USD|rcm/tipp economic optimism": {
    "bundled_with": [
@@ -50032,7 +56449,7 @@
    ],
    "currency": "USD",
    "event_name": "RCM/TIPP Economic Optimism",
-   "n_releases": 59,
+   "n_releases": 60,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -50663,14 +57080,140 @@
       "p25": 5.9,
       "p75": 11.7
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 37.5,
+      "n": 36,
+      "p25": 19.2,
+      "p75": 56.6
+     },
+     "abs_move_1min": {
+      "median": 9.4,
+      "n": 36,
+      "p25": 2.9,
+      "p75": 17.9
+     },
+     "abs_move_30min": {
+      "median": 30.1,
+      "n": 36,
+      "p25": 13.8,
+      "p75": 72.5
+     },
+     "abs_move_5min": {
+      "median": 17.8,
+      "n": 36,
+      "p25": 7.1,
+      "p75": 33.3
+     },
+     "adverse_wick_5min": {
+      "median": 10.6,
+      "n": 34,
+      "p25": 4.2,
+      "p75": 18.6,
+      "p80": 20.2,
+      "p90": 31.4
+     },
+     "beat_currency_up_5min": {
+      "n": 11,
+      "rate": 0.64
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 15.7,
+        "n": 11,
+        "p25": 12.4,
+        "p75": 26.3
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 0.0
+       },
+       "miss_currency_down_5min": {
+        "n": 9,
+        "rate": 0.33
+       },
+       "n": 11
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 1.8,
+        "n": 4,
+        "p25": 0.9,
+        "p75": 3.0
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "n": 4
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 22.9,
+        "n": 21,
+        "p25": 12.9,
+        "p75": 34.9
+       },
+       "beat_currency_up_5min": {
+        "n": 7,
+        "rate": 0.71
+       },
+       "miss_currency_down_5min": {
+        "n": 14,
+        "rate": 0.79
+       },
+       "n": 21
+      }
+     },
+     "continuation_5to30": {
+      "n": 34,
+      "rate": 0.44
+     },
+     "fade_pre_drift": {
+      "n": 30,
+      "rate": 0.43
+     },
+     "favorable_run_30min": {
+      "median": 67.7,
+      "n": 35,
+      "p25": 41.1,
+      "p75": 122.3,
+      "p80": 133.2,
+      "p90": 154.0
+     },
+     "favorable_run_5min": {
+      "median": 34.0,
+      "n": 34,
+      "p25": 21.6,
+      "p75": 56.7,
+      "p80": 59.0,
+      "p90": 71.0
+     },
+     "miss_currency_down_5min": {
+      "n": 24,
+      "rate": 0.58
+     },
+     "n": 36,
+     "range_5min": {
+      "median": 39.7,
+      "n": 36,
+      "p25": 27.6,
+      "p75": 66.1
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 2.7186,
-   "surprise_sigma_n": 59
+   "surprise_sigma": 2.7047,
+   "surprise_sigma_n": 60
   },
   "USD|retail sales m/m": {
    "bundled_with": [
@@ -50680,7 +57223,7 @@
    ],
    "currency": "USD",
    "event_name": "Retail Sales m/m",
-   "n_releases": 62,
+   "n_releases": 63,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -51311,14 +57854,140 @@
       "p25": 9.7,
       "p75": 19.3
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 46.5,
+      "n": 38,
+      "p25": 16.0,
+      "p75": 73.9
+     },
+     "abs_move_1min": {
+      "median": 32.8,
+      "n": 38,
+      "p25": 11.8,
+      "p75": 50.8
+     },
+     "abs_move_30min": {
+      "median": 39.0,
+      "n": 35,
+      "p25": 11.2,
+      "p75": 61.7
+     },
+     "abs_move_5min": {
+      "median": 35.0,
+      "n": 38,
+      "p25": 23.1,
+      "p75": 50.8
+     },
+     "adverse_wick_5min": {
+      "median": 9.3,
+      "n": 38,
+      "p25": 1.0,
+      "p75": 27.5,
+      "p80": 33.2,
+      "p90": 43.6
+     },
+     "beat_currency_up_5min": {
+      "n": 23,
+      "rate": 0.74
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 31.5,
+        "n": 9,
+        "p25": 16.4,
+        "p75": 45.1
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 5,
+        "rate": 1.0
+       },
+       "n": 9
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 46.7,
+        "n": 8,
+        "p25": 25.7,
+        "p75": 57.2
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.8
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "n": 8
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 34.6,
+        "n": 21,
+        "p25": 25.2,
+        "p75": 48.4
+       },
+       "beat_currency_up_5min": {
+        "n": 14,
+        "rate": 0.64
+       },
+       "miss_currency_down_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "n": 21
+      }
+     },
+     "continuation_5to30": {
+      "n": 35,
+      "rate": 0.66
+     },
+     "fade_pre_drift": {
+      "n": 29,
+      "rate": 0.59
+     },
+     "favorable_run_30min": {
+      "median": 73.3,
+      "n": 35,
+      "p25": 52.3,
+      "p75": 97.6,
+      "p80": 114.3,
+      "p90": 159.6
+     },
+     "favorable_run_5min": {
+      "median": 62.9,
+      "n": 38,
+      "p25": 42.4,
+      "p75": 75.2,
+      "p80": 76.4,
+      "p90": 91.0
+     },
+     "miss_currency_down_5min": {
+      "n": 13,
+      "rate": 0.69
+     },
+     "n": 38,
+     "range_5min": {
+      "median": 73.8,
+      "n": 38,
+      "p25": 58.9,
+      "p75": 92.1
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 0.9732,
-   "surprise_sigma_n": 62
+   "surprise_sigma": 0.9656,
+   "surprise_sigma_n": 63
   },
   "USD|revised nonfarm productivity q/q": {
    "bundled_with": [
@@ -51758,6 +58427,73 @@
       "n": 6,
       "p25": 5.7,
       "p75": 8.6
+     }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 2.6,
+      "n": 3,
+      "p25": 2.4,
+      "p75": 15.2
+     },
+     "abs_move_1min": {
+      "median": 6.8,
+      "n": 3,
+      "p25": 4.0,
+      "p75": 26.4
+     },
+     "abs_move_30min": {
+      "median": 57.0,
+      "n": 3,
+      "p25": 28.9,
+      "p75": 153.8
+     },
+     "abs_move_5min": {
+      "median": 10.2,
+      "n": 3,
+      "p25": 9.9,
+      "p75": 22.0
+     },
+     "adverse_wick_5min": {
+      "median": 13.4,
+      "n": 3,
+      "p25": 13.2,
+      "p75": 22.6
+     },
+     "beat_currency_up_5min": {
+      "n": 1,
+      "rate": 1.0
+     },
+     "continuation_5to30": {
+      "n": 3,
+      "rate": 0.33
+     },
+     "fade_pre_drift": {
+      "n": 3,
+      "rate": 0.67
+     },
+     "favorable_run_30min": {
+      "median": 171.2,
+      "n": 2,
+      "p25": 122.0,
+      "p75": 220.3
+     },
+     "favorable_run_5min": {
+      "median": 17.0,
+      "n": 3,
+      "p25": 15.2,
+      "p75": 79.2
+     },
+     "miss_currency_down_5min": {
+      "n": 2,
+      "rate": 0.5
+     },
+     "n": 3,
+     "range_5min": {
+      "median": 30.0,
+      "n": 3,
+      "p25": 28.4,
+      "p75": 101.6
      }
     }
    },
@@ -52405,6 +59141,132 @@
       "p25": 6.4,
       "p75": 12.0
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 47.7,
+      "n": 32,
+      "p25": 20.9,
+      "p75": 86.3
+     },
+     "abs_move_1min": {
+      "median": 15.0,
+      "n": 32,
+      "p25": 7.3,
+      "p75": 24.5
+     },
+     "abs_move_30min": {
+      "median": 50.2,
+      "n": 32,
+      "p25": 24.8,
+      "p75": 101.2
+     },
+     "abs_move_5min": {
+      "median": 21.6,
+      "n": 32,
+      "p25": 11.4,
+      "p75": 42.3
+     },
+     "adverse_wick_5min": {
+      "median": 7.3,
+      "n": 31,
+      "p25": 3.4,
+      "p75": 31.8,
+      "p80": 39.6,
+      "p90": 52.6
+     },
+     "beat_currency_up_5min": {
+      "n": 17,
+      "rate": 0.47
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 22.5,
+        "n": 8,
+        "p25": 19.9,
+        "p75": 45.5
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 1.0
+       },
+       "n": 8
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 12.6,
+        "n": 7,
+        "p25": 3.5,
+        "p75": 21.9
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 1.0
+       },
+       "n": 7
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 24.6,
+        "n": 17,
+        "p25": 14.9,
+        "p75": 42.9
+       },
+       "beat_currency_up_5min": {
+        "n": 10,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 7,
+        "rate": 0.71
+       },
+       "n": 17
+      }
+     },
+     "continuation_5to30": {
+      "n": 31,
+      "rate": 0.77
+     },
+     "fade_pre_drift": {
+      "n": 25,
+      "rate": 0.48
+     },
+     "favorable_run_30min": {
+      "median": 78.0,
+      "n": 32,
+      "p25": 47.3,
+      "p75": 115.9,
+      "p80": 125.0,
+      "p90": 221.8
+     },
+     "favorable_run_5min": {
+      "median": 34.8,
+      "n": 31,
+      "p25": 25.3,
+      "p75": 54.7,
+      "p80": 56.1,
+      "p90": 68.7
+     },
+     "miss_currency_down_5min": {
+      "n": 14,
+      "rate": 0.86
+     },
+     "n": 32,
+     "range_5min": {
+      "median": 45.2,
+      "n": 32,
+      "p25": 36.0,
+      "p75": 75.2
+     }
     }
    },
    "span": [
@@ -53048,6 +59910,132 @@
       "p25": 6.1,
       "p75": 10.1
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 23.9,
+      "n": 31,
+      "p25": 13.8,
+      "p75": 45.7
+     },
+     "abs_move_1min": {
+      "median": 6.1,
+      "n": 31,
+      "p25": 2.6,
+      "p75": 10.7
+     },
+     "abs_move_30min": {
+      "median": 24.7,
+      "n": 31,
+      "p25": 12.2,
+      "p75": 49.8
+     },
+     "abs_move_5min": {
+      "median": 14.6,
+      "n": 31,
+      "p25": 6.4,
+      "p75": 27.1
+     },
+     "adverse_wick_5min": {
+      "median": 11.6,
+      "n": 30,
+      "p25": 5.4,
+      "p75": 22.0,
+      "p80": 23.1,
+      "p90": 36.0
+     },
+     "beat_currency_up_5min": {
+      "n": 10,
+      "rate": 0.5
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 10.7,
+        "n": 8,
+        "p25": 6.0,
+        "p75": 27.8
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.0
+       },
+       "n": 8
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 9.1,
+        "n": 4,
+        "p25": 6.6,
+        "p75": 13.4
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 0.0
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "n": 4
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 19.3,
+        "n": 19,
+        "p25": 7.5,
+        "p75": 32.0
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "miss_currency_down_5min": {
+        "n": 11,
+        "rate": 0.55
+       },
+       "n": 19
+      }
+     },
+     "continuation_5to30": {
+      "n": 30,
+      "rate": 0.6
+     },
+     "fade_pre_drift": {
+      "n": 26,
+      "rate": 0.23
+     },
+     "favorable_run_30min": {
+      "median": 56.5,
+      "n": 30,
+      "p25": 31.7,
+      "p75": 82.7,
+      "p80": 90.3,
+      "p90": 106.9
+     },
+     "favorable_run_5min": {
+      "median": 24.8,
+      "n": 30,
+      "p25": 15.4,
+      "p75": 51.6,
+      "p80": 54.6,
+      "p90": 100.4
+     },
+     "miss_currency_down_5min": {
+      "n": 16,
+      "rate": 0.38
+     },
+     "n": 31,
+     "range_5min": {
+      "median": 37.8,
+      "n": 31,
+      "p25": 29.3,
+      "p75": 69.2
+     }
     }
    },
    "span": [
@@ -53676,6 +60664,128 @@
       "p25": 3.8,
       "p75": 8.8
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 22.8,
+      "n": 20,
+      "p25": 11.3,
+      "p75": 34.0
+     },
+     "abs_move_1min": {
+      "median": 8.2,
+      "n": 20,
+      "p25": 2.4,
+      "p75": 12.3
+     },
+     "abs_move_30min": {
+      "median": 20.9,
+      "n": 20,
+      "p25": 7.5,
+      "p75": 55.2
+     },
+     "abs_move_5min": {
+      "median": 12.8,
+      "n": 20,
+      "p25": 5.5,
+      "p75": 21.1
+     },
+     "adverse_wick_5min": {
+      "median": 5.0,
+      "n": 20,
+      "p25": 1.7,
+      "p75": 18.0,
+      "p80": 19.2,
+      "p90": 21.8
+     },
+     "beat_currency_up_5min": {
+      "n": 14,
+      "rate": 0.36
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 19.1,
+        "n": 6,
+        "p25": 14.2,
+        "p75": 23.4
+       },
+       "beat_currency_up_5min": {
+        "n": 4,
+        "rate": 0.25
+       },
+       "miss_currency_down_5min": {
+        "n": 1,
+        "rate": 0.0
+       },
+       "n": 6
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 5.5,
+        "n": 3,
+        "p25": 3.9,
+        "p75": 8.2
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.67
+       },
+       "n": 3
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 9.2,
+        "n": 11,
+        "p25": 4.5,
+        "p75": 20.5
+       },
+       "beat_currency_up_5min": {
+        "n": 7,
+        "rate": 0.29
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "n": 11
+      }
+     },
+     "continuation_5to30": {
+      "n": 20,
+      "rate": 0.65
+     },
+     "fade_pre_drift": {
+      "n": 18,
+      "rate": 0.39
+     },
+     "favorable_run_30min": {
+      "median": 51.0,
+      "n": 18,
+      "p25": 31.3,
+      "p75": 64.4,
+      "p80": 77.4,
+      "p90": 108.3
+     },
+     "favorable_run_5min": {
+      "median": 19.5,
+      "n": 20,
+      "p25": 7.1,
+      "p75": 24.9,
+      "p80": 25.5,
+      "p90": 30.9
+     },
+     "miss_currency_down_5min": {
+      "n": 4,
+      "rate": 0.25
+     },
+     "n": 20,
+     "range_5min": {
+      "median": 26.1,
+      "n": 20,
+      "p25": 18.6,
+      "p75": 37.5
+     }
     }
    },
    "span": [
@@ -53688,7 +60798,7 @@
   "USD|tic long-term purchases": {
    "currency": "USD",
    "event_name": "TIC Long-Term Purchases",
-   "n_releases": 66,
+   "n_releases": 67,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -54315,14 +61425,140 @@
       "p25": 2.3,
       "p75": 5.0
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 6.5,
+      "n": 36,
+      "p25": 2.6,
+      "p75": 18.2
+     },
+     "abs_move_1min": {
+      "median": 3.1,
+      "n": 36,
+      "p25": 1.7,
+      "p75": 7.5
+     },
+     "abs_move_30min": {
+      "median": 11.6,
+      "n": 36,
+      "p25": 5.2,
+      "p75": 25.1
+     },
+     "abs_move_5min": {
+      "median": 4.2,
+      "n": 36,
+      "p25": 2.1,
+      "p75": 7.8
+     },
+     "adverse_wick_5min": {
+      "median": 3.2,
+      "n": 28,
+      "p25": 1.3,
+      "p75": 6.7,
+      "p80": 8.5,
+      "p90": 12.3
+     },
+     "beat_currency_up_5min": {
+      "n": 18,
+      "rate": 0.33
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 6.7,
+        "n": 12,
+        "p25": 3.0,
+        "p75": 16.5
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.0
+       },
+       "miss_currency_down_5min": {
+        "n": 6,
+        "rate": 0.17
+       },
+       "n": 12
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 3.1,
+        "n": 6,
+        "p25": 1.8,
+        "p75": 5.5
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.0
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.0
+       },
+       "n": 6
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 3.8,
+        "n": 18,
+        "p25": 2.4,
+        "p75": 7.2
+       },
+       "beat_currency_up_5min": {
+        "n": 12,
+        "rate": 0.5
+       },
+       "miss_currency_down_5min": {
+        "n": 5,
+        "rate": 0.6
+       },
+       "n": 18
+      }
+     },
+     "continuation_5to30": {
+      "n": 28,
+      "rate": 0.68
+     },
+     "fade_pre_drift": {
+      "n": 21,
+      "rate": 0.48
+     },
+     "favorable_run_30min": {
+      "median": 18.9,
+      "n": 34,
+      "p25": 10.9,
+      "p75": 42.0,
+      "p80": 44.7,
+      "p90": 70.2
+     },
+     "favorable_run_5min": {
+      "median": 13.1,
+      "n": 28,
+      "p25": 6.5,
+      "p75": 23.8,
+      "p80": 27.8,
+      "p90": 34.6
+     },
+     "miss_currency_down_5min": {
+      "n": 13,
+      "rate": 0.31
+     },
+     "n": 36,
+     "range_5min": {
+      "median": 11.0,
+      "n": 36,
+      "p25": 7.7,
+      "p75": 32.3
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 88541738039.1869,
-   "surprise_sigma_n": 64
+   "surprise_sigma": 88641565523.5259,
+   "surprise_sigma_n": 65
   },
   "USD|trade balance": {
    "bundled_with": [
@@ -54330,7 +61566,7 @@
    ],
    "currency": "USD",
    "event_name": "Trade Balance",
-   "n_releases": 32,
+   "n_releases": 33,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -54835,19 +62071,145 @@
       "p25": 3.0,
       "p75": 5.2
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 25.5,
+      "n": 21,
+      "p25": 11.2,
+      "p75": 39.1
+     },
+     "abs_move_1min": {
+      "median": 7.5,
+      "n": 21,
+      "p25": 4.1,
+      "p75": 11.3
+     },
+     "abs_move_30min": {
+      "median": 35.3,
+      "n": 18,
+      "p25": 20.9,
+      "p75": 63.2
+     },
+     "abs_move_5min": {
+      "median": 17.4,
+      "n": 21,
+      "p25": 4.9,
+      "p75": 28.1
+     },
+     "adverse_wick_5min": {
+      "median": 7.8,
+      "n": 20,
+      "p25": 4.2,
+      "p75": 9.8,
+      "p80": 10.4,
+      "p90": 17.0
+     },
+     "beat_currency_up_5min": {
+      "n": 10,
+      "rate": 0.5
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 21.4,
+        "n": 5,
+        "p25": 17.4,
+        "p75": 28.1
+       },
+       "beat_currency_up_5min": {
+        "n": 2,
+        "rate": 1.0
+       },
+       "miss_currency_down_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "n": 5
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 4.8,
+        "n": 6,
+        "p25": 4.5,
+        "p75": 8.0
+       },
+       "beat_currency_up_5min": {
+        "n": 3,
+        "rate": 0.33
+       },
+       "miss_currency_down_5min": {
+        "n": 2,
+        "rate": 0.5
+       },
+       "n": 6
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 20.5,
+        "n": 10,
+        "p25": 5.9,
+        "p75": 40.7
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.4
+       },
+       "miss_currency_down_5min": {
+        "n": 4,
+        "rate": 0.75
+       },
+       "n": 10
+      }
+     },
+     "continuation_5to30": {
+      "n": 17,
+      "rate": 0.76
+     },
+     "fade_pre_drift": {
+      "n": 20,
+      "rate": 0.5
+     },
+     "favorable_run_30min": {
+      "median": 69.3,
+      "n": 18,
+      "p25": 37.4,
+      "p75": 88.7,
+      "p80": 90.8,
+      "p90": 112.8
+     },
+     "favorable_run_5min": {
+      "median": 23.9,
+      "n": 20,
+      "p25": 13.2,
+      "p75": 37.3,
+      "p80": 45.8,
+      "p90": 70.8
+     },
+     "miss_currency_down_5min": {
+      "n": 9,
+      "rate": 0.56
+     },
+     "n": 21,
+     "range_5min": {
+      "median": 35.3,
+      "n": 21,
+      "p25": 18.3,
+      "p75": 50.6
+     }
     }
    },
    "span": [
     "2021-04",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 1613199339.6276,
-   "surprise_sigma_n": 32
+   "surprise_sigma": 1593634029.9729,
+   "surprise_sigma_n": 33
   },
   "USD|treasury currency report": {
    "currency": "USD",
    "event_name": "Treasury Currency Report",
-   "n_releases": 10,
+   "n_releases": 11,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -55216,11 +62578,81 @@
       "p25": 4.0,
       "p75": 12.1
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 4.0,
+      "n": 7,
+      "p25": 1.2,
+      "p75": 16.2
+     },
+     "abs_move_1min": {
+      "median": 3.1,
+      "n": 7,
+      "p25": 2.5,
+      "p75": 5.7
+     },
+     "abs_move_30min": {
+      "median": 12.8,
+      "n": 6,
+      "p25": 2.5,
+      "p75": 27.8
+     },
+     "abs_move_5min": {
+      "median": 6.9,
+      "n": 7,
+      "p25": 5.0,
+      "p75": 18.2
+     },
+     "adverse_wick_5min": {
+      "median": 2.9,
+      "n": 6,
+      "p25": 0.7,
+      "p75": 7.9
+     },
+     "by_regime": {
+      "hold": {
+       "abs_move_5min": {
+        "median": 6.6,
+        "n": 4,
+        "p25": 5.6,
+        "p75": 9.1
+       },
+       "n": 4
+      }
+     },
+     "continuation_5to30": {
+      "n": 5,
+      "rate": 0.8
+     },
+     "fade_pre_drift": {
+      "n": 4,
+      "rate": 1.0
+     },
+     "favorable_run_30min": {
+      "median": 27.8,
+      "n": 4,
+      "p25": 16.1,
+      "p75": 106.6
+     },
+     "favorable_run_5min": {
+      "median": 15.1,
+      "n": 6,
+      "p25": 7.4,
+      "p75": 22.2
+     },
+     "n": 7,
+     "range_5min": {
+      "median": 18.9,
+      "n": 7,
+      "p25": 8.1,
+      "p75": 23.2
+     }
     }
    },
    "span": [
     "2021-04",
-    "2026-01"
+    "2026-07"
    ]
   },
   "USD|unemployment claims": {
@@ -55231,7 +62663,7 @@
    ],
    "currency": "USD",
    "event_name": "Unemployment Claims",
-   "n_releases": 148,
+   "n_releases": 149,
    "pairs": {
     "AUDUSD": {
      "abs_move_15min": {
@@ -55862,14 +63294,140 @@
       "p25": 6.1,
       "p75": 11.2
      }
+    },
+    "XAUUSD": {
+     "abs_move_15min": {
+      "median": 31.1,
+      "n": 105,
+      "p25": 19.6,
+      "p75": 52.8
+     },
+     "abs_move_1min": {
+      "median": 17.9,
+      "n": 105,
+      "p25": 9.0,
+      "p75": 27.8
+     },
+     "abs_move_30min": {
+      "median": 45.6,
+      "n": 97,
+      "p25": 21.9,
+      "p75": 95.9
+     },
+     "abs_move_5min": {
+      "median": 25.5,
+      "n": 105,
+      "p25": 12.3,
+      "p75": 50.0
+     },
+     "adverse_wick_5min": {
+      "median": 7.1,
+      "n": 104,
+      "p25": 1.3,
+      "p75": 19.8,
+      "p80": 21.6,
+      "p90": 31.9
+     },
+     "beat_currency_up_5min": {
+      "n": 34,
+      "rate": 0.21
+     },
+     "by_regime": {
+      "cutting": {
+       "abs_move_5min": {
+        "median": 36.6,
+        "n": 35,
+        "p25": 18.2,
+        "p75": 62.1
+       },
+       "beat_currency_up_5min": {
+        "n": 9,
+        "rate": 0.44
+       },
+       "miss_currency_down_5min": {
+        "n": 19,
+        "rate": 0.32
+       },
+       "n": 35
+      },
+      "hiking": {
+       "abs_move_5min": {
+        "median": 21.7,
+        "n": 20,
+        "p25": 15.6,
+        "p75": 32.0
+       },
+       "beat_currency_up_5min": {
+        "n": 5,
+        "rate": 0.4
+       },
+       "miss_currency_down_5min": {
+        "n": 15,
+        "rate": 0.2
+       },
+       "n": 20
+      },
+      "hold": {
+       "abs_move_5min": {
+        "median": 27.4,
+        "n": 50,
+        "p25": 11.0,
+        "p75": 48.5
+       },
+       "beat_currency_up_5min": {
+        "n": 20,
+        "rate": 0.05
+       },
+       "miss_currency_down_5min": {
+        "n": 26,
+        "rate": 0.38
+       },
+       "n": 50
+      }
+     },
+     "continuation_5to30": {
+      "n": 96,
+      "rate": 0.65
+     },
+     "fade_pre_drift": {
+      "n": 89,
+      "rate": 0.63
+     },
+     "favorable_run_30min": {
+      "median": 74.9,
+      "n": 93,
+      "p25": 45.1,
+      "p75": 127.4,
+      "p80": 153.1,
+      "p90": 200.9
+     },
+     "favorable_run_5min": {
+      "median": 41.9,
+      "n": 104,
+      "p25": 28.9,
+      "p75": 64.0,
+      "p80": 74.6,
+      "p90": 100.0
+     },
+     "miss_currency_down_5min": {
+      "n": 60,
+      "rate": 0.32
+     },
+     "n": 105,
+     "range_5min": {
+      "median": 53.9,
+      "n": 105,
+      "p25": 38.5,
+      "p75": 76.5
+     }
     }
    },
    "span": [
     "2021-01",
-    "2026-06"
+    "2026-07"
    ],
-   "surprise_sigma": 16955.5765,
-   "surprise_sigma_n": 141
+   "surprise_sigma": 16895.8383,
+   "surprise_sigma_n": 142
   }
  }
 }

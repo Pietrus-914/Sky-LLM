@@ -64,6 +64,43 @@ docker compose up -d --build   # wymaga Docker Desktop z autostartem
 6. W zakładce Experts (Toolbox) sprawdź log EA: powinno być połączenie z serwerem
    bez błędu 4014 (jeśli jest 4014 → wróć do punktu 2).
 
+### Instrumenty nie-FX (od 17.08.2026): 5. wykres XAUUSD + routing eventów
+
+Ta sama teza newsowa, inny instrument: eventy USD można kierować na **złoto
+(XAUUSD)** — reaguje w % tak samo jak pary FX, a spread to 2-8% ruchu zamiast
+40-100%. Mechanika: `python/instrument_profiles.py` (profil = jednostka pipsa
+i klampy per instrument; **XAUUSD: 1 pip = $0.10**), routing w panelu
+(Event Config → *Instrument Routing*, np. `USD:XAUUSD`) albo env
+`SKYTOWER_INSTRUMENT_ROUTING`. Serwer bierze pierwszy instrument z listy,
+którego wykres pcha świeże dane (≤30 min); brak danych = dotychczasowa para FX.
+
+1. Otwórz wykres **XAUUSD** i podepnij **SkyTowerAI_EA** (wymaga binarki
+   ≥ 17.08.2026 — patrz „Po zmianach w EA"). Inputy TYLKO na tym wykresie:
+   - `InpPipSizeOverride = 0.10` (**obowiązkowe** — musi równać się `pip_size`
+     profilu; bez tego EA liczy spread w centach i blokuje każde wejście)
+   - `InpMaxSpreadPips = 15` ($1.50; twardy limit EA to <15 pipsów w tej jednostce)
+   - `InpEmergencySpreadPips = 40` ($4.00)
+   - `InpSlippage = 30` (punkty = $0.30)
+   - `InpMaxMarginUsePercent = 50` (złoto u Purple ma dźwignię 1:100 — bez capu
+     lot wyliczony z SL może przekroczyć wolny margin → retcode 10019)
+   - strefy (`InpUseZoneIndicator`/`InpUseZoneBiasForDirection`) OFF
+   Na wykresach FX inputy zostają domyślne (`InpPipSizeOverride=0`,
+   `InpMaxMarginUsePercent=0`) — zachowanie bit w bit jak wcześniej.
+2. Po podpięciu odczytaj w logu Experts linię **`SkyTower SPEC:`** — digits,
+   point, efektywny pip, contract size, margin za 1 lot, spread. Jeśli
+   `pip=` nie równa się 0.10 → popraw input. Wartości contract size / margin
+   wpisz do notatek profilu, jeśli różnią się od założeń.
+3. Włącz routing dopiero po tym: panel → *Instrument Routing* → `USD:XAUUSD`
+   → Zapisz. Karta pokazuje na żywo, czy XAUUSD ma świeże dane z EA.
+   Bez EA na wykresie XAUUSD routing jest bezpiecznym no-op.
+4. Dry-run: `SKYTOWER_FAKE_EVENT_IN_SECONDS=240` (event USD) — sygnał trafi na
+   `?pair=XAUUSD`, wykres FX dostanie „Not selected". Po teście USUŃ linię z .env.
+
+Statystyki dla złota już są w `knowledge/learned_stats.json` (bloki `XAUUSD`
+dla eventów USD 2023-26, 4 721 ścieżek z HistData) — prompt dostaje sekcję
+INSTRUMENT (jednostki, zakresy SL/TP w pipsach 0.10 $, semantyka kierunku:
+niespodzianka pro-USD ⇒ SELL XAUUSD).
+
 ## KROK 3 — Weryfikacja obiegu danych (po ~2 minutach)
 
 ```powershell

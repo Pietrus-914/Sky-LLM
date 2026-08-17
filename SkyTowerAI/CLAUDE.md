@@ -47,6 +47,7 @@ SkyTowerAI/
 │   ├── zone_analyzer.py          # Liquidity pools / FVG / order blocks
 │   ├── target_calculator.py      # TP/SL targets from zones
 │   ├── trading_units.py          # Centralized pip/volume units (gpt_review Stage 2)
+│   ├── instrument_profiles.py    # Non-forex CFD units/clamps (XAUUSD 1 pip=$0.10, GER40/US500 points); forex = None
 │   ├── timeutil.py               # UTC helpers (utcnow, to_naive_utc, utc_epoch)
 │   ├── llm_util.py               # LLM plumbing
 │   ├── mt5_data_exporter.py      # MT5 data export utility
@@ -102,6 +103,7 @@ LLM access is via **OpenRouter** (`OPENROUTER_API_KEY` in `python/.env` — NEVE
 | `SKYTOWER_FAKE_EVENT_IN_SECONDS` | unset | Dry-run: inject synthetic event (reactions get `test:true`); REMOVE after test! |
 | `SKYTOWER_EXTRA_EVENTS` | unset | Extra event names for the whitelist |
 | `SKYTOWER_TRADE_ALL_EVENTS` | `false` | ON = trade every event ≥ MIN_IMPACT (whitelist ignored); panel switch, persisted |
+| `SKYTOWER_INSTRUMENT_ROUTING` | unset (OFF) | Event → instrument routing, e.g. `USD:XAUUSD;GBP:XAUUSD,GBPUSD` — first routed symbol whose EA chart pushes fresh data claims USD/GBP decisions; panel card outranks env (persisted `instrument_routing`). Non-forex symbols need a profile in `instrument_profiles.py` and `InpPipSizeOverride` on the EA chart |
 | `SKYTOWER_PROFIT_PROTECTION_PERCENT` | `50` | Profit-protection: close on ≥X% drop from peak (range 10-95; out-of-range values fall back with a WARNING) |
 | `SKYTOWER_PROFIT_PROTECTION_FLOOR_PCT` | `30` | Profit-protection arms only once peak ≥ X% of `max_loss_usd` (range 5-200, min $10) |
 | `SKYTOWER_PROFIT_PROTECTION_GRACE_SECONDS` | `120` | No profit-protection closes this long after open (range 0-600) |
@@ -153,6 +155,7 @@ EA confidence gate: `InpMinConfidence` (0.5); `forced:true` signals bypass it.
 | `/api/regimes` | GET/POST | Auto regimes per currency; POST = manual override |
 | `/api/calibration` | GET | Calibration ledger |
 | `/api/config/risk` | GET/POST | Panel-owned risk limits (persisted) |
+| `/api/config/routing` | GET/POST | Event → instrument routing table + live per-symbol data freshness (persisted) |
 | `/api/datasources/status` | GET | Health of calendar/COT/sentiment sources |
 | `/api/targets` | POST | Zone-based TP/SL targets (EA at position open) |
 | `/api/trade-executed` | POST | Fallback trade notification (also counts toward daily limit) |

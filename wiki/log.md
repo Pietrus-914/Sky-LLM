@@ -409,3 +409,31 @@ historii dealów przy wygaśnięciu okna pendingOpen — do osobnej rundy.
 Obalone przez weryfikatorów (nie są bugami): "katastrofa niespełnialna przy
 produkcyjnych lotach", "gorszy drugi raport kasuje potwierdzenie", "testy
 nie pinują semantyk", "renderer 30-min bez sufitu".
+
+## 2026-08-17 INGEST | Multi-instrument: profile instrumentów + routing eventów USD na XAUUSD
+
+Źródło: branch `feature/multi-instrument` (e312e37 profile/szwy, 91c1413 EA,
+e787417 routing + prompt + panel), `SkyTowerAI/research/DAX_OPEN_PLAN.md`
+(§0-9 DAX open, §10 alternatywy).
+
+Co się zmieniło: nowy `instrument_profiles.py` (XAUUSD 1 pip=$0.10, GER40/US500
+1 pkt; forex → None), hook w `forex_pip_size` (jedyny punkt), klampy silnika per
+instrument, guardraile/exit engine/recorder/kalibracja przez `profile_value`,
+routing `INSTRUMENT_ROUTING` (env + panel + `/api/config/routing`) w
+`_build_market_context_for_event` (świeże dane EA decydują), sekcja INSTRUMENT
+w prompcie tylko dla nie-FX, EA: `InpPipSizeOverride`, print SPEC, root-guard,
+cap marginu (default 0). Wiedza: +4 721 ścieżek XAUUSD (HistData 2023-26) →
+`learned_stats.json` ma bloki XAUUSD dla eventów USD.
+
+Dlaczego: research pokazał, że otwarcie DAX 09:00 nie ma katalizatora
+informacyjnego (kierunek 50/50), a największą słabością tezy newsowej na FX jest
+koszt (spread 40-100% ruchu); złoto/US500 na tych samych eventach USD kosztują
+2-8% ruchu. Routing zachowuje pipeline i wzajemne wykluczanie (1 slot, 1
+pozycja) — więcej instrumentów = więcej eventów opłacalnych, nie więcej
+równoległych pozycji.
+
+Strony: nowa `pages/multi-instrument.md`; `index.md`; `documentation-map.md`
+(wiersz DAX_OPEN_PLAN); RUNBOOK (sekcja „Instrumenty nie-FX"), CLAUDE.md (env,
+endpoint, drzewo). Testy: 842 zielone (+101), 2 znane wstępne w test_config.
+Nie wdrożone: binarka EA do datafolderów terminala (krok operatora), włączenie
+routingu w panelu (decyzja operatora po odczycie SPEC).
