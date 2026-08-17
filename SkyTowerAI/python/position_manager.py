@@ -17,6 +17,7 @@ from loguru import logger
 from config import POSITION_MANAGEMENT_CONFIG
 from position_store import PositionStore, PositionStoreError
 from trading_units import forex_pip_size
+from instrument_profiles import profile_value
 
 
 # How many EA report samples the exit model gets to see. At the 5-15s report
@@ -1165,7 +1166,8 @@ class PositionManager:
 
             # 3. Determine if LLM call is needed — prepare snapshot UNDER lock
             now = time.time()
-            llm_interval = self.config.get("llm_check_interval_seconds", 30)
+            llm_interval = profile_value(self.position.symbol, "exit_llm_interval_seconds",
+                                         self.config.get("llm_check_interval_seconds", 30))
             if (now - self.last_llm_check >= llm_interval
                     and self.exit_engine is not None
                     and not self._llm_inflight):
@@ -1388,8 +1390,10 @@ class PositionManager:
                 reason=f"Safety: max loss ${max_loss} exceeded (P/L: ${total_pnl:.2f})",
             )
 
-        # Max hold time
-        max_hold = self.config.get("max_hold_minutes", 30)
+        # Max hold time. Non-forex instruments may declare their own hold
+        # horizon in instrument_profiles; forex keeps the panel/global value.
+        max_hold = profile_value(pos.symbol, "max_hold_minutes",
+                                 self.config.get("max_hold_minutes", 30))
         minutes_open = (utcnow() - pos.open_time).total_seconds() / 60
         if minutes_open >= max_hold:
             logger.warning(f"GUARDRAIL: Max hold time {max_hold}min reached. "
@@ -1407,7 +1411,10 @@ class PositionManager:
         # spiked bid/ask, turning a transient quoting artifact into a realized
         # loss. Require CONFIRMATION on a second consecutive report unless the
         # spread is catastrophic (>= 2x), where waiting is the bigger risk.
-        emergency_spread = self.config.get("emergency_spread_pips", 15)
+        # (spread_pips is reported by the EA in the SAME unit the server uses
+        # for the symbol — forex pips, or the instrument profile's pip_size.)
+        emergency_spread = profile_value(pos.symbol, "emergency_spread_pips",
+                                         self.config.get("emergency_spread_pips", 15))
         if pos.spread_pips >= emergency_spread:
             self._spread_breaches += 1
             catastrophic = pos.spread_pips >= emergency_spread * 2
@@ -1457,7 +1464,9 @@ class PositionManager:
         # un-booked cost left is the remaining leg's exit (~$2.5/lot), so
         # keeping the original-lots cushion would double-count and park the
         # guardrail in a dead band exactly on the AI-runner trades.
-        cushion_usd = COMMISSION_CUSHION_USD_PER_LOT * (
+        cushion_per_lot = profile_value(pos.symbol, "commission_cushion_usd_per_lot",
+                                        COMMISSION_CUSHION_USD_PER_LOT)
+        cushion_usd = cushion_per_lot * (
             pos.remaining_lots if pos.remaining_lots > 0 else pos.lots)
         armed = (pos.max_profit_usd >= floor_usd
                  and (utcnow() - pos.open_time).total_seconds() >= grace_s)

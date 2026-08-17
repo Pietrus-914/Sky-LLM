@@ -9,13 +9,26 @@ from __future__ import annotations
 
 import math
 
+from instrument_profiles import profile_for
+
 
 def normalize_symbol(symbol: str) -> str:
     return "".join(ch for ch in str(symbol).upper() if ch.isalpha())[:6]
 
 
 def forex_pip_size(symbol: str) -> float:
-    """Return the conventional pip price for a six-letter FX symbol."""
+    """Return the pip price for a symbol.
+
+    Non-forex CFDs (gold, indices) declare their own unit in
+    ``instrument_profiles`` — this is the single choke point every server-side
+    pip computation goes through (market_context, position_manager, exit
+    engine, path recorder, zone/target via pips_to_price), so the profile hook
+    lives HERE and nowhere else. Forex pairs have no profile and keep the
+    conventional rule: 0.0001, or 0.01 for JPY quotes.
+    """
+    profile = profile_for(symbol)
+    if profile is not None:
+        return float(profile.pip_size)
     normalized = normalize_symbol(symbol)
     return 0.01 if len(normalized) >= 6 and normalized[3:6] == "JPY" else 0.0001
 

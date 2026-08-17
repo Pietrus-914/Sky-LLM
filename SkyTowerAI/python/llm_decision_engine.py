@@ -100,6 +100,16 @@ class LLMDecisionEngine:
     Makes trading decisions based on combined analysis
     """
 
+    # Contract ranges the LLM's numeric fields are clamped to before they can
+    # reach the EA (forex defaults; documented in the SYSTEM_PROMPT schema).
+    # A non-forex instrument (gold, indices) supplies its own ranges via
+    # instrument_profiles — see _limits_for(). Kept as class attributes so the
+    # values are pinnable in tests and overridable by a subclass.
+    LOT_MAX = 85
+    EXIT_RANGE = (5, 15)          # exit_minutes
+    SL_RANGE = (25.0, 80.0)       # stop_loss_pips
+    TP_RANGE = (8.0, 120.0)       # take_profit_pips
+
     # System prompt for the LLM
     SYSTEM_PROMPT = """You are an expert forex trading analyst specializing in news trading strategies.
 Your task is to analyze economic data and make trading decisions for the SkyTower-FX strategy.
@@ -1256,6 +1266,7 @@ decision in JSON format."""
             # SL/TP of 0 mean "not set" and are passed through for EA fallback.
             sl_pips = self._num(decision_data.get('stop_loss_pips'), 0)
             tp_pips = self._num(decision_data.get('take_profit_pips'), 0)
+            lim = self._limits_for(data_context.get('suggested_pair'))
             return TradingDecision(
                 event=event.event_name,
                 currency=event.currency,
@@ -1264,12 +1275,15 @@ decision in JSON format."""
                 confidence=self._num(decision_data.get('confidence'), 0.0, 0.0, 1.0),
                 model=str(self.model or ""),
                 prompt_version=ENTRY_PROMPT_VERSION,
-                lot_percent=int(self._num(decision_data.get('lot_percent'), 70, 0, 85)),
+                lot_percent=int(self._num(decision_data.get('lot_percent'), 70, 0, lim["lot_max"])),
                 entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
-                exit_minutes_after=int(self._num(decision_data.get('exit_minutes'), 10, 5, 15)),
+                exit_minutes_after=int(self._num(decision_data.get('exit_minutes'), 10,
+                                                 lim["exit"][0], lim["exit"][1])),
                 stop_loss_percent=self._num(decision_data.get('stop_loss_percent'), 40, 0, 100),
-                stop_loss_pips=sl_pips if sl_pips <= 0 else min(max(sl_pips, 25.0), 80.0),
-                take_profit_pips=tp_pips if tp_pips <= 0 else min(max(tp_pips, 8.0), 120.0),
+                stop_loss_pips=(sl_pips if sl_pips <= 0
+                                else min(max(sl_pips, lim["sl"][0]), lim["sl"][1])),
+                take_profit_pips=(tp_pips if tp_pips <= 0
+                                  else min(max(tp_pips, lim["tp"][0]), lim["tp"][1])),
                 reasoning=reasoning,
                 data_summary=data_context,
                 timestamp=utcnow(),
@@ -1449,6 +1463,7 @@ decision in JSON format."""
                                for v in src])
             tp = _median_pips([self._num(v["parsed"].get('take_profit_pips'), 0)
                                for v in src])
+            lim = self._limits_for(data_context.get('suggested_pair'))
             return TradingDecision(
                 event=event.event_name,
                 currency=event.currency,
@@ -1459,14 +1474,15 @@ decision in JSON format."""
                        else f"{self.model} x{k}"),
                 prompt_version=ENTRY_PROMPT_VERSION,
                 lot_percent=int(_median([self._num(v["parsed"].get('lot_percent'),
-                                                   70, 0, 85) for v in src])),
+                                                   70, 0, lim["lot_max"]) for v in src])),
                 entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
                 exit_minutes_after=int(_median([self._num(v["parsed"].get('exit_minutes'),
-                                                          10, 5, 15) for v in src])),
+                                                          10, lim["exit"][0], lim["exit"][1])
+                                                for v in src])),
                 stop_loss_percent=_median([self._num(v["parsed"].get('stop_loss_percent'),
                                                      40, 0, 100) for v in src]),
-                stop_loss_pips=sl if sl <= 0 else min(max(sl, 25.0), 80.0),
-                take_profit_pips=tp if tp <= 0 else min(max(tp, 8.0), 120.0),
+                stop_loss_pips=sl if sl <= 0 else min(max(sl, lim["sl"][0]), lim["sl"][1]),
+                take_profit_pips=tp if tp <= 0 else min(max(tp, lim["tp"][0]), lim["tp"][1]),
                 reasoning=reasoning,
                 data_summary=data_context,
                 timestamp=utcnow(),
@@ -1597,6 +1613,25 @@ decision in JSON format."""
         except Exception as e:
             logger.error(f"Ensemble aggregation error: {e}")
             return self._rule_based_decision(event, data_context)
+
+    def _limits_for(self, pair: Optional[str]) -> Dict:
+        """Numeric contract ranges for the instrument the decision is for.
+
+        Forex pairs (no instrument profile) get the class defaults — the exact
+        literals the clamps used before profiles existed. A non-forex CFD
+        (XAUUSD, GER40, ...) gets the ranges declared in instrument_profiles so
+        a gold stop of "$8" (80 pips at 1 pip = $0.10) is not squeezed into
+        the forex 25-80 window.
+        """
+        from instrument_profiles import profile_for
+        prof = profile_for(pair)
+        if prof is None:
+            return {"lot_max": self.LOT_MAX, "exit": self.EXIT_RANGE,
+                    "sl": self.SL_RANGE, "tp": self.TP_RANGE,
+                    "units": "pips"}
+        return {"lot_max": int(prof.lot_max), "exit": tuple(prof.exit_range),
+                "sl": tuple(prof.sl_range), "tp": tuple(prof.tp_range),
+                "units": prof.units_label}
 
     @staticmethod
     def _num(value, default, lo=None, hi=None):
