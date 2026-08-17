@@ -7,12 +7,13 @@ position within the daily range, and distances to recent extremes.
 
 Pure functions, no I/O — the server wires this into the decision pipeline.
 """
-import re
+
 import math
 from typing import Dict, List, Optional
 from datetime import datetime, timezone
 from timeutil import utcnow
 from trading_units import forex_pip_size
+from instrument_profiles import normalize_root
 
 
 def pip_size(pair: str) -> float:
@@ -35,8 +36,9 @@ def normalize_pair(pair: str) -> str:
     The EA resolves its broker's actual symbol (suffix, case) itself via
     ConvertPairToSymbol, so bare names are what must cross the wire.
     """
-    p = (pair or "").upper().replace("/", "")
-    return re.sub(r"[._\-].*$", "", p)
+    # Single root rule shared with instrument_profiles (profile_for) so the
+    # server can never resolve a symbol's PIP one way and its DATA another.
+    return normalize_root(pair)
 
 
 def _closes(bars: List[Dict]) -> List[float]:

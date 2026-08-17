@@ -20,9 +20,10 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'python'))
 
-import instrument_profiles as ip
 from instrument_profiles import (InstrumentProfile, profile_for, profile_value,
-                                 register, is_forex_root, normalize_root)
+                                 register, is_forex_root, normalize_root,
+                                 symbol_carries_currency, same_asset_class,
+                                 validate_routing_symbol)
 from trading_units import forex_pip_size, pips_to_price, price_to_pips
 from config import CURRENCY_PAIRS, TYPICAL_NEWS_SPREADS
 import llm_decision_engine as lde
@@ -74,14 +75,15 @@ class TestRegistry:
         with pytest.raises(ValueError):
             register(InstrumentProfile(
                 name="EURUSD", asset_class="metal", pip_size=1.0, units_label="x",
-                price_digits=2, quote_currency="USD", base_tag="EUR",
-                sl_range=(1, 2), tp_range=(1, 2)))
+                quote_currency="USD", base_tag="EUR",
+                sl_range=(1, 2), tp_range=(1, 2), default_sl_pips=1))
         assert profile_for("EURUSD") is None
 
     def test_profile_value_contract(self):
         # forex -> default; profile with field set -> value; field None -> default
         assert profile_value("NZDUSD", "max_hold_minutes", 30) == 30
-        assert profile_value("GER40", "max_hold_minutes", 30) == 90
+        # hold horizon stays panel-owned for every instrument (profiles inherit)
+        assert profile_value("GER40", "max_hold_minutes", 30) == 30
         assert profile_value("XAUUSD", "max_hold_minutes", 30) == 30      # None in profile
         assert profile_value("XAUUSD", "emergency_spread_pips", 15) == 40.0
         assert profile_value("XAUUSD", "no_such_field", "d") == "d"
@@ -252,15 +254,12 @@ class TestGuardrailsUseProfile:
         r = pm.update_position(_report(spread_pips=45.0))
         assert r["has_command"] and r["command"]["action"] == "CLOSE"
 
-    def test_dax_max_hold_from_profile(self, monkeypatch):
+    def test_dax_max_hold_is_panel_owned(self, monkeypatch):
+        # A profile may NOT extend the hold beyond the panel value (risk lives
+        # in the panel; the EA's InpMaxHoldMinutes is not coupled to profiles)
         pm = PositionManager(exit_engine=None)
         pm.on_position_opened(_pos_data("GER40", entry_price=18000.0, sl=17950.0))
-        pos = pm.position
-        pos.open_time = pos.open_time - timedelta(minutes=45)
-        # 45 min open: forex would close at 30, DAX profile allows 90
-        r = pm.update_position(_report(current_price=18010.0, sl=17950.0, spread_pips=2.0))
-        assert not (r and r.get("has_command") and "hold" in r["command"]["reason"].lower())
-        pos.open_time = pos.open_time - timedelta(minutes=50)   # now 95 min
+        pm.position.open_time = pm.position.open_time - timedelta(minutes=31)
         r = pm.update_position(_report(current_price=18010.0, sl=17950.0, spread_pips=2.0))
         assert r["has_command"] and r["command"]["action"] == "CLOSE" and "hold" in r["command"]["reason"].lower()
 
@@ -351,3 +350,112 @@ class TestCalibrationAndRecorder:
         assert set(usd) == {"NZDUSD", "USDCAD", "XAUUSD", "US500"}
         assert set(eur) == {"GER40", "EURJPY"}
         assert set(jpy) == {"EURJPY"}
+
+
+# ---------------------------------------------------------------------------
+# Asset-class helpers, routing validation, SL floor, system-prompt schema
+# ---------------------------------------------------------------------------
+
+class TestAssetClassHelpers:
+    def test_symbol_carries_currency(self):
+        assert symbol_carries_currency("XAUUSD.pro", "USD")
+        assert symbol_carries_currency("XAUUSD", "XAU")
+        assert not symbol_carries_currency("XAUUSD", "GBP")
+        assert symbol_carries_currency("GER40", "EUR") and not symbol_carries_currency("GER40", "USD")
+        assert symbol_carries_currency("USDCAD.pro", "CAD") and symbol_carries_currency("usd/cad", "USD")
+        assert not symbol_carries_currency("USDCAD", "NZD")
+        assert not symbol_carries_currency("", "USD") and not symbol_carries_currency("EURUSD", "")
+
+    def test_same_asset_class(self):
+        assert same_asset_class("NZDUSD", "USDCAD.pro")
+        assert same_asset_class("XAUUSD", "xauusd.pro")
+        assert not same_asset_class("XAUUSD", "NZDUSD")
+        assert not same_asset_class("XAUUSD", "US500")
+        assert not same_asset_class("GER40", "USDCAD")
+
+    def test_validate_routing_symbol(self):
+        assert validate_routing_symbol("XAUUSD", "USD") is None
+        assert validate_routing_symbol("usdcad", "USD") is None
+        assert "no instrument profile" in validate_routing_symbol("NAS100", "USD")
+        assert "does not carry" in validate_routing_symbol("XAUUSD", "GBP")
+        assert "does not carry" in validate_routing_symbol("NZDUSD", "GBP")
+        assert validate_routing_symbol("", "USD") == "empty symbol"
+
+
+class TestInstrumentSLFloor:
+    def test_rule_based_gold_decision_gets_profile_default_sl(self, tmp_path, monkeypatch):
+        engine = make_engine(tmp_path)
+        engine.client = None                       # rule-based path
+        monkeypatch.setattr(lde, "FORCE_DECISION", True)   # rule path must trade
+        d = engine.analyze_event(make_event(), {"pair": "XAUUSD"})
+        assert d.pair == "XAUUSD" and d.direction in ("BUY", "SELL")
+        assert d.stop_loss_pips == 80.0            # profile default $8, never the EA 25-pip default
+        assert "profile default" in d.reasoning
+
+    def test_forex_rule_based_keeps_sentinel(self, tmp_path, monkeypatch):
+        engine = make_engine(tmp_path)
+        engine.client = None
+        monkeypatch.setattr(lde, "FORCE_DECISION", True)
+        d = engine.analyze_event(make_event(), {"pair": "USDCAD"})
+        assert d.stop_loss_pips == 0               # forex contract unchanged (EA fallback)
+
+    def test_llm_gold_decision_without_sl_gets_floor(self, tmp_path, monkeypatch):
+        engine = make_engine(tmp_path)
+        monkeypatch.setattr(lde, "ENSEMBLE_K", 1)
+        monkeypatch.setattr(lde, "ENSEMBLE_MODELS", [])
+        monkeypatch.setattr(lde, "FORCE_DECISION", False)
+        engine._chat = lambda prompt: reply(sl=0, tp=0)
+        d = engine.analyze_event(make_event(), {"pair": "XAUUSD"})
+        assert d.stop_loss_pips == 80.0 and d.take_profit_pips == 0
+
+    def test_skip_is_left_alone(self, tmp_path):
+        engine = make_engine(tmp_path)
+        d = SimpleNamespace(direction="SKIP", pair="XAUUSD", stop_loss_pips=0, reasoning="x")
+        assert engine._enforce_instrument_floor(d).stop_loss_pips == 0
+
+
+class TestSystemPromptSchema:
+    def test_forex_system_prompt_unchanged_text(self, tmp_path):
+        engine = make_engine(tmp_path)
+        text = engine._system_prompt("USDCAD")
+        assert '"stop_loss_pips": 25 to 80 (wider for JPY pairs: 40-80),' in text
+        assert '"take_profit_pips": 8 to 120 (' in text
+        assert '"exit_minutes": 5 to 15,' in text
+        assert engine._system_prompt(None) == text
+
+    def test_gold_system_prompt_uses_profile_ranges(self, tmp_path):
+        engine = make_engine(tmp_path)
+        text = engine._system_prompt("XAUUSD.pro")
+        assert '"stop_loss_pips": 50 to 100 (pips (1 pip = $0.10 on XAUUSD)),' in text
+        assert '"take_profit_pips": 30 to 400 (' in text
+        assert "25 to 80" not in text
+
+    def test_chat_picks_ranges_from_active_pair(self, tmp_path, monkeypatch):
+        engine = make_engine(tmp_path)
+        seen = {}
+        engine.provider = "openrouter"
+
+        class _Resp:
+            choices = [SimpleNamespace(message=SimpleNamespace(content=reply(sl=90, tp=200)))]
+
+        class _Completions:
+            @staticmethod
+            def create(**kw):
+                seen["system"] = kw["messages"][0]["content"]
+                return _Resp()
+
+        class _Chat:
+            completions = _Completions()
+
+        class _Client:
+            chat = _Chat()
+
+        engine.client = _Client()
+        monkeypatch.setattr(lde, "ENSEMBLE_K", 1)
+        monkeypatch.setattr(lde, "ENSEMBLE_MODELS", [])
+        monkeypatch.setattr(lde, "FORCE_DECISION", False)
+        ctx = engine._gather_data(make_event(), {"pair": "XAUUSD"})
+        d = engine._llm_decision(make_event(), ctx)
+        assert "50 to 100" in seen["system"]
+        assert d.stop_loss_pips == 90.0
+        assert getattr(engine, "_active_pair", None) is None   # reset after the call

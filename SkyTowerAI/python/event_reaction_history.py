@@ -16,6 +16,7 @@ from threading import Lock
 from typing import Dict, List, Optional
 
 from loguru import logger
+from instrument_profiles import same_asset_class
 
 from market_context import pip_size
 
@@ -298,24 +299,32 @@ class EventReactionHistory:
                     f"{entry['surprise']} -> {entry['pair']} {entry['move_5min_pips']} pips/5min")
         return entry
 
-    def get_matching(self, event_name: str, currency: str, limit: int = 10) -> List[Dict]:
-        """Past reactions for the same (normalized) event + currency, newest first."""
+    def get_matching(self, event_name: str, currency: str, limit: int = 10,
+                     pair: Optional[str] = None) -> List[Dict]:
+        """Past reactions for the same (normalized) event + currency, newest
+        first. `pair` (the decision instrument) restricts the rows to the same
+        ASSET CLASS: forex reactions for a forex decision, only that
+        instrument's rows for a profiled instrument — pip magnitudes are not
+        comparable across the boundary. None = unfiltered (legacy callers)."""
         wanted = normalize_event_name(event_name)
         currency = (currency or '').upper()
         with self._lock:
             matches = [r for r in reversed(self._records)
                        if not r.get('test')
                        and r.get('currency') == currency
-                       and r.get('event_name_normalized') == wanted]
+                       and r.get('event_name_normalized') == wanted
+                       and (pair is None or same_asset_class(r.get('pair'), pair))]
         return matches[:limit]
 
-    def summarize(self, event_name: str, currency: str, limit: int = 4) -> Optional[str]:
+    def summarize(self, event_name: str, currency: str, limit: int = 4,
+                  pair: Optional[str] = None) -> Optional[str]:
         """
         One-line-per-release summary for the LLM prompt, e.g.:
         "2026-06-05 BEAT (actual 210K vs forecast 180K) -> EURUSD -41.5 pips/5min"
-        Returns None when there is no history yet.
+        Returns None when there is no history yet. `pair` = decision
+        instrument (asset-class filter, see get_matching).
         """
-        matches = self.get_matching(event_name, currency, limit)
+        matches = self.get_matching(event_name, currency, limit, pair=pair)
         if not matches:
             return None
 
@@ -333,7 +342,8 @@ class EventReactionHistory:
             lines.append(f"{date} {surprise}{detail} -> {r.get('pair', '?')} {move_txt}")
         return f"Last {len(lines)} '{event_name}' ({currency}) releases:\n" + "\n".join(lines)
 
-    def summarize_currency_fallback(self, currency: str, limit: int = 10) -> Optional[str]:
+    def summarize_currency_fallback(self, currency: str, limit: int = 10,
+                                    pair: Optional[str] = None) -> Optional[str]:
         """
         Currency-level behavior prior for events with no direct history yet
         (a first-time event name matches nothing in get_matching). Aggregates
@@ -347,7 +357,8 @@ class EventReactionHistory:
             usable = [r for r in reversed(self._records)
                       if not r.get('test')
                       and r.get('currency') == currency
-                      and r.get('move_5min_pips') is not None][:limit]
+                      and r.get('move_5min_pips') is not None
+                      and (pair is None or same_asset_class(r.get('pair'), pair))][:limit]
 
         if len(usable) < 3:
             return None

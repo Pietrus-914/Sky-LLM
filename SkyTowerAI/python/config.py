@@ -461,16 +461,58 @@ CURRENCY_REGIMES = {
 }
 
 
-def save_runtime_overrides(updates: dict):
-    """Merge updates into the overrides file (atomic write)."""
+# Import-time notes that must reach server.log (config.py has no logger yet;
+# print() is invisible on the 24/7 machine). server.py logs them at startup.
+CONFIG_NOTES: list = []
+
+
+def _note(msg: str) -> None:
+    CONFIG_NOTES.append(msg)
+    print(f"WARNING: {msg}")
+
+
+def _read_runtime_overrides() -> dict:
+    """The overrides file as a dict; {} when missing. A corrupt / non-dict
+    file must never take the server down at import, but it must not be
+    SILENT either: every consumer (risk limits, whitelist, models, routing)
+    would quietly revert to env/defaults — so it is reported via CONFIG_NOTES
+    and left in place (save_runtime_overrides moves it aside, never
+    overwrites it)."""
     import json
-    data = {}
+    if not os.path.exists(_OVERRIDES_FILE):
+        return {}
     try:
-        if os.path.exists(_OVERRIDES_FILE):
+        with open(_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        _note(f"runtime_overrides.json unreadable ({e.__class__.__name__}: {e}) — "
+              f"panel settings NOT applied, env/defaults in force: {_OVERRIDES_FILE}")
+        return {}
+    if not isinstance(data, dict):
+        _note(f"runtime_overrides.json is not a JSON object — ignored: {_OVERRIDES_FILE}")
+        return {}
+    return data
+
+
+def save_runtime_overrides(updates: dict):
+    """Merge updates into the overrides file (atomic write). An existing but
+    unparseable file is moved to *.corrupt-<timestamp> first so the operator's
+    previous panel state is preserved for inspection instead of being
+    replaced by a file holding only this one key."""
+    import json
+    data = _read_runtime_overrides()
+    if not data and os.path.exists(_OVERRIDES_FILE) and os.path.getsize(_OVERRIDES_FILE) > 0:
+        try:
             with open(_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-    except (OSError, ValueError):
-        data = {}
+                json.load(f)
+        except (OSError, ValueError):
+            from datetime import datetime as _dt
+            aside = f"{_OVERRIDES_FILE}.corrupt-{_dt.utcnow():%Y%m%d%H%M%S}"
+            try:
+                os.replace(_OVERRIDES_FILE, aside)
+                _note(f"corrupt runtime_overrides.json moved to {aside}")
+            except OSError:
+                pass
     data.update(updates)
     os.makedirs(os.path.dirname(_OVERRIDES_FILE), exist_ok=True)
     tmp = _OVERRIDES_FILE + '.tmp'
@@ -480,13 +522,8 @@ def save_runtime_overrides(updates: dict):
 
 
 def _apply_runtime_overrides():
-    import json
-    try:
-        if not os.path.exists(_OVERRIDES_FILE):
-            return
-        with open(_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except (OSError, ValueError):
+    data = _read_runtime_overrides()
+    if not data:
         return
     global MIN_IMPACT_LEVEL, TRADE_ALL_EVENTS
     global TIER1_EVENTS, TIER2_EVENTS, HIGH_IMPACT_EVENTS
@@ -608,14 +645,9 @@ def _apply_model_runtime_overrides():
     ENSEMBLE_MODELS exist, so these keys need their own late pass to keep
     the default < env < panel precedence. Junk in the file is ignored;
     validation mirrors the endpoint's."""
-    import json
     global ENSEMBLE_K, ENSEMBLE_MODELS
-    try:
-        if not os.path.exists(_OVERRIDES_FILE):
-            return
-        with open(_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except (OSError, ValueError):
+    data = _read_runtime_overrides()
+    if not data:
         return
     entry = data.get('entry_model')
     if isinstance(entry, str) and '/' in entry and entry.strip():
@@ -644,44 +676,92 @@ _apply_model_runtime_overrides()
 # EA chart has pushed FRESH market data wins; if none has data the flow is
 # exactly today's (DEFAULT_PAIRS + base-currency fallback). Why: the same USD
 # print moves gold/US500 as much as the forex pairs in %, at 2-8% of the move
-# in cost instead of 40-100% (research/DAX_OPEN_PLAN.md §10). Non-forex
-# symbols MUST have an instrument profile (instrument_profiles.py) and the EA
-# on that chart MUST run with the matching InpPipSizeOverride.
+# in cost instead of 40-100% (research/DAX_OPEN_PLAN.md §10). A routed symbol
+# must be a forex pair or a profiled instrument (instrument_profiles.py) AND
+# must carry the event currency as a leg — the same rule for env, the
+# overrides file and the panel endpoint (normalize_instrument_routing).
 #
-#   SKYTOWER_INSTRUMENT_ROUTING="USD:XAUUSD;GBP:XAUUSD,GBPUSD"
-#     -> {"USD": ["XAUUSD"], "GBP": ["XAUUSD", "GBPUSD"]}
+#   SKYTOWER_INSTRUMENT_ROUTING="USD:XAUUSD;NZD:NZDUSD"
+#     -> {"USD": ["XAUUSD"], "NZD": ["NZDUSD"]}
 #
 # Empty (default) = routing OFF = byte-identical behaviour. Panel-persisted
 # value (runtime_overrides.json key "instrument_routing") outranks env.
 
 
-def parse_instrument_routing(text: str) -> dict:
-    """'USD:XAUUSD;GBP:XAUUSD,GBPUSD' -> {'USD': ['XAUUSD'], 'GBP': [...]}.
-    Junk is dropped silently (never raises); symbols upper-cased, de-duped,
-    order preserved."""
+def normalize_instrument_routing(value, strict: bool = False) -> dict:
+    """Canonical routing table from a string ('USD:XAUUSD;NZD:NZDUSD') or a
+    dict ({'usd': ['xau/usd', 'USDCAD']} — symbol lists may also be
+    comma-separated strings). Currency keys upper 3-letter alpha; symbols
+    upper, '/' removed, de-duped, order preserved. Every symbol is validated
+    with instrument_profiles.validate_routing_symbol (forex pair or profiled
+    instrument, and it must carry the currency).
+
+    strict=False (env / overrides file): invalid keys/symbols are DROPPED and
+    reported via print (import time — no logger yet).
+    strict=True (panel endpoint): the first problem raises ValueError so the
+    operator sees exactly what was refused and nothing is applied.
+    """
+    from instrument_profiles import validate_routing_symbol
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        raw = {}
+        for chunk in value.split(";"):
+            if ":" not in chunk:
+                if chunk.strip() and strict:
+                    raise ValueError(f"routing chunk '{chunk.strip()}' is not CUR:SYM,SYM")
+                continue
+            cur, syms = chunk.split(":", 1)
+            raw.setdefault(cur, []).extend(syms.split(","))
+    elif isinstance(value, dict):
+        raw = {}
+        for cur, syms in value.items():
+            if isinstance(syms, str):
+                syms = syms.split(",")
+            if not isinstance(syms, (list, tuple)):
+                if strict:
+                    raise ValueError(f"{cur}: expected a list of symbols")
+                continue
+            raw[cur] = list(syms)
+    else:
+        if strict:
+            raise ValueError("instrument_routing: expected dict or string")
+        return {}
+
     out = {}
-    for chunk in str(text or "").split(";"):
-        if ":" not in chunk:
+    for cur, syms in raw.items():
+        cur_u = str(cur).strip().upper()
+        if len(cur_u) != 3 or not cur_u.isalpha():
+            if strict:
+                raise ValueError(f"bad currency key '{cur}'")
+            _note(f"instrument routing — bad currency key '{cur}' ignored")
             continue
-        cur, syms = chunk.split(":", 1)
-        cur = cur.strip().upper()
-        if len(cur) != 3 or not cur.isalpha():
-            continue
-        seen = []
-        for s in syms.split(","):
-            s = s.strip().upper().replace("/", "")
-            if s and s not in seen:
-                seen.append(s)
-        if seen:
-            out[cur] = seen
+        cleaned = []
+        for sym in syms:
+            sym_u = str(sym).strip().upper().replace("/", "")
+            if not sym_u or sym_u in cleaned:
+                continue
+            problem = validate_routing_symbol(sym_u, cur_u)
+            if problem:
+                if strict:
+                    raise ValueError(problem)
+                _note(f"instrument routing — {problem}; entry ignored")
+                continue
+            cleaned.append(sym_u)
+        if cleaned:
+            out[cur_u] = cleaned
     return out
 
 
-def routing_candidates(currency: str, routing: dict = None) -> list:
+def parse_instrument_routing(text: str) -> dict:
+    """Env-string form of normalize_instrument_routing (non-strict)."""
+    return normalize_instrument_routing(text, strict=False)
+
+
+def routing_candidates(currency: str) -> list:
     """Ordered instrument roots to try before DEFAULT_PAIRS for this currency
     (empty list = routing off for that currency)."""
-    table = INSTRUMENT_ROUTING if routing is None else routing
-    return list(table.get((currency or "").upper(), []) or [])
+    return list(INSTRUMENT_ROUTING.get((currency or "").upper(), []) or [])
 
 
 INSTRUMENT_ROUTING = parse_instrument_routing(os.getenv("SKYTOWER_INSTRUMENT_ROUTING", ""))
@@ -690,33 +770,10 @@ INSTRUMENT_ROUTING = parse_instrument_routing(os.getenv("SKYTOWER_INSTRUMENT_ROU
 def _apply_routing_runtime_overrides():
     """Panel-set routing table (endpoint /api/config/routing). Same late-pass
     pattern as the model overrides: default < env < panel."""
-    import json
     global INSTRUMENT_ROUTING
-    try:
-        if not os.path.exists(_OVERRIDES_FILE):
-            return
-        with open(_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return
-    value = data.get('instrument_routing')
-    if isinstance(value, dict):
-        cleaned = {}
-        for cur, syms in value.items():
-            if not (isinstance(cur, str) and len(cur) == 3 and cur.isalpha()):
-                continue
-            if not isinstance(syms, list):
-                continue
-            seen = []
-            for s in syms:
-                s = str(s).strip().upper().replace("/", "")
-                if s and s not in seen:
-                    seen.append(s)
-            if seen:
-                cleaned[cur.upper()] = seen
-        INSTRUMENT_ROUTING = cleaned
-    elif isinstance(value, str):
-        INSTRUMENT_ROUTING = parse_instrument_routing(value)
+    value = _read_runtime_overrides().get('instrument_routing')
+    if isinstance(value, (dict, str)):
+        INSTRUMENT_ROUTING = normalize_instrument_routing(value, strict=False)
 
 
 _apply_routing_runtime_overrides()

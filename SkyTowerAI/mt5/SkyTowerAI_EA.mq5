@@ -37,6 +37,8 @@ input bool     InpUseSpreadLotReduction = true;  // Reduce lot by spread level
 input group "=== Safety Settings ==="
 input double   InpMaxSpreadPips = 10.0;          // Max Spread (pips)
 input double   InpPipSizeOverride = 0.0;         // Pip size in price units (0 = auto forex rule; XAUUSD 0.10, GER40/US500 1.0)
+input double   InpMinSLPips = 20.0;              // SL sanity floor (pips of this chart's unit; profile ea_inputs)
+input double   InpMaxSLPips = 100.0;             // SL sanity ceiling (pips of this chart's unit)
 input bool     InpUseStopLoss = true;            // Use Stop Loss
 input double   InpDefaultSLPercent = 40.0;       // Default SL % of risk
 // NOTE: the daily trade limit lives ONLY on the server (dashboard →
@@ -559,6 +561,17 @@ int OnInit()
             ? DoubleToString(InpPipSizeOverride, 5) + " price units"
             : "0 (auto forex rule)",
          " -> effective pip ", DoubleToString(SkyPipSize(_Symbol), 5));
+
+   //--- SL sanity window must be a valid interval: fail CLOSED (like a
+   //--- missing max_loss_usd) instead of silently pinning every stop to one
+   //--- value when the operator inverts or zeroes the inputs.
+   if(InpMinSLPips <= 0.0 || InpMaxSLPips <= 0.0 || InpMinSLPips > InpMaxSLPips)
+   {
+      Print("CONFIG ERROR: InpMinSLPips/InpMaxSLPips invalid (",
+            DoubleToString(InpMinSLPips, 1), "/", DoubleToString(InpMaxSLPips, 1),
+            ") — need 0 < min <= max. EA not started.");
+      return(INIT_PARAMETERS_INCORRECT);
+   }
 
    //--- Generate unique magic number per symbol if auto mode
    g_magicNumber = InpMagicNumber;
@@ -1219,8 +1232,8 @@ void PushMarketData()
 
    string json = StringFormat(
       "{\"pair\":\"%s\",\"current_price\":%.5f,\"spread_points\":%d,"
-      "\"spread_pips\":%.2f,\"ohlc_multi\":{",
-      _Symbol, currentPrice, (int)spread, spreadPips);
+      "\"spread_pips\":%.2f,\"pip_size\":%.5f,\"ohlc_multi\":{",
+      _Symbol, currentPrice, (int)spread, spreadPips, SkyPipSize(_Symbol));
 
    string ohlcPart = "";
    AppendOhlcJson(ohlcPart, "M1", PERIOD_M1, 60);   // fine pre-news picture
@@ -1781,16 +1794,18 @@ void ExecuteEventTrade()
          Print("Invalid target stop replaced with 25-pip fallback");
       }
 
-      //--- Safety: Ensure SL is within reasonable bounds (20-100 pips)
+      //--- Safety: Ensure SL is within reasonable bounds (InpMinSLPips..InpMaxSLPips,
+      //--- default 20-100 pips; non-forex charts set the profile's ea_inputs)
       double slDistance = MathAbs(sl - entryPrice);
-      double minSL = SkyPipsToPrice(symbol, 20);
-      double maxSL = SkyPipsToPrice(symbol, 100);
+      double minSL = SkyPipsToPrice(symbol, InpMinSLPips);   // validated in OnInit
+      double maxSL = SkyPipsToPrice(symbol, InpMaxSLPips);
       double brokerMinSL =
          (double)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
       minSL = MathMax(minSL, brokerMinSL);
       if(minSL > maxSL)
       {
-         Print("Trade blocked: broker minimum stop exceeds 100 pips");
+         Print("Trade blocked: broker minimum stop exceeds InpMaxSLPips (",
+               DoubleToString(InpMaxSLPips, 1), " pips)");
          ResetEventWait();
          return;
       }
@@ -2282,7 +2297,7 @@ void ReportAndGetCommand(string symbol, double profit, double spreadPips)
       "\"lots\":%.2f,\"remaining_lots\":%.2f,"
       "\"sl\":%.5f,\"tp\":%.5f,"
       "\"profit_usd\":%.2f,\"realized_usd\":%.2f,\"tick_value\":%.4f,"
-      "\"spread_pips\":%.1f,\"account_balance\":%.2f,"
+      "\"spread_pips\":%.1f,\"pip_size\":%.5f,\"account_balance\":%.2f,"
       "\"zone_bias\":%.3f,\"nearest_resistance\":%.5f,\"nearest_support\":%.5f,"
       "\"max_loss_usd\":%.2f,\"open_time\":%I64d,"
       "\"event_name\":\"%s\",\"decision_id\":\"%s\","
@@ -2292,7 +2307,7 @@ void ReportAndGetCommand(string symbol, double profit, double spreadPips)
       g_originalLots, lots,
       sl, tp,
       profit, g_realizedPnL, tickValue,
-      spreadPips, balance,
+      spreadPips, SkyPipSize(symbol), balance,
       g_zoneBias, g_nearestLiqHigh, g_nearestLiqLow,
       g_maxLossUSD, openTimeUtc,
       EscapeJson(g_currentEventName), EscapeJson(g_tradeDecisionId),

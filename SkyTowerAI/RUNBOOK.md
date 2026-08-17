@@ -83,7 +83,15 @@ którego wykres pcha świeże dane (≤30 min); brak danych = dotychczasowa para
    - `InpSlippage = 30` (punkty = $0.30)
    - `InpMaxMarginUsePercent = 50` (złoto u Purple ma dźwignię 1:100 — bez capu
      lot wyliczony z SL może przekroczyć wolny margin → retcode 10019)
+   - `InpMinSLPips = 20`, `InpMaxSLPips = 100` (sanity SL w pipsach wykresu; dla
+     US500 wg profilu 8/60)
    - strefy (`InpUseZoneIndicator`/`InpUseZoneBiasForDirection`) OFF
+   EA (build ≥ 17.08 19:51) raportuje swój efektywny pip jako `pip_size` w każdym
+   pushu i raporcie; jeśli nie zgadza się z profilem ALBO go brak (stary build EA
+   na wykresie XAUUSD), serwer NIE kieruje decyzji na ten wykres i NIE serwuje
+   mu sygnału (log: „Unit mismatch", karta Instrument Routing: „ZŁA JEDNOSTKA").
+   Inputy `InpMinSLPips/InpMaxSLPips` muszą spełniać 0 < min ≤ max, inaczej EA
+   nie wystartuje (INIT_PARAMETERS_INCORRECT).
    Na wykresach FX inputy zostają domyślne (`InpPipSizeOverride=0`,
    `InpMaxMarginUsePercent=0`) — zachowanie bit w bit jak wcześniej.
 2. Po podpięciu odczytaj w logu Experts linię **`SkyTower SPEC:`** — digits,

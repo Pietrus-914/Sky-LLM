@@ -19,27 +19,32 @@ Contract
   every forex pair** — callers keep today's expression in the None branch, so
   the forex flow stays byte-identical:
 
-      prof = profile_for(pos.symbol)
-      max_hold = prof.max_hold_minutes if prof and prof.max_hold_minutes else <today>
+      max_hold = profile_value(pos.symbol, "max_hold_minutes", <today's value>)
 
-  ``profile_value(symbol, field, default)`` is the same thing in one call.
 * Units invariant: ``pip_size`` is what "1 pip" means ON THE WIRE for this
-  symbol (``stop_loss_pips``, ``spread_pips`` ...). The EA must be attached to
-  the chart with ``InpPipSizeOverride == pip_size`` (0 = its forex rule) so
-  both sides count the same unit. This is a documented convention, verified
-  at dry-run — not enforced at runtime (yet).
+  symbol (``stop_loss_pips``, ``spread_pips`` ...). The EA on that chart must
+  run with ``InpPipSizeOverride == pip_size`` (0 = its forex rule) and it
+  echoes its effective pip in every push/report as ``pip_size`` — the server
+  refuses to route to / serve a chart whose echo disagrees (see server.py
+  ``_unit_mismatch``).
+* Asset-class isolation: statistics, episodes, reaction summaries and
+  cross-pair briefs never mix a profiled instrument's magnitudes with forex
+  pips (``same_asset_class``). A profiled instrument only ever sees its own
+  blocks; forex prompts never see profiled symbols.
 * Zero project imports on purpose (this module sits BELOW trading_units,
-  which market_context imports) — the root normalisation duplicates
-  market_context.normalize_pair semantics deliberately.
+  which market_context imports). ``market_context.normalize_pair`` delegates
+  to ``normalize_root`` here so there is exactly one root rule.
 
-Adding an instrument = adding one entry to ``PROFILES``. Never register a
-forex pair here (guarded by ``_assert_not_forex``).
+Adding an instrument = adding one ``register(...)`` entry. Never register a
+forex pair (guarded). Values marked (verify) come from broker marketing pages
+and must be confirmed against the MT5 Symbol Specification / the EA's
+``SkyTower SPEC:`` OnInit print before the first live trade.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
 # ISO codes that identify a FOREX leg. A six-letter root whose both halves are
@@ -51,13 +56,20 @@ _FX_CODES = frozenset({
     "CNY", "RUB", "ILS", "THB", "INR", "KRW", "BRL",
 })
 
+_SUFFIX_RE = re.compile(r"[._\-].*$")
 
-def normalize_root(symbol: str) -> str:
+
+def normalize_root(symbol: Optional[str]) -> str:
     """``'xauusd.pro'`` -> ``'XAUUSD'``, ``'GER40.cash'`` -> ``'GER40'``,
-    ``'usd/cad'`` -> ``'USDCAD'`` (same rule as market_context.normalize_pair;
-    duplicated to keep this module import-free)."""
+    ``'usd/cad'`` -> ``'USDCAD'``. Single definition of the root rule
+    (market_context.normalize_pair delegates here)."""
     p = (symbol or "").upper().replace("/", "")
-    return re.sub(r"[._\-].*$", "", p)
+    return _SUFFIX_RE.sub("", p)
+
+
+def is_forex_root(symbol: Optional[str]) -> bool:
+    root = normalize_root(symbol)
+    return len(root) == 6 and root[:3] in _FX_CODES and root[3:6] in _FX_CODES
 
 
 @dataclass(frozen=True)
@@ -66,14 +78,15 @@ class InstrumentProfile:
     asset_class: str                # "metal" | "index" | "energy"
     pip_size: float                 # price units per 1 pip on the wire
     units_label: str                # human/LLM label, e.g. "pips (1 pip = $0.10)"
-    price_digits: int               # quote decimals for formatting
     quote_currency: str             # currency the P/L is denominated in
     base_tag: str                   # left leg for base/quote semantics ("XAU", "DAX")
-    sl_range: Tuple[float, float]   # LLM stop_loss_pips clamp
+    sl_range: Tuple[float, float]   # LLM stop_loss_pips clamp (must fit the EA chart's
+                                    # InpMinSLPips/InpMaxSLPips, see ea_inputs)
     tp_range: Tuple[float, float]   # LLM take_profit_pips clamp
+    default_sl_pips: float          # applied when a tradeable decision carries no SL
     exit_range: Tuple[int, int] = (5, 15)   # LLM exit_minutes clamp
     lot_max: int = 85
-    # None = keep the global/default value used by forex today
+    # None = keep the global/panel value used by forex today
     max_hold_minutes: Optional[int] = None
     emergency_spread_pips: Optional[float] = None
     typical_news_spread_pips: Optional[float] = None
@@ -85,27 +98,22 @@ class InstrumentProfile:
     exit_system_prompt: Optional[str] = None
     learning_tag: Optional[str] = None
     aliases: Tuple[str, ...] = ()
+    # Recommended EA inputs for the chart of this instrument (documentation
+    # rendered in the panel/RUNBOOK; the EA does not read this dict).
+    ea_inputs: Dict[str, float] = field(default_factory=dict)
     notes: str = ""
 
-    def clamp_sl(self, pips: float) -> float:
-        lo, hi = self.sl_range
-        return min(max(float(pips), lo), hi)
-
-    def clamp_tp(self, pips: float) -> float:
-        lo, hi = self.tp_range
-        return min(max(float(pips), lo), hi)
+    def carries_currency(self, currency: Optional[str]) -> bool:
+        """Is `currency` a leg (or the learning tag) of this instrument?"""
+        cur = (currency or "").upper()
+        return bool(cur) and cur in (self.quote_currency, self.base_tag, self.learning_tag)
 
 
 def _assert_not_forex(root: str) -> None:
-    if len(root) == 6 and root[:3] in _FX_CODES and root[3:6] in _FX_CODES:
+    if is_forex_root(root):
         raise ValueError(f"{root} is a forex pair — profiles are for non-forex CFDs only")
 
 
-# ---------------------------------------------------------------------------
-# Registry. Values marked (verify) come from broker marketing pages / desk
-# knowledge and must be confirmed against the MT5 Symbol Specification of the
-# account actually used before the first live trade on that instrument.
-# ---------------------------------------------------------------------------
 PROFILES: Dict[str, InstrumentProfile] = {}
 
 
@@ -123,88 +131,82 @@ def register(profile: InstrumentProfile) -> InstrumentProfile:
 # typical CPI/NFP stop of $8-10 reads as 80-100 pips and a $0.5-0.6 spread
 # as 5-6 pips — the same order of magnitude the forex prompt/clamps and the
 # EA gates were tuned for. Ranges from the 2023-26 M1 event study
-# (median |m30| ~$8-9 on CPI/NFP, MAE p75 ~$7.4, MFE median ~$14-16).
+# (median |m30| ~$8-9 on CPI/NFP, MAE p75 ~$7.4, MFE median ~$14-16) and
+# knowledge/learned_stats.json XAUUSD blocks.
 register(InstrumentProfile(
     name="XAUUSD",
     asset_class="metal",
     pip_size=0.10,
     units_label="pips (1 pip = $0.10 on XAUUSD)",
-    price_digits=2,
     quote_currency="USD",
     base_tag="XAU",
-    sl_range=(50.0, 100.0),          # $5 .. $10 — the EA's own SL sanity bound is
-                                     # 20-100 pips (EA:1786), so a wider server
-                                     # range would silently be cut there; widen
-                                     # BOTH sides together if gold noise demands it
+    sl_range=(50.0, 100.0),          # $5 .. $10 (EA chart: InpMinSLPips 20 default is
+                                     # below 50, InpMaxSLPips 100 default matches)
     tp_range=(30.0, 400.0),          # $3 .. $40
+    default_sl_pips=80.0,            # $8 — median CPI/NFP |m30| ~ $8-9
     exit_range=(5, 15),
-    lot_max=85,
-    max_hold_minutes=None,           # keep the global 30 min
     emergency_spread_pips=40.0,      # $4.00
     typical_news_spread_pips=12.0,   # ~$1.2 at the print (verify)
-    exit_llm_interval_seconds=None,
-    tp_sanity_band_pips=None,        # 500 pips = $50: fine as-is
     rule_be_buffer_pips=5.0,         # $0.50 instead of $0.10
     rule_trail_pips=30.0,            # $3 instead of $1
-    commission_cushion_usd_per_lot=None,
     learning_tag="XAU",
     aliases=("GOLD",),
-    notes="EA: InpPipSizeOverride=0.10, InpMaxSpreadPips~15 ($1.5), "
-          "InpEmergencySpreadPips~40, InpSlippage~30 pts ($0.30). Leverage 1:100 (verify).",
+    ea_inputs={"InpPipSizeOverride": 0.10, "InpMaxSpreadPips": 15, "InpEmergencySpreadPips": 40,
+               "InpSlippage": 30, "InpMaxMarginUsePercent": 50, "InpMinSLPips": 20,
+               "InpMaxSLPips": 100},
+    notes="Leverage 1:100 at Purple SC (verify). Spread ~$0.5-0.6 normal, widening at prints unmeasured.",
 ))
 
 # German index CFD. Quote in index points (1-2 decimals). 1 pip = 1 point.
+# max_hold / exit cadence deliberately inherit the panel/global values: a
+# per-instrument hold horizon needs the panel and the EA's InpMaxHoldMinutes
+# to agree, which v1 does not wire (see research/DAX_OPEN_PLAN.md).
 register(InstrumentProfile(
     name="GER40",
     asset_class="index",
     pip_size=1.0,
     units_label="index points (1 pip = 1.0 point on GER40)",
-    price_digits=1,
     quote_currency="EUR",
     base_tag="DAX",
-    sl_range=(20.0, 100.0),          # EA SL sanity bound 20-100 (see XAUUSD note)
+    sl_range=(20.0, 100.0),
     tp_range=(15.0, 250.0),
-    exit_range=(5, 30),
-    lot_max=85,
-    max_hold_minutes=90,
+    default_sl_pips=60.0,
+    exit_range=(5, 15),
     emergency_spread_pips=10.0,
     typical_news_spread_pips=4.0,    # 2.1-2.5 normal, widening at prints (verify)
-    exit_llm_interval_seconds=60,
-    tp_sanity_band_pips=None,
     rule_be_buffer_pips=2.0,
     rule_trail_pips=15.0,
-    commission_cushion_usd_per_lot=None,
     learning_tag="DAX",
     aliases=("DE40", "DAX40", "GER30", "DE30"),
-    notes="EA: InpPipSizeOverride=1.0, InpMaxSpreadPips~4, InpEmergencySpreadPips~10, "
-          "InpSlippage 300-500 pts. Leverage 1:100 at Purple SC (verify).",
+    ea_inputs={"InpPipSizeOverride": 1.0, "InpMaxSpreadPips": 4, "InpEmergencySpreadPips": 10,
+               "InpSlippage": 300, "InpMaxMarginUsePercent": 50, "InpMinSLPips": 20,
+               "InpMaxSLPips": 100},
+    notes="Leverage 1:100 at Purple SC (verify).",
 ))
 
-# S&P 500 index CFD. 1 pip = 1 index point.
+# S&P 500 index CFD. 1 pip = 1 index point. Stops of 8-19 points are only
+# honoured if the EA chart runs InpMinSLPips=8 (default 20 would widen them).
 register(InstrumentProfile(
     name="US500",
     asset_class="index",
     pip_size=1.0,
     units_label="index points (1 pip = 1.0 point on US500)",
-    price_digits=2,
     quote_currency="USD",
     base_tag="SPX",
     sl_range=(8.0, 60.0),
     tp_range=(6.0, 100.0),
-    exit_range=(5, 30),
-    lot_max=85,
-    max_hold_minutes=None,
+    default_sl_pips=20.0,
+    exit_range=(5, 15),
     emergency_spread_pips=5.0,
     typical_news_spread_pips=1.5,    # 0.4-0.7 normal (verify widening)
-    exit_llm_interval_seconds=None,
-    tp_sanity_band_pips=None,
     rule_be_buffer_pips=1.0,
     rule_trail_pips=8.0,
-    commission_cushion_usd_per_lot=None,
     learning_tag="SPX",
-    aliases=("SPX500", "US500.cash", "SP500"),
-    notes="EA: InpPipSizeOverride=1.0. Contract size $1 vs $10/pt UNVERIFIED — read "
-          "SYMBOL_TRADE_CONTRACT_SIZE before any live trade.",
+    aliases=("SPX500", "SP500"),
+    ea_inputs={"InpPipSizeOverride": 1.0, "InpMaxSpreadPips": 3, "InpEmergencySpreadPips": 5,
+               "InpSlippage": 100, "InpMaxMarginUsePercent": 50, "InpMinSLPips": 8,
+               "InpMaxSLPips": 60},
+    notes="Contract size $1 vs $10/pt UNVERIFIED — read SkyTower SPEC before any live trade.",
 ))
 
 
@@ -225,12 +227,47 @@ def profile_value(symbol: Optional[str], field_name: str, default):
     return default if value is None else value
 
 
-def is_forex_root(symbol: Optional[str]) -> bool:
+def symbol_carries_currency(symbol: Optional[str], currency: Optional[str]) -> bool:
+    """Does the symbol expose the event currency? Forex: the six-letter root
+    contains it as base or quote (unchanged rule). Profiled instrument: its
+    quote currency / base tag / learning tag."""
+    prof = profile_for(symbol)
+    if prof is not None:
+        return prof.carries_currency(currency)
     root = normalize_root(symbol)
-    return len(root) == 6 and root[:3] in _FX_CODES and root[3:6] in _FX_CODES
+    cur = (currency or "").upper()
+    return len(root) >= 6 and bool(cur) and cur in (root[:3], root[3:6])
+
+
+def same_asset_class(symbol_a: Optional[str], symbol_b: Optional[str]) -> bool:
+    """Forex <-> forex, or the SAME profiled instrument. Everything that pools
+    magnitudes across symbols (stats fallback, episodes, cross-pair briefs,
+    reaction averages) must pass this gate — a $0.10-pip gold number next to
+    a 0.0001-pip forex number is silently wrong either way."""
+    pa, pb = profile_for(symbol_a), profile_for(symbol_b)
+    if pa is None and pb is None:
+        return True
+    return pa is not None and pb is not None and pa.name == pb.name
+
+
+def validate_routing_symbol(symbol: Optional[str], currency: Optional[str]) -> Optional[str]:
+    """None if `symbol` may be routed for events of `currency`, else the
+    reason: the symbol must be a forex pair or a profiled instrument, AND the
+    currency must be one of its legs (a decision on an instrument that does
+    not carry the event currency has no direction semantics)."""
+    root = normalize_root(symbol)
+    if not root:
+        return "empty symbol"
+    if not is_forex_root(root) and profile_for(root) is None:
+        return (f"{root}: no instrument profile — add it to instrument_profiles.py "
+                f"before routing to it")
+    if not symbol_carries_currency(root, currency):
+        return f"{root} does not carry {str(currency).upper()} (base/quote) — cannot route"
+    return None
 
 
 __all__ = [
     "InstrumentProfile", "PROFILES", "register", "profile_for", "profile_value",
-    "normalize_root", "is_forex_root",
+    "normalize_root", "is_forex_root", "symbol_carries_currency", "same_asset_class",
+    "validate_routing_symbol",
 ]

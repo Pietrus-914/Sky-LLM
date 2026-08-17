@@ -24,9 +24,9 @@ oceny po TREŚCI, stan 2026-07-27.
 
 | Plik | Język | Rola | Stan |
 |------|-------|------|------|
-| [RUNBOOK.md](../../SkyTowerAI/RUNBOOK.md) | PL | Operacje krok po kroku, migracja 24/7, rekompilacja EA, learning loop ops | ✅ aktualny (nagłówek odświeżony 27.07: 588 testów, F0–F5) |
+| [RUNBOOK.md](../../SkyTowerAI/RUNBOOK.md) | PL | Operacje krok po kroku, migracja 24/7, rekompilacja EA, learning loop ops, instrumenty nie-FX (XAUUSD) | ✅ aktualny (17.08.2026: sekcja „Instrumenty nie-FX", inputy XAUUSD, routing) |
 | [research/DAX_OPEN_PLAN.md](../../SkyTowerAI/research/DAX_OPEN_PLAN.md) | PL | Analiza + plan: DAX na otwarciu 09:00 (odrzucony jako produkt), alternatywy na tezie newsowej (złoto/US500 na eventach USD), architektura profili instrumentów | ✅ 16.08.2026; wdrożenie: [multi-instrument.md](multi-instrument.md) |
-| [SkyTowerAI/CLAUDE.md](../../SkyTowerAI/CLAUDE.md) | EN | Główny kontekst projektu (wspólny dla agentów) | ✅ przepisany 27.07: natywny start, OpenRouter, panel ryzyka, realne drzewo plików, pełne API, learning loop |
+| [SkyTowerAI/CLAUDE.md](../../SkyTowerAI/CLAUDE.md) | EN | Główny kontekst projektu (wspólny dla agentów) | ✅ 17.08.2026: 864 testów, branch multi-instrument, env SKYTOWER_INSTRUMENT_ROUTING, /api/config/routing, instrument_profiles.py w drzewie |
 | [DOCUMENTATION.md](../../SkyTowerAI/DOCUMENTATION.md) | PL | Dokumentacja techniczna (4.1) | ✅ odświeżona 27.07 (OpenRouter w .env, wskaźniki na CLAUDE.md, changelog 4.1); sekcja Smart Exit oznaczona jako historyczna |
 | [README.md](../../SkyTowerAI/README.md) | PL | Skrócony przegląd / landing | ✅ odświeżony 27.07 (4.1, START.bat, OpenRouter, pytest) |
 | [GPT_REVIEW_PLAN.md](../../SkyTowerAI/GPT_REVIEW_PLAN.md) | EN | Plan 4 etapów brancha `gpt_review` | ✅ aktywny; Stage 1–2 done (26.07) |

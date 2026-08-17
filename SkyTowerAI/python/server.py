@@ -10,6 +10,7 @@ import json
 import math
 import os
 import threading
+from typing import Optional
 import time
 from loguru import logger
 
@@ -19,6 +20,8 @@ from config import SERVER_CONFIG, TRADING_CONFIG, ZONE_CONFIG, EXIT_CONFIG, POSI
 # binding here would pin the import-time list (callers pass
 # event_keywords=None so calendar_fetcher reads it fresh).
 from config import CURRENCY_PAIRS, DEFAULT_PAIRS
+from instrument_profiles import profile_for
+from trading_units import forex_pip_size
 from market_context import (build_market_context, normalize_pair,
                             summarize_pair_brief, entry_age_seconds)
 from calendar_fetcher import CalendarAggregator
@@ -367,14 +370,12 @@ def config_models():
 @app.route('/api/config/routing', methods=['GET', 'POST'])
 def config_routing():
     """Event -> instrument routing (multi-instrument). GET returns the live
-    table plus which routed symbols currently have fresh EA data; POST sets
-    it (dict {"USD": ["XAUUSD"]} or string "USD:XAUUSD;GBP:XAUUSD,GBPUSD"),
-    persisted in runtime_overrides.json (default < env < panel). Symbols
-    that are not forex pairs must have an instrument profile — a POST naming
-    an unknown non-forex symbol is rejected, because the EA/server units for
-    it are undefined."""
+    table plus, per routed symbol, whether its EA chart has fresh data and
+    whether that chart's echoed pip unit matches the profile; POST sets the
+    table (dict {"USD": ["XAUUSD"]} or string "USD:XAUUSD;NZD:NZDUSD"),
+    validated by config.normalize_instrument_routing(strict=True) — the same
+    rule the env/file paths apply — and persisted (default < env < panel)."""
     import config as cfg
-    from instrument_profiles import profile_for, is_forex_root
 
     def _live_status():
         out = {}
@@ -382,13 +383,16 @@ def config_routing():
             for cur, syms in cfg.INSTRUMENT_ROUTING.items():
                 rows = []
                 for sym in syms:
-                    entry = _find_pair_data(market_data_reports, sym)
-                    age = _market_data_age_seconds(entry) if entry else None
+                    state = _routed_symbol_state(sym)
+                    prof = profile_for(sym)
                     rows.append({"symbol": sym,
-                                 "has_data": entry is not None,
-                                 "fresh": bool(entry) and age <= MARKET_DATA_MAX_AGE_SECONDS,
-                                 "age_seconds": int(age) if age is not None else None,
-                                 "profile": (profile_for(sym).name if profile_for(sym) else None)})
+                                 "has_data": state["entry"] is not None,
+                                 "fresh": state["fresh"],
+                                 "age_seconds": (int(state["age"]) if state["age"] is not None
+                                                 else None),
+                                 "unit_ok": state["unit_ok"],
+                                 "reported_pip_size": state["reported_pip"],
+                                 "profile": prof.name if prof else None})
                 out[cur] = rows
         return out
 
@@ -402,38 +406,10 @@ def config_routing():
     if 'instrument_routing' not in data:
         return jsonify({"status": "error",
                         "message": "instrument_routing missing"}), 400
-    raw = data['instrument_routing']
-    if isinstance(raw, str):
-        table = cfg.parse_instrument_routing(raw)
-    elif isinstance(raw, dict):
-        table = {}
-        try:
-            for cur, syms in raw.items():
-                cur_u = str(cur).strip().upper()
-                if len(cur_u) != 3 or not cur_u.isalpha():
-                    raise ValueError(f"bad currency key '{cur}'")
-                if isinstance(syms, str):
-                    syms = syms.split(',')
-                if not isinstance(syms, list):
-                    raise ValueError(f"{cur}: expected a list of symbols")
-                cleaned = []
-                for s in syms:
-                    s = str(s).strip().upper().replace('/', '')
-                    if s and s not in cleaned:
-                        cleaned.append(s)
-                if cleaned:
-                    table[cur_u] = cleaned
-        except (TypeError, ValueError, AttributeError) as e:
-            return jsonify({"status": "error", "message": str(e)}), 400
-    else:
-        return jsonify({"status": "error",
-                        "message": "instrument_routing: expected dict or string"}), 400
-    for cur, syms in table.items():
-        for s in syms:
-            if not is_forex_root(s) and profile_for(s) is None:
-                return jsonify({"status": "error",
-                                "message": f"{s}: no instrument profile — add it to "
-                                           f"instrument_profiles.py before routing to it"}), 400
+    try:
+        table = cfg.normalize_instrument_routing(data['instrument_routing'], strict=True)
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
     cfg.INSTRUMENT_ROUTING = table
     cfg.save_runtime_overrides({"instrument_routing": table})
     logger.info(f"Instrument routing set via dashboard (persisted): {table}")
@@ -1111,6 +1087,10 @@ def report_market_data():
                 "ohlc_multi": ohlc_multi,
                 "spread_points": data.get('spread_points', 0),
                 "spread_pips": data.get('spread_pips'),
+                # EA >= 17.08.2026 echoes its effective pip (InpPipSizeOverride
+                # or the forex rule); the server refuses to route/serve a chart
+                # whose unit disagrees with instrument_profiles / the forex rule
+                "pip_size": data.get('pip_size'),
                 "updated_at": utcnow().isoformat()
             }
 
@@ -1156,27 +1136,90 @@ def _market_data_age_seconds(entry) -> float:
     return entry_age_seconds(entry)
 
 
+def _unit_mismatch(symbol: str, entry) -> bool:
+    """True when the EA on this chart reports a pip unit that disagrees with
+    the server's unit for the symbol (profile pip_size, or the forex rule).
+
+    Fail-closed for PROFILED instruments: an absent / zero / malformed echo on
+    XAUUSD, GER40, US500 can only mean an EA build without InpPipSizeOverride
+    (or a chart whose symbol info is not up yet) — i.e. a unit the server
+    cannot vouch for — so it counts as a mismatch. Forex pairs keep backward
+    compatibility with EA builds that echo nothing (None -> not checkable).
+    Relative tolerance 1% (float formatting)."""
+    if not entry:
+        return False
+    profiled = profile_for(symbol) is not None
+    reported = entry.get('pip_size')
+    try:
+        reported = float(reported) if reported is not None else None
+    except (TypeError, ValueError):
+        reported = None
+    if reported is None or reported <= 0:
+        return profiled
+    expected = forex_pip_size(symbol)
+    return abs(reported - expected) > 0.01 * expected
+
+
+# Tickets whose reports already raised a unit-mismatch error (log once)
+_unit_mismatch_reported = set()
+
+
+def _unit_check_label(symbol: str, entry) -> Optional[bool]:
+    """unit_ok for the panel: True/False when verifiable, None when the EA
+    echoes nothing on a FOREX chart (old build; not enforced there)."""
+    if not entry:
+        return None
+    reported = entry.get('pip_size')
+    if reported in (None, "", 0, 0.0) and profile_for(symbol) is None:
+        return None
+    return not _unit_mismatch(symbol, entry)
+
+
+def _routed_symbol_state(symbol: str) -> dict:
+    """{'entry','age','fresh','unit_ok','reported_pip'} for a routed symbol
+    from market_data_reports (caller holds market_data_lock). ONE definition
+    of 'fresh' for routing and for the panel card."""
+    entry = _find_pair_data(market_data_reports, symbol)
+    age = _market_data_age_seconds(entry) if entry else None   # inf when the stamp is missing
+    if age is not None and age == float('inf'):
+        age = None                                              # "unknown", never int(inf)
+    fresh = bool(entry) and age is not None and age <= MARKET_DATA_MAX_AGE_SECONDS
+    return {"entry": entry, "age": age, "fresh": fresh,
+            "unit_ok": _unit_check_label(symbol, entry),
+            "reported_pip": (entry or {}).get('pip_size')}
+
+
 def _pick_routed_market_entry(currency: str):
     """(symbol, market_entry) for the FIRST instrument in
     config.INSTRUMENT_ROUTING[currency] whose EA chart has pushed fresh
-    market data — or None (routing off / no routed chart alive), in which
-    case the caller keeps the DEFAULT_PAIRS flow untouched.
+    market data in the RIGHT unit — or None (routing off / no routed chart
+    alive / unit mismatch), in which case the caller keeps the DEFAULT_PAIRS
+    flow untouched.
 
     Exact root match only (normalize_pair): a routed non-forex symbol must
     never be satisfied by the base-currency fallback of _find_pair_data, and
-    a dead routed chart must never claim decision.pair (no EA would receive
-    the signal). Caller holds market_data_lock.
+    a dead or mis-configured chart must never claim decision.pair (no EA
+    would receive the signal, or would execute it in the wrong unit). Caller
+    holds market_data_lock.
     """
     import config as cfg
     for symbol in cfg.routing_candidates(currency):
-        entry = _find_pair_data(market_data_reports, symbol)
-        if entry is None:
+        state = _routed_symbol_state(symbol)
+        if state["entry"] is None:
             continue
-        if _market_data_age_seconds(entry) > MARKET_DATA_MAX_AGE_SECONDS:
+        if not state["fresh"]:
+            age_txt = (f"{int(state['age'] // 60)} min" if state["age"] is not None
+                       else "no timestamp")
             logger.info(f"Routed instrument {symbol} for {currency} has stale data "
-                        f"({int(_market_data_age_seconds(entry) // 60)} min) — skipping")
+                        f"({age_txt}) — skipping")
             continue
-        return normalize_pair(symbol), entry
+        if state["unit_ok"] is False:
+            logger.warning(f"Routed instrument {symbol} for {currency}: EA reports pip_size "
+                           f"{state['reported_pip']} but the server unit is "
+                           f"{forex_pip_size(symbol)} — chart mis-configured or EA build "
+                           f"without InpPipSizeOverride, skipping")
+            continue
+        return normalize_pair(symbol), state["entry"]
     return None
 
 
@@ -1320,11 +1363,18 @@ def _build_cross_pair_summaries(currency: str, exclude_pair: str, cap: int = 3):
     try:
         with market_data_lock:
             entries = [(key, dict(value)) for key, value in market_data_reports.items()]
+        decision_profile = profile_for(excluded)
         for key, entry in entries:
             norm = normalize_pair(key)
-            if norm == excluded or len(norm) < 6:
+            if norm == excluded:
                 continue
-            if currency not in (norm[:3], norm[3:6]):
+            # Only FOREX pairs carrying the currency: a profiled instrument
+            # (XAUUSD $0.10 pips) never appears in a forex prompt, and a
+            # profiled decision only sees forex briefs (labelled) — pip
+            # magnitudes are not comparable across the asset-class boundary
+            if profile_for(norm) is not None:
+                continue
+            if len(norm) < 6 or currency not in (norm[:3], norm[3:6]):
                 continue
             if _market_data_age_seconds(entry) > MARKET_DATA_MAX_AGE_SECONDS:
                 continue
@@ -1334,6 +1384,8 @@ def _build_cross_pair_summaries(currency: str, exclude_pair: str, cap: int = 3):
                 spread_pips=entry.get('spread_pips'),
             )
             if brief:
+                if decision_profile is not None:
+                    brief = f"{brief} [forex pips, not {decision_profile.name} pips]"
                 summaries.append(brief)
             if len(summaries) >= cap:
                 break
@@ -2002,6 +2054,30 @@ def get_mt5_signal():
                             "your_pair": requesting_pair
                         })
 
+                    # Units guard: the EA on this chart echoes its effective
+                    # pip in every market-data push. If it disagrees with the
+                    # server's unit for the symbol (profile pip_size / forex
+                    # rule), stop_loss_pips/take_profit_pips would be executed
+                    # in the wrong unit — refuse the signal and say why.
+                    with market_data_lock:
+                        chart_entry = _find_pair_data(market_data_reports, requesting_pair)
+                        mismatch = _unit_mismatch(requesting_pair, chart_entry)
+                    if mismatch:
+                        expected = forex_pip_size(requesting_pair)
+                        reported = chart_entry.get('pip_size')
+                        what = (f"EA reports pip_size {reported}" if reported
+                                else "EA does not echo pip_size (build without InpPipSizeOverride)")
+                        logger.error(f"Signal for {decision_pair} withheld: {what} vs server "
+                                     f"{expected} — set InpPipSizeOverride={expected:g} "
+                                     f"on that chart (EA build >= 17.08.2026)")
+                        return jsonify({
+                            "signal": False,
+                            "message": (f"Unit mismatch: {what} vs server {expected:g} — set "
+                                        f"InpPipSizeOverride on the {decision_pair} chart"),
+                            "selected_pair": decision_pair,
+                            "your_pair": requesting_pair,
+                        })
+
                 sl_pips = getattr(next_decision, 'stop_loss_pips', 0)
                 tp_pips = getattr(next_decision, 'take_profit_pips', 0)
                 raw_numbers = {
@@ -2380,6 +2456,22 @@ def position_report():
         data = request.json
         if not data:
             return jsonify({"has_command": False, "action": "HOLD"})
+
+        # Units guard on the report path too: the EA echoes its effective pip
+        # in every report; a disagreement with the server unit means BE/trail/
+        # MODIFY_TP distances would be computed in the wrong unit. Log once per
+        # ticket (loud), keep managing (CLOSE is unit-free) — see wiki
+        # multi-instrument "Niezmiennik jednostek".
+        _report_symbol = str(data.get('symbol') or '')
+        if _report_symbol and _unit_mismatch(_report_symbol, data):
+            _tkt = str(data.get('ticket'))
+            if _tkt not in _unit_mismatch_reported:
+                _unit_mismatch_reported.add(_tkt)
+                logger.error(f"Position {_tkt} on {_report_symbol}: EA pip_size "
+                             f"{data.get('pip_size')} disagrees with server unit "
+                             f"{forex_pip_size(_report_symbol)} — pip-denominated exit "
+                             f"commands may land at the wrong distance; fix "
+                             f"InpPipSizeOverride on that chart")
 
         # Update position and get command
         result = position_manager.update_position(data)
@@ -3170,6 +3262,13 @@ if __name__ == '__main__':
     import config as _cfg
     for _note in getattr(_cfg, "RISK_LIMIT_NOTES", []):
         logger.warning(f"RISK LIMIT CORRECTED: {_note}")
+    # Same idea for the instrument routing table: config drops invalid
+    # entries at import (env / overrides file) and only print()s about it —
+    # invisible on the 24/7 machine. Surface the notes and the EFFECTIVE table.
+    for _note in getattr(_cfg, "CONFIG_NOTES", []):
+        logger.warning(f"CONFIG NOTE: {_note}")
+    logger.info(f"EFFECTIVE INSTRUMENT ROUTING: {_cfg.INSTRUMENT_ROUTING or 'OFF'} "
+                f"(defaults < .env < dashboard panel)")
 
     # Initialize services
     init_services()

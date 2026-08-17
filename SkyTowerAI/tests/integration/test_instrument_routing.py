@@ -50,16 +50,19 @@ def make_bars(step_min, count, now_epoch, base=1.36, tick=0.0002):
     return bars
 
 
-def push(client, pair, base=1.36, tick=0.0002, age_seconds=0):
+def push(client, pair, base=1.36, tick=0.0002, age_seconds=0, pip_size=None):
     now_epoch = utc_epoch(utcnow()) - age_seconds
-    resp = client.post('/api/market-data', json={
+    payload = {
         "pair": pair,
         "ohlc_multi": {"M1": make_bars(1, 60, now_epoch, base, tick),
                        "M5": make_bars(5, 30, now_epoch, base, tick),
                        "M15": make_bars(15, 20, now_epoch, base, tick),
                        "H1": make_bars(60, 20, now_epoch, base, tick)},
         "spread_points": 25, "spread_pips": 2.5,
-    })
+    }
+    if pip_size is not None:
+        payload["pip_size"] = pip_size          # EA >= 17.08 echoes its effective pip
+    resp = client.post('/api/market-data', json=payload)
     assert resp.get_json()["status"] == "ok"
     if age_seconds:
         with server.market_data_lock:
@@ -121,18 +124,31 @@ def make_engine(tmp_path):
 
 class TestRoutingConfig:
     def test_parse_env_string(self):
-        assert cfg.parse_instrument_routing("USD:XAUUSD;GBP:XAUUSD,GBPUSD") == {
-            "USD": ["XAUUSD"], "GBP": ["XAUUSD", "GBPUSD"]}
+        assert cfg.parse_instrument_routing("USD:XAUUSD;NZD:NZDUSD,XAUUSD") == {
+            "USD": ["XAUUSD"], "NZD": ["NZDUSD"]}          # XAUUSD does not carry NZD -> dropped
         assert cfg.parse_instrument_routing("") == {}
         assert cfg.parse_instrument_routing("junk;;USD") == {}
         assert cfg.parse_instrument_routing("usd: xau/usd , xauusd") == {"USD": ["XAUUSD"]}
         assert cfg.parse_instrument_routing("USDX:XAUUSD") == {}
+        # non-strict paths (env/file) DROP unprofiled non-forex and non-leg symbols
+        assert cfg.parse_instrument_routing("USD:NAS100,XAUUSD") == {"USD": ["XAUUSD"]}
+        assert cfg.parse_instrument_routing("GBP:XAUUSD") == {}
+
+    def test_normalize_strict_raises(self):
+        with pytest.raises(ValueError, match="no instrument profile"):
+            cfg.normalize_instrument_routing({"USD": ["NAS100"]}, strict=True)
+        with pytest.raises(ValueError, match="does not carry"):
+            cfg.normalize_instrument_routing("GBP:XAUUSD", strict=True)
+        with pytest.raises(ValueError, match="bad currency key"):
+            cfg.normalize_instrument_routing({"US": ["XAUUSD"]}, strict=True)
+        assert cfg.normalize_instrument_routing({"usd": "xau/usd, USDCAD"}, strict=True) == {
+            "USD": ["XAUUSD", "USDCAD"]}
+        assert cfg.normalize_instrument_routing(None, strict=True) == {}
 
     def test_routing_candidates_reads_live_table(self, monkeypatch):
         monkeypatch.setattr(cfg, "INSTRUMENT_ROUTING", {"USD": ["XAUUSD"]})
         assert cfg.routing_candidates("usd") == ["XAUUSD"]
         assert cfg.routing_candidates("NZD") == []
-        assert cfg.routing_candidates("USD", {}) == []
 
     def test_default_is_off(self, monkeypatch):
         monkeypatch.delenv("SKYTOWER_INSTRUMENT_ROUTING", raising=False)
@@ -153,7 +169,7 @@ class TestRoutedMarketContext:
     def test_routed_symbol_with_fresh_data_wins(self, world, monkeypatch):
         monkeypatch.setattr(cfg, "INSTRUMENT_ROUTING", {"USD": ["XAUUSD"]})
         push(world.client, "USDCAD.pro")
-        push(world.client, "XAUUSD.pro", base=2400.0, tick=0.2)
+        push(world.client, "XAUUSD.pro", base=2400.0, tick=0.2, pip_size=0.10)   # configured chart
         ctx = server._build_market_context_for_event(usd_event())
         assert ctx["pair"] == "XAUUSD"
         # forex NZD event untouched by a USD-only routing table
@@ -182,7 +198,7 @@ class TestRoutedMarketContext:
         # 'USDJPY' pushed must never satisfy the routed 'US500' by prefix.
         monkeypatch.setattr(cfg, "INSTRUMENT_ROUTING", {"USD": ["US500", "XAUUSD"]})
         push(world.client, "USDJPY", base=150.0, tick=0.02)
-        push(world.client, "XAUUSD", base=2400.0, tick=0.2)
+        push(world.client, "XAUUSD", base=2400.0, tick=0.2, pip_size=0.10)
         assert server._pick_routed_market_entry("USD")[0] == "XAUUSD"
         monkeypatch.setattr(cfg, "INSTRUMENT_ROUTING", {"USD": ["US500"]})
         assert server._pick_routed_market_entry("USD") is None
@@ -288,3 +304,152 @@ class TestRoutingEndpoint:
         monkeypatch.setattr(cfg, "INSTRUMENT_ROUTING", {"USD": ["XAUUSD"]})
         r = world.client.post("/api/config/routing", json={"instrument_routing": {}})
         assert r.status_code == 200 and cfg.INSTRUMENT_ROUTING == {}
+
+
+# ---------------------------------------------------------------------------
+# Units invariant enforced at runtime (EA pip_size echo)
+# ---------------------------------------------------------------------------
+
+class TestUnitMismatchGuard:
+    def test_routing_skips_chart_with_wrong_pip(self, world, monkeypatch):
+        monkeypatch.setattr(cfg, "INSTRUMENT_ROUTING", {"USD": ["XAUUSD"]})
+        push(world.client, "USDCAD.pro", pip_size=0.0001)
+        push(world.client, "XAUUSD.pro", base=2400.0, tick=0.2, pip_size=0.01)   # override forgotten
+        assert server._pick_routed_market_entry("USD") is None
+        ctx = server._build_market_context_for_event(usd_event())
+        assert ctx["pair"] == "USDCAD"
+        # correct echo -> routed
+        push(world.client, "XAUUSD.pro", base=2400.0, tick=0.2, pip_size=0.10)
+        assert server._pick_routed_market_entry("USD")[0] == "XAUUSD"
+
+    def test_profiled_chart_without_echo_fails_closed(self, world, monkeypatch):
+        # An EA build that echoes nothing on a PROFILED chart cannot have the
+        # override -> unit unknown -> never routed to, never served
+        monkeypatch.setattr(cfg, "INSTRUMENT_ROUTING", {"USD": ["XAUUSD"]})
+        push(world.client, "XAUUSD.pro", base=2400.0, tick=0.2)                # no pip_size field
+        assert server._pick_routed_market_entry("USD") is None
+        live = world.client.get("/api/config/routing").get_json()["live"]["USD"][0]
+        assert live["unit_ok"] is False
+        monkeypatch.setattr(server, "position_manager", _PM())
+        monkeypatch.setattr(server, "next_decision", _gold_decision())
+        r = world.client.get("/api/signal?pair=XAUUSD.pro").get_json()
+        assert r["signal"] is False and "does not echo pip_size" in r["message"]
+
+    def test_forex_chart_without_echo_is_not_blocked(self, world, monkeypatch):
+        # forex keeps working with old EA builds (unit not verifiable -> None)
+        monkeypatch.setattr(cfg, "INSTRUMENT_ROUTING", {"NZD": ["NZDUSD"]})
+        push(world.client, "NZDUSD")
+        assert server._pick_routed_market_entry("NZD")[0] == "NZDUSD"
+        live = world.client.get("/api/config/routing").get_json()["live"]["NZD"][0]
+        assert live["unit_ok"] is None
+        monkeypatch.setattr(server, "position_manager", _PM())
+        d = _gold_decision(); d.pair = "NZDUSD"
+        monkeypatch.setattr(server, "next_decision", d)
+        assert world.client.get("/api/signal?pair=NZDUSD").get_json()["signal"] is True
+
+    def test_report_path_logs_unit_mismatch_once(self, world, monkeypatch, caplog):
+        from position_manager import PositionManager
+        pm = PositionManager(exit_engine=None)
+        monkeypatch.setattr(server, "position_manager", pm)
+        monkeypatch.setattr(server, "_unit_mismatch_reported", set())
+        opened = {"ticket": 77, "symbol": "XAUUSD", "direction": "BUY", "entry_price": 2400.0,
+                  "lots": 0.1, "sl": 2390.0, "tp": 0.0, "tick_value": 1.0, "account_balance": 5000.0,
+                  "event_name": "CPI m/m", "max_loss_usd": 100.0}
+        pm.on_position_opened(opened)
+        report = {"ticket": 77, "symbol": "XAUUSD", "current_price": 2401.0, "remaining_lots": 0.1,
+                  "sl": 2390.0, "tp": 0.0, "profit_usd": 5.0, "tick_value": 1.0,
+                  "account_balance": 5000.0, "spread_pips": 5.0, "pip_size": 0.01}
+        r1 = world.client.post("/api/position/report", json=report).get_json()
+        r2 = world.client.post("/api/position/report", json=report).get_json()
+        assert "has_command" in r1 and "has_command" in r2
+        assert 77 not in server._unit_mismatch_reported and "77" in server._unit_mismatch_reported
+
+    def test_signal_withheld_on_unit_mismatch(self, world, monkeypatch):
+        monkeypatch.setattr(server, "position_manager", _PM())
+        monkeypatch.setattr(server, "next_decision", _gold_decision())
+        push(world.client, "XAUUSD.pro", base=2400.0, tick=0.2, pip_size=0.01)
+        r = world.client.get("/api/signal?pair=XAUUSD.pro").get_json()
+        assert r["signal"] is False and "Unit mismatch" in r["message"]
+        assert server._last_served_signal is None
+        push(world.client, "XAUUSD.pro", base=2400.0, tick=0.2, pip_size=0.1)
+        r = world.client.get("/api/signal?pair=XAUUSD.pro").get_json()
+        assert r["signal"] is True
+
+    def test_forex_signal_withheld_when_forex_chart_reports_wrong_pip(self, world, monkeypatch):
+        monkeypatch.setattr(server, "position_manager", _PM())
+        d = _gold_decision()
+        d.pair = "USDCAD"
+        monkeypatch.setattr(server, "next_decision", d)
+        push(world.client, "USDCAD.pro", pip_size=0.001)          # someone set an override on FX
+        r = world.client.get("/api/signal?pair=USDCAD.pro").get_json()
+        assert r["signal"] is False and "Unit mismatch" in r["message"]
+        push(world.client, "USDCAD.pro", pip_size=0.0001)
+        assert world.client.get("/api/signal?pair=USDCAD.pro").get_json()["signal"] is True
+
+    def test_live_status_reports_unit_ok(self, world, monkeypatch):
+        monkeypatch.setattr(cfg, "INSTRUMENT_ROUTING", {"USD": ["XAUUSD"]})
+        push(world.client, "XAUUSD.pro", base=2400.0, tick=0.2, pip_size=0.01)
+        live = world.client.get("/api/config/routing").get_json()["live"]["USD"][0]
+        assert live["fresh"] is True and live["unit_ok"] is False and live["reported_pip_size"] == 0.01
+
+
+# ---------------------------------------------------------------------------
+# Asset-class isolation
+# ---------------------------------------------------------------------------
+
+class TestAssetClassIsolation:
+    def test_cross_pair_excludes_gold_from_forex_decision(self, world):
+        push(world.client, "USDCAD.pro")
+        push(world.client, "NZDUSD")
+        push(world.client, "XAUUSD.pro", base=2400.0, tick=0.2)
+        briefs = server._build_cross_pair_summaries("USD", "USDCAD")
+        assert briefs and all("XAUUSD" not in b for b in briefs)
+        assert any("NZDUSD" in b for b in briefs)
+
+    def test_cross_pair_for_gold_decision_labels_forex_units(self, world):
+        push(world.client, "USDCAD.pro")
+        push(world.client, "XAUUSD.pro", base=2400.0, tick=0.2)
+        briefs = server._build_cross_pair_summaries("USD", "XAUUSD")
+        assert briefs and all(b.endswith("[forex pips, not XAUUSD pips]") for b in briefs)
+
+    def test_learned_stats_fallback_never_crosses_asset_class(self, tmp_path):
+        engine = make_engine(tmp_path)
+        stats = {"_meta": {"schema_version": 1}, "bundle_alias": {},
+                 "events": {"USD|cpi m/m": {
+                     "currency": "USD", "event_name": "CPI m/m", "n_releases": 40,
+                     "span": ["2023-01", "2026-07"],
+                     "pairs": {"XAUUSD": {"n": 40, "abs_move_5min": {"median": 78.7, "n": 40}}}}}}
+        json.dump(stats, open(engine.learned_stats_file, "w"))
+        # forex decision must not be shown gold's block
+        assert engine._learned_stats_section("CPI m/m", "USD", "USDCAD") is None
+        # gold decision sees its own block
+        out = engine._learned_stats_section("CPI m/m", "USD", "XAUUSD.pro")
+        assert out is not None and "XAUUSD" in out[0]
+
+    def test_reaction_history_filters_by_asset_class(self, tmp_path):
+        from event_reaction_history import EventReactionHistory
+        h = EventReactionHistory(log_dir=str(tmp_path))
+        base = {"event_name": "CPI m/m", "event_name_normalized": "cpi m/m", "currency": "USD",
+                "surprise": "BEAT", "test": False, "move_1min_pips": 5.0}
+        h._records = [dict(base, pair="XAUUSD", move_5min_pips=-85.0, event_time="2026-08-12T12:30:00"),
+                      dict(base, pair="USDCAD", move_5min_pips=12.0, event_time="2026-07-15T12:30:00")]
+        fx = h.summarize("CPI m/m", "USD", pair="USDCAD")
+        assert "USDCAD" in fx and "XAUUSD" not in fx
+        gold = h.summarize("CPI m/m", "USD", pair="XAUUSD")
+        assert "XAUUSD" in gold and "USDCAD" not in gold
+        assert "USDCAD" in h.summarize("CPI m/m", "USD") and "XAUUSD" in h.summarize("CPI m/m", "USD")
+
+    def test_episodes_never_substitute_across_asset_class(self):
+        from episode_retrieval import find_similar_episodes
+        paths = [{"pair": "XAUUSD", "currency": "USD", "event_name_normalized": "cpi m/m",
+                  "event_time": "2026-07-15T12:30:00", "move_5min_pips": 617.3, "test": False,
+                  "regime": "hold"}]
+        assert find_similar_episodes(paths, "CPI m/m", "USD", "USDCAD", "hold") == []
+        assert len(find_similar_episodes(paths, "CPI m/m", "USD", "XAUUSD.pro", "hold")) == 1
+
+
+class TestRoutingEndpointValidation:
+    def test_post_rejects_non_leg_currency(self, world):
+        r = world.client.post("/api/config/routing", json={"instrument_routing": "GBP:XAUUSD"})
+        assert r.status_code == 400 and "does not carry" in r.get_json()["message"]
+        assert cfg.INSTRUMENT_ROUTING == {} and world.saved == []

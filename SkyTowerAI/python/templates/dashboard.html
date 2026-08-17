@@ -1095,7 +1095,7 @@
                 <h3>Instrument Routing (event → instrument)</h3>
                 <div class="config-row">
                     <label for="routingInput">Routing table</label>
-                    <input type="text" id="routingInput" placeholder="USD:XAUUSD;GBP:XAUUSD,GBPUSD"
+                    <input type="text" id="routingInput" placeholder="USD:XAUUSD;NZD:NZDUSD"
                            style="min-width:260px">
                     <button class="btn btn-small" id="btnSaveRouting" type="button">Zapisz</button>
                 </div>
@@ -1420,8 +1420,9 @@
                         <tr><td><b>InpEmergencySpreadPips</b></td><td>Awaryjne zamknięcie otwartej pozycji, gdy spread przekroczy X pipsów.</td><td>15</td></tr>
                         <tr><td><b>InpPushMarketData / InpReportReactions</b></td><td>Wysyłka świec do serwera (kontekst dla LLM) + raportowanie reakcji po evencie (baza wiedzy). Nie wyłączać.</td><td>true / true</td></tr>
                         <tr><td><b>InpPipSizeOverride</b></td><td>Od 17.08.2026. Definicja „pipsa" w jednostkach ceny dla instrumentów nie-FX: <b>XAUUSD = 0.10</b> (1 pip = $0.10), GER40/US500 = 1.0 (1 pkt). Musi równać się profilowi w <code>instrument_profiles.py</code> — inaczej EA liczy spread w centach i blokuje wejścia. Na wykresach FX zostaje 0 (reguła forex, zachowanie bez zmian). Sprawdź w logu Experts linię <code>SkyTower SPEC:</code>.</td><td>0 (FX) / 0.10 (XAUUSD)</td></tr>
+                        <tr><td><b>InpMinSLPips / InpMaxSLPips</b></td><td>Od 17.08.2026. Sanity-limity SL w pipsach jednostki wykresu (dawniej twarde 20-100). Na FX zostawić 20/100. Na instrumentach nie-FX ustawić wg <code>ea_inputs</code> profilu (XAUUSD 20/100, US500 8/60) — inaczej EA po cichu poszerzy/skróci SL względem decyzji serwera.</td><td>20 / 100</td></tr>
                         <tr><td><b>InpMaxMarginUsePercent</b></td><td>Cap lota wolnym marginem (OrderCalcMargin). 0 = brak capu (jak dotąd). Na złocie/indeksach (dźwignia 1:100 u Purple) ustaw ~50, inaczej lot z SL może przekroczyć wolny margin (retcode 10019 = brak wejścia).</td><td>0 (FX) / 50 (XAUUSD)</td></tr>
-                        <tr><td colspan="3" style="color:var(--text-muted)"><b>Wykres XAUUSD (5. wykres, opcjonalny):</b> InpPipSizeOverride=0.10, InpMaxSpreadPips=15 ($1.50), InpEmergencySpreadPips=40 ($4), InpSlippage=30, InpMaxMarginUsePercent=50, strefy OFF. Eventy USD trafiają na złoto dopiero po włączeniu routingu w karcie <b>Instrument Routing</b> (Event Config → <code>USD:XAUUSD</code>); bez świeżych danych z wykresu XAUUSD serwer zostaje przy parze FX. Szczegóły: RUNBOOK „Instrumenty nie-FX".</td></tr>
+                        <tr><td colspan="3" style="color:var(--text-muted)"><b>Wykres XAUUSD (5. wykres, opcjonalny):</b> InpPipSizeOverride=0.10, InpMaxSpreadPips=15 ($1.50), InpEmergencySpreadPips=40 ($4), InpSlippage=30, InpMaxMarginUsePercent=50, InpMinSLPips=20, InpMaxSLPips=100, strefy OFF. EA raportuje swój pip w każdym pushu (<code>pip_size</code>) — przy rozjeździe z profilem serwer NIE kieruje decyzji na ten wykres i NIE serwuje sygnału (karta Instrument Routing pokazuje „ZŁA JEDNOSTKA"). Eventy USD trafiają na złoto dopiero po włączeniu routingu w karcie <b>Instrument Routing</b> (Event Config → <code>USD:XAUUSD</code>); bez świeżych danych z wykresu XAUUSD serwer zostaje przy parze FX. Szczegóły: RUNBOOK „Instrumenty nie-FX".</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -2143,6 +2144,7 @@
             Object.keys(live).forEach(function(cur) {
                 var rows = live[cur].map(function(r) {
                     var st = r.fresh ? 'świeże dane' : (r.has_data ? 'dane nieświeże (' + Math.round((r.age_seconds||0)/60) + ' min)' : 'BRAK danych z EA');
+                    if (r.unit_ok === false) st += ', ZŁA JEDNOSTKA: EA pip ' + r.reported_pip_size + ' (popraw InpPipSizeOverride)';
                     return r.symbol + ' [' + st + (r.profile ? ', profil ' + r.profile : '') + ']';
                 });
                 lines.push(cur + ' → ' + rows.join(' → '));

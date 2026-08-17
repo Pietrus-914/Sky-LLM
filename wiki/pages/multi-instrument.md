@@ -1,6 +1,6 @@
 # Multi-instrument: profile instrumentów i routing event → instrument
 
-_Stan na 2026-08-17 (branch `feature/multi-instrument`, commity e312e37 → 91c1413 → e787417 + docs)._
+_Stan na 2026-08-17 (branch `feature/multi-instrument`, commity e312e37 → 91c1413 → e787417 → e7c4efb → runda review)._
 
 ## TL;DR
 
@@ -15,7 +15,7 @@ routing jest wyłączony (domyślnie).
 
 | Element | Plik | Rola |
 |---|---|---|
-| Rejestr profili | `python/instrument_profiles.py` | `InstrumentProfile` (jednostka pipsa na drucie, klampy SL/TP/exit/lot, max hold, spread awaryjny, spread newsowy, bufor BE/trail, prompt wyjść) dla **XAUUSD** (1 pip = $0.10), **GER40** i **US500** (1 pip = 1 pkt). `profile_for(symbol)` → `None` dla KAŻDEJ pary FX (`register()` odrzuca pary FX). Zero importów projektu. |
+| Rejestr profili | `python/instrument_profiles.py` | `InstrumentProfile` (jednostka pipsa na drucie, klampy SL/TP/exit/lot, `default_sl_pips`, spread awaryjny, spread newsowy, bufor BE/trail, prompt wyjść, `ea_inputs`) dla **XAUUSD** (1 pip = $0.10), **GER40** i **US500** (1 pip = 1 pkt). `profile_for(symbol)` → `None` dla KAŻDEJ pary FX (`register()` odrzuca pary FX). Helpery: `symbol_carries_currency`, `same_asset_class`, `validate_routing_symbol`, `normalize_root` (jedyna definicja rootu — `market_context.normalize_pair` deleguje tu). Zero importów projektu. Hold pozycji zostaje własnością panelu (profile nie nadpisują `max_hold_minutes`). |
 | Hook jednostek | `trading_units.forex_pip_size` | pierwsza linia: profil → `pip_size`; inaczej reguła FX (0.0001 / 0.01 JPY). Jedyny punkt, przez który idą: `market_context`, `position_manager` (BE/SL/TP tolerancje), `exit_decision_engine` (pasmo MODIFY_TP, BE, trail), `event_path_recorder`, strefy/targety (`pips_to_price`). |
 | Klampy silnika | `llm_decision_engine.LLMDecisionEngine` | literały → atrybuty klasy (`LOT_MAX 85`, `EXIT_RANGE 5-15`, `SL_RANGE 25-80`, `TP_RANGE 8-120`, identyczne) + `_limits_for(pair)` (profil dla nie-FX) w obu ścieżkach (single-call i ensemble). |
 | Guardraile | `position_manager` | `max_hold_minutes`, `emergency_spread_pips`, cushion prowizji, kadencja LLM wyjść przez `profile_value(symbol, pole, <dzisiejsza wartość>)`. |
@@ -30,10 +30,17 @@ routing jest wyłączony (domyślnie).
 ## Niezmiennik jednostek
 
 „1 pip serwera == 1 pip EA" dla danego symbolu: serwer bierze go z profilu,
-EA z `InpPipSizeOverride` na wykresie. To konwencja weryfikowana przy dry-runie
-(print SPEC), nie egzekwowana w runtime. Twarde ograniczenia EA nadal obowiązują
-w tej jednostce: bramka EXTREME ≥15 pipsów i sanity SL 20-100 pipsów — dlatego
-profile mają `sl_range` z sufitem 100 (złoto $10, DAX 100 pkt).
+EA z `InpPipSizeOverride` na wykresie. **Egzekwowane w runtime (od rundy review
+17.08):** EA echo'uje `pip_size` w każdym pushu `/api/market-data` i raporcie
+pozycji; `server._unit_mismatch` porównuje z `forex_pip_size(symbol)` (profil lub
+reguła FX) — wykres z rozjazdem nie jest routowany (`_pick_routed_market_entry`)
+ani nie dostaje sygnału (`/api/signal` odpowiada „Unit mismatch"), a karta
+Instrument Routing pokazuje `unit_ok`. Fail-closed dla instrumentów z profilem: brak echa (stary build EA) = jednostka nieznana = brak routingu i sygnału; pary FX bez echa pozostają kompatybilne (`unit_ok: null`). Raport pozycji z rozjazdem: `logger.error` raz na ticket. Twarde ograniczenia EA w tej jednostce: bramka EXTREME ≥15 pipsów (stała) i sanity SL
+`InpMinSLPips..InpMaxSLPips` (inputy, default 20-100 — profil podaje wartości w
+`ea_inputs`, np. US500 8/60). Decyzja nie-FX bez SL od modelu dostaje
+`default_sl_pips` profilu (złoto $8) — nigdy 25-pipsowy fallback EA ($2.50).
+Izolacja klas aktywów: cross-pair, epizody, learned-stats fallback i podsumowania
+reakcji nie mieszają magnitud złota (0.1 $/pip) z pipsami FX (`same_asset_class`).
 
 ## Czego celowo NIE zrobiono (v1)
 
@@ -55,6 +62,10 @@ RUNBOOK → „Instrumenty nie-FX (od 17.08.2026)": wykres XAUUSD z EA ≥ 17.08
 `tests/unit/test_instrument_profiles.py` (85: piny FX dla każdej pary, profile
 z sufiksami/aliasami, klampy złota/DAX w obu ścieżkach, guardraile, jednostki
 exit engine, kalibracja, recorder), `tests/integration/test_instrument_routing.py`
-(16: parser env, OFF = identyczne, świeży routowany wygrywa, brak/stare dane =
-fallback, kolejność bez fallbacku po prefiksie, blok INSTRUMENT tylko dla złota
-i re-renderowalny, sygnał tylko do wykresu złota, endpoint). Łącznie 842 zielone.
+(28: parser env + walidacja strict/non-strict, OFF = identyczne, świeży routowany
+wygrywa, brak/stare dane = fallback, kolejność bez fallbacku po prefiksie, blok
+INSTRUMENT tylko dla złota i re-renderowalny, sygnał tylko do wykresu złota,
+endpoint, rozjazd jednostek blokuje routing i sygnał, izolacja klas aktywów w
+cross-pair/statystykach/epizodach/reakcjach). Łącznie 864 zielone (17.08.2026).
+
+_Aktualizacja: 2026-08-17 · stan: feature/multi-instrument (po rundzie review)_

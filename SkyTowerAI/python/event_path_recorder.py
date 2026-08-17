@@ -35,7 +35,7 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 from timeutil import utcnow, to_naive_utc as _naive_utc, utc_epoch as _utc_epoch
-from instrument_profiles import profile_for
+from instrument_profiles import symbol_carries_currency as _symbol_carries_currency
 from market_context import (pip_size, normalize_pair,
                             infer_broker_offset_seconds, entry_age_seconds)
 
@@ -45,20 +45,6 @@ from event_reaction_history import (normalize_event_name,
                                     apply_release_to_record,
                                     atomic_rewrite_jsonl)
 
-
-def _symbol_carries_currency(norm: str, currency: str) -> bool:
-    """Does a pushed symbol expose the event currency?
-
-    Forex: the six-letter root contains the currency as base or quote
-    (unchanged rule). Non-forex CFDs (instrument_profiles): matched by the
-    profile's quote currency (XAUUSD/US500 -> USD, GER40 -> EUR), so their
-    pushed bars are measured for that currency's events too — a 5-char index
-    root would otherwise never pass the six-letter slice.
-    """
-    prof = profile_for(norm)
-    if prof is not None:
-        return currency in (prof.quote_currency, prof.learning_tag, prof.base_tag)
-    return len(norm) >= 6 and currency in (norm[:3], norm[3:6])
 
 # Single measurement pass: M1x60 still covers T0 at T+31 min
 MEASURE_AFTER_SECONDS = 31 * 60
