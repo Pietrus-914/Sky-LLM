@@ -409,3 +409,64 @@ historii dealów przy wygaśnięciu okna pendingOpen — do osobnej rundy.
 Obalone przez weryfikatorów (nie są bugami): "katastrofa niespełnialna przy
 produkcyjnych lotach", "gorszy drugi raport kasuje potwierdzenie", "testy
 nie pinują semantyk", "renderer 30-min bez sufitu".
+
+## 2026-08-17 INGEST | Multi-instrument: profile instrumentów + routing eventów USD na XAUUSD
+
+Źródło: branch `feature/multi-instrument` (e312e37 profile/szwy, 91c1413 EA,
+e787417 routing + prompt + panel), `SkyTowerAI/research/DAX_OPEN_PLAN.md`
+(§0-9 DAX open, §10 alternatywy).
+
+Co się zmieniło: nowy `instrument_profiles.py` (XAUUSD 1 pip=$0.10, GER40/US500
+1 pkt; forex → None), hook w `forex_pip_size` (jedyny punkt), klampy silnika per
+instrument, guardraile/exit engine/recorder/kalibracja przez `profile_value`,
+routing `INSTRUMENT_ROUTING` (env + panel + `/api/config/routing`) w
+`_build_market_context_for_event` (świeże dane EA decydują), sekcja INSTRUMENT
+w prompcie tylko dla nie-FX, EA: `InpPipSizeOverride`, print SPEC, root-guard,
+cap marginu (default 0). Wiedza: +4 721 ścieżek XAUUSD (HistData 2023-26) →
+`learned_stats.json` ma bloki XAUUSD dla eventów USD.
+
+Dlaczego: research pokazał, że otwarcie DAX 09:00 nie ma katalizatora
+informacyjnego (kierunek 50/50), a największą słabością tezy newsowej na FX jest
+koszt (spread 40-100% ruchu); złoto/US500 na tych samych eventach USD kosztują
+2-8% ruchu. Routing zachowuje pipeline i wzajemne wykluczanie (1 slot, 1
+pozycja) — więcej instrumentów = więcej eventów opłacalnych, nie więcej
+równoległych pozycji.
+
+Strony: nowa `pages/multi-instrument.md`; `index.md`; `documentation-map.md`
+(wiersz DAX_OPEN_PLAN); RUNBOOK (sekcja „Instrumenty nie-FX"), CLAUDE.md (env,
+endpoint, drzewo). Testy: 842 zielone (+101), 2 znane wstępne w test_config.
+Nie wdrożone: binarka EA do datafolderów terminala (krok operatora), włączenie
+routingu w panelu (decyzja operatora po odczycie SPEC).
+
+## 2026-08-17 INGEST | Runda review multi-instrument: SL floor, izolacja klas aktywów, walidacja routingu, niezmiennik jednostek w runtime
+
+Źródło: /code-review (8 kątów, 10 potwierdzonych ustaleń) nad diffem
+main...feature/multi-instrument + własna analiza „fade ostatnich świec"
+(`SkyTowerAI/research/FADE_LAST_CANDLES_CHECK.md`).
+
+Naprawione: (1) decyzja nie-FX bez SL (rule-based / nieparsowalna odpowiedź /
+FORCE) dostaje `default_sl_pips` profilu zamiast 25-pipsowego fallbacku EA
+($2.50 na złocie) — `_enforce_instrument_floor` w `analyze_event`; (2) izolacja
+klas aktywów: cross-pair (bez XAUUSD w promptach FX, etykieta „forex pips" dla
+decyzji złota), epizody, learned-stats fallback, podsumowania reakcji
+(`same_asset_class`); (3) routing: jedna walidacja dla env/pliku/panelu
+(`config.normalize_instrument_routing`, strict w endpoincie) — symbol musi być
+parą FX lub profilem I nieść walutę eventu (koniec przykładu GBP:XAUUSD);
+`_read_runtime_overrides()` jeden dla wszystkich przebiegów; (4) hold pozycji
+zostaje własnością panelu (GER40 bez własnego max_hold); (5) US500 vs bramka
+SL EA — EA ma teraz inputy `InpMinSLPips/InpMaxSLPips` (default 20/100),
+profile podają `ea_inputs`; (6) niezmiennik jednostek egzekwowany: EA echo'uje
+`pip_size` w pushu i raporcie, serwer nie routuje ani nie serwuje sygnału na
+wykres z rozjazdem (`_unit_mismatch`, `/api/signal` „Unit mismatch", karta
+routingu `unit_ok`); (7) schemat systemowego promptu ma zakresy per instrument
+(`_system_prompt(pair)`, FX bajt w bajt); (8) porządki: `normalize_pair`
+deleguje do `normalize_root`, hoist importów, martwe pola profilu usunięte;
+(9) docs: stopka wiki, mapa dokumentów, liczby testów w CLAUDE.md.
+
+Badanie fade: bezwarunkowo 51% (FX), ale ≥5 pipsów dryfu 57%, ≥8: 62%, ≥10:
+64% (n=431, z=5.7); EV w pipsach spadła do ~0 w 2025-26; złoto bez efektu.
+Wniosek: reguła warunkowa, tylko FX; propozycja `fade_pre_drift_strong` w
+learned_stats (decyzja operatora).
+
+Testy: 864 zielone (+22), 2 znane wstępne w test_config. EA skompilowany
+(0 err, .ex5 17.08 19:51), nadal NIE wgrany do datafolderów (krok operatora).

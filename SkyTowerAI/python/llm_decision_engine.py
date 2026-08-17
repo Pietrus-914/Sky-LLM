@@ -10,6 +10,7 @@ from dataclasses import dataclass, asdict, field
 from loguru import logger
 from uuid import uuid4
 import os
+import threading
 
 # Import our data modules
 from calendar_fetcher import CalendarAggregator, EconomicEvent
@@ -20,6 +21,7 @@ from event_reaction_history import (EventReactionHistory, normalize_event_name,
 from decision_history import DecisionHistory
 from llm_util import openrouter_headers, reasoning_body
 from market_context import normalize_pair
+from instrument_profiles import profile_for, same_asset_class
 from config import (LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS,
                     HIGH_IMPACT_EVENTS, OPENROUTER_API_KEY, FORCE_DECISION,
                     ENSEMBLE_K, ENSEMBLE_MODELS)
@@ -100,6 +102,16 @@ class LLMDecisionEngine:
     Makes trading decisions based on combined analysis
     """
 
+    # Contract ranges the LLM's numeric fields are clamped to before they can
+    # reach the EA (forex defaults; documented in the SYSTEM_PROMPT schema).
+    # A non-forex instrument (gold, indices) supplies its own ranges via
+    # instrument_profiles — see _limits_for(). Kept as class attributes so the
+    # values are pinnable in tests and overridable by a subclass.
+    LOT_MAX = 85
+    EXIT_RANGE = (5, 15)          # exit_minutes
+    SL_RANGE = (25.0, 80.0)       # stop_loss_pips
+    TP_RANGE = (8.0, 120.0)       # take_profit_pips
+
     # System prompt for the LLM
     SYSTEM_PROMPT = """You are an expert forex trading analyst specializing in news trading strategies.
 Your task is to analyze economic data and make trading decisions for the SkyTower-FX strategy.
@@ -178,14 +190,14 @@ a brief over/under-confidence self-check) — and only then commit the numeric
 and direction fields:
 {
     "reasoning": "Base rate -> adjustments -> confidence self-check -> conclusion. CONCISE: max ~120 words — the response must never be cut off before the fields below",
-    "stop_loss_pips": 25 to 80 (wider for JPY pairs: 40-80),
-    "take_profit_pips": 8 to 120 (when measured stats are provided, size it between
+    "stop_loss_pips": %SL_RANGE%,
+    "take_profit_pips": %TP_RANGE% (when measured stats are provided, size it between
         the MEDIAN and the p80 of the favorable run for your exit window — near the
         median for a high-probability bank, toward the p80 only with strong
         continuation evidence, never above it. NOT a fixed multiple of SL — but if
         the reachable TP is under ~0.5x your SL, question whether the trade is
         worth its risk at all),
-    "exit_minutes": 5 to 15,
+    "exit_minutes": %EXIT_RANGE%,
     "lot_percent": 60 to 85 (percent of max lot),
     "direction": %DIRECTION_VALUES%,
     "confidence": 0.0 to 1.0
@@ -205,13 +217,31 @@ If the evidence is weak or conflicting, pick the MORE PROBABLE direction and
 express your uncertainty through a LOW confidence value. Report honest
 confidence — do NOT inflate it just because a direction is required."""
 
-    def _system_prompt(self) -> str:
-        """Build the system prompt for the current mode (normal vs FORCE_DECISION)."""
+    def _system_prompt(self, pair: Optional[str] = None) -> str:
+        """Build the system prompt for the current mode (normal vs
+        FORCE_DECISION) and for the instrument the decision is for: the
+        numeric schema ranges are the SAME ranges the clamps enforce
+        (_limits_for), so a gold decision is never told "25 to 80" while the
+        INSTRUMENT block says 50-100. Forex text is byte-identical to before
+        the ranges became placeholders."""
+        lim = self._limits_for(pair)
+        if profile_for(pair) is None:
+            sl_txt = "25 to 80 (wider for JPY pairs: 40-80)"
+            tp_txt = "8 to 120"
+            exit_txt = "5 to 15"
+        else:
+            sl_txt = f"{lim['sl'][0]:g} to {lim['sl'][1]:g} ({lim['units']})"
+            tp_txt = f"{lim['tp'][0]:g} to {lim['tp'][1]:g} ({lim['units']})"
+            exit_txt = f"{lim['exit'][0]} to {lim['exit'][1]}"
+        text = (self.SYSTEM_PROMPT
+                .replace("%SL_RANGE%", sl_txt)
+                .replace("%TP_RANGE%", tp_txt)
+                .replace("%EXIT_RANGE%", exit_txt))
         if FORCE_DECISION:
-            return (self.SYSTEM_PROMPT
+            return (text
                     .replace("%DIRECTION_VALUES%", '"BUY" or "SELL"')
                     .replace("%SKIP_POLICY%", self.SKIP_POLICY_FORCED))
-        return (self.SYSTEM_PROMPT
+        return (text
                 .replace("%DIRECTION_VALUES%", '"BUY" or "SELL" or "SKIP"')
                 .replace("%SKIP_POLICY%", self.SKIP_POLICY_NORMAL))
 
@@ -338,6 +368,33 @@ confidence — do NOT inflate it just because a direction is required."""
             logger.info(f"Using rule-based decision for {event.event_name}")
             decision = self._rule_based_decision(event, data_context)
 
+        return self._enforce_instrument_floor(decision)
+
+    @staticmethod
+    def _enforce_instrument_floor(decision: 'TradingDecision') -> 'TradingDecision':
+        """A tradeable decision for a NON-forex instrument must carry an
+        explicit stop in the instrument's own unit.
+
+        The forex contract lets stop_loss_pips=0 mean "not set — EA fallback"
+        (the EA then uses its 25-pip default), which is a sane forex stop but
+        $2.50 on XAUUSD (1 pip = $0.10): the lot would be sized against a stop
+        the release spread alone can take out. Every path that can leave the
+        sentinel (rule-based fallback, unparseable panel reply, FORCE remap)
+        converges here, so the floor is applied once for all of them. Forex
+        decisions are returned untouched.
+        """
+        if decision is None or decision.direction not in ("BUY", "SELL"):
+            return decision
+        prof = profile_for(decision.pair)
+        if prof is None:
+            return decision
+        sl = float(decision.stop_loss_pips or 0)
+        if sl <= 0:
+            decision.stop_loss_pips = float(prof.default_sl_pips)
+            decision.reasoning = (f"{decision.reasoning or ''} [no SL from the model — "
+                                  f"{prof.name} profile default {prof.default_sl_pips:g} pips applied]")
+            logger.warning(f"{prof.name}: decision without stop_loss_pips — applying "
+                           f"profile default {prof.default_sl_pips:g} pips")
         return decision
 
     def _gather_data(self, event: EconomicEvent, market_context: Dict = None) -> Dict:
@@ -365,6 +422,10 @@ confidence — do NOT inflate it just because a direction is required."""
 
         # Get sentiment
         pair = DEFAULT_PAIRS.get(currency, f"{currency}/USD")
+        # The instrument this decision is FOR (routing may have put a
+        # non-forex CFD in front of the default pair) — every pooled statistic
+        # below is filtered to its asset class
+        suggested = (market_context or {}).get('pair') or pair
         sentiment_data = self.sentiment.get_currency_sentiment(currency)
         if isinstance(sentiment_data, dict):
             pairs_analyzed = sentiment_data.get('pairs_analyzed', 0)
@@ -396,14 +457,16 @@ confidence — do NOT inflate it just because a direction is required."""
         # currency-level volatility/behavior prior so the model is not blind.
         reaction_summary = None
         try:
-            reaction_summary = self.reaction_history.summarize(event.event_name, currency)
+            reaction_summary = self.reaction_history.summarize(event.event_name, currency,
+                                                               pair=suggested)
         except Exception as e:
             logger.debug(f"Reaction history lookup failed: {e}")
         if reaction_summary:
             source_status["reaction_history"] = "ok"
         else:
             try:
-                reaction_summary = self.reaction_history.summarize_currency_fallback(currency)
+                reaction_summary = self.reaction_history.summarize_currency_fallback(
+                    currency, pair=suggested)
             except Exception as e:
                 logger.debug(f"Reaction currency fallback failed: {e}")
             source_status["reaction_history"] = ("currency_fallback" if reaction_summary
@@ -433,7 +496,6 @@ confidence — do NOT inflate it just because a direction is required."""
         # Machine-measured frequency statistics for this event/pair, plus a
         # compact recap repeated at the END of the prompt (models weigh the
         # tail of long prompts far more than the middle)
-        suggested = (market_context or {}).get('pair') or pair
         learned_stats = learned_recap = learned_error = None
         try:
             learned = self._learned_stats_section(event.event_name, currency,
@@ -477,7 +539,12 @@ confidence — do NOT inflate it just because a direction is required."""
             logger.warning(f"Reflections lookup failed: {e}")
         source_status["reflections"] = "ok" if reflections else "no_data"
 
-        return {
+        # Non-forex instrument (event->instrument routing): the model must
+        # know the unit it is quoting SL/TP in and the contract ranges for
+        # THIS instrument. Absent for forex (prompt-invisibility).
+        instrument = self._instrument_brief(suggested, currency)
+
+        ctx = {
             "event": {
                 "name": event.event_name,
                 "currency": currency,
@@ -502,6 +569,64 @@ confidence — do NOT inflate it just because a direction is required."""
             "reflections": reflections,
             "_source_status": source_status,
         }
+        if instrument:
+            ctx["instrument"] = instrument
+            source_status["instrument"] = instrument["name"]
+        return ctx
+
+    @staticmethod
+    def _instrument_brief(pair: Optional[str], event_currency: str) -> Optional[Dict]:
+        """Prompt-facing facts for a NON-forex decision instrument, or None
+        for forex. Stored in data_summary so replay re-renders the same
+        prompt. Direction semantics are spelled out because the forex
+        prompt's base/quote reasoning does not carry over by itself."""
+        prof = profile_for(pair)
+        if prof is None:
+            return None
+        cur = (event_currency or "").upper()
+        if cur == prof.quote_currency:
+            side = (f"{cur} is the QUOTE currency of {prof.name}: a {cur}-POSITIVE "
+                    f"surprise (stronger {cur}) normally means SELL {prof.name}, a "
+                    f"{cur}-negative surprise means BUY {prof.name}")
+        else:
+            side = (f"{cur} is not a leg of {prof.name}; reason about how the "
+                    f"release transmits to {prof.name} ({prof.asset_class}) explicitly")
+        return {
+            "name": prof.name,
+            "asset_class": prof.asset_class,
+            "units": prof.units_label,
+            "pip_size": prof.pip_size,
+            "quote_currency": prof.quote_currency,
+            "sl_range_pips": [prof.sl_range[0], prof.sl_range[1]],
+            "tp_range_pips": [prof.tp_range[0], prof.tp_range[1]],
+            "exit_range_minutes": [prof.exit_range[0], prof.exit_range[1]],
+            "direction_semantics": side,
+        }
+
+    def _instrument_section(self, data_context: Dict) -> str:
+        inst = data_context.get('instrument')
+        if not inst:
+            return ""
+        pip = float(inst.get('pip_size') or 0)
+        sl_lo, sl_hi = inst['sl_range_pips']
+        tp_lo, tp_hi = inst['tp_range_pips']
+        ex_lo, ex_hi = inst['exit_range_minutes']
+
+        def _px(v):
+            return f"{v * pip:g}" if pip else "?"
+
+        return (f"\nINSTRUMENT (this decision is for a NON-forex CFD — the ranges below "
+                f"OVERRIDE the forex defaults in the schema):\n"
+                f"- symbol: {inst['name']} ({inst['asset_class']}), quoted in {inst['quote_currency']}\n"
+                f"- units: {inst['units']}; every *_pips field you return and every pip figure "
+                f"in the market data above uses this unit\n"
+                f"- stop_loss_pips: {sl_lo:g}-{sl_hi:g} (= {_px(sl_lo)}-{_px(sl_hi)} price units); "
+                f"take_profit_pips: {tp_lo:g}-{tp_hi:g} (= {_px(tp_lo)}-{_px(tp_hi)}); "
+                f"exit_minutes: {ex_lo}-{ex_hi}\n"
+                f"- direction: {inst['direction_semantics']}\n"
+                f"- playbook/statistics blocks measured on FOREX pairs do not transfer 1:1 "
+                f"(no 'fade the last candles' edge is established for this instrument); "
+                f"prefer statistics that name {inst['name']} explicitly\n")
 
     def _market_context_section(self, data_context: Dict) -> str:
         """Prompt section for live market data (summary + raw candles)."""
@@ -831,7 +956,14 @@ confidence — do NOT inflate it just because a direction is required."""
         block = usable.get(pair_norm)
         pair_label = pair_norm
         if block is None:
-            pair_label, block = max(usable.items(), key=lambda kv: kv[1]['n'])
+            # Fall back to another pair's block only INSIDE the same asset
+            # class: a forex decision must never anchor on gold's $0.10-pip
+            # numbers, and a profiled instrument gets no forex substitute
+            comparable = {k: v for k, v in usable.items()
+                          if same_asset_class(k, pair_norm)}
+            if not comparable:
+                return None
+            pair_label, block = max(comparable.items(), key=lambda kv: kv[1]['n'])
             note = ((note + "\n") if note else "") + \
                 (f"No {pair_norm} sample for this event — stats shown for "
                  f"{pair_label} instead; scale pip magnitudes with care.")
@@ -1191,13 +1323,35 @@ RECENT TRADE OUTCOMES ({data_context['event']['currency']}, realized P/L):
 {data_context.get('trade_outcomes') or "No completed trades for this currency yet"}
 {reflections_block}
 SUGGESTED PAIR: {data_context['suggested_pair']}
-{calibration_block}{recap_block}
+{self._instrument_section(data_context)}{calibration_block}{recap_block}
 Work through the ANALYSIS CHECKLIST against this data, then provide your trading
 decision in JSON format."""
         return prompt
 
     def _llm_decision(self, event: EconomicEvent, data_context: Dict) -> TradingDecision:
-        """Use LLM to make trading decision"""
+        """Use LLM to make trading decision.
+
+        Analyses are SERIALIZED per engine: _active_pair (read lazily by every
+        panel vote in _chat to pick the per-instrument schema) is instance
+        state, and /api/decision/refresh can call this engine from a Flask
+        thread while the updater is mid-panel. Without the lock a second call
+        would swap the pair under the first call's votes. Contention is rare
+        (refresh is manual) and logged."""
+        lock = self.__dict__.setdefault("_analysis_lock", threading.RLock())
+        if not lock.acquire(blocking=False):
+            logger.warning(f"Entry analysis for {event.event_name} waits for another "
+                           f"analysis in flight (engine is single-decision at a time)")
+            lock.acquire()
+        try:
+            self._active_pair = data_context.get('suggested_pair')
+            try:
+                return self._llm_decision_inner(event, data_context)
+            finally:
+                self._active_pair = None
+        finally:
+            lock.release()
+
+    def _llm_decision_inner(self, event: EconomicEvent, data_context: Dict) -> TradingDecision:
         prompt = self._entry_prompt(data_context)
 
         # Self-consistency ensemble (F4) / heterogeneous panel (F4c):
@@ -1256,6 +1410,7 @@ decision in JSON format."""
             # SL/TP of 0 mean "not set" and are passed through for EA fallback.
             sl_pips = self._num(decision_data.get('stop_loss_pips'), 0)
             tp_pips = self._num(decision_data.get('take_profit_pips'), 0)
+            lim = self._limits_for(data_context.get('suggested_pair'))
             return TradingDecision(
                 event=event.event_name,
                 currency=event.currency,
@@ -1264,12 +1419,15 @@ decision in JSON format."""
                 confidence=self._num(decision_data.get('confidence'), 0.0, 0.0, 1.0),
                 model=str(self.model or ""),
                 prompt_version=ENTRY_PROMPT_VERSION,
-                lot_percent=int(self._num(decision_data.get('lot_percent'), 70, 0, 85)),
+                lot_percent=int(self._num(decision_data.get('lot_percent'), 70, 0, lim["lot_max"])),
                 entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
-                exit_minutes_after=int(self._num(decision_data.get('exit_minutes'), 10, 5, 15)),
+                exit_minutes_after=int(self._num(decision_data.get('exit_minutes'), 10,
+                                                 lim["exit"][0], lim["exit"][1])),
                 stop_loss_percent=self._num(decision_data.get('stop_loss_percent'), 40, 0, 100),
-                stop_loss_pips=sl_pips if sl_pips <= 0 else min(max(sl_pips, 25.0), 80.0),
-                take_profit_pips=tp_pips if tp_pips <= 0 else min(max(tp_pips, 8.0), 120.0),
+                stop_loss_pips=(sl_pips if sl_pips <= 0
+                                else min(max(sl_pips, lim["sl"][0]), lim["sl"][1])),
+                take_profit_pips=(tp_pips if tp_pips <= 0
+                                  else min(max(tp_pips, lim["tp"][0]), lim["tp"][1])),
                 reasoning=reasoning,
                 data_summary=data_context,
                 timestamp=utcnow(),
@@ -1449,6 +1607,7 @@ decision in JSON format."""
                                for v in src])
             tp = _median_pips([self._num(v["parsed"].get('take_profit_pips'), 0)
                                for v in src])
+            lim = self._limits_for(data_context.get('suggested_pair'))
             return TradingDecision(
                 event=event.event_name,
                 currency=event.currency,
@@ -1459,14 +1618,15 @@ decision in JSON format."""
                        else f"{self.model} x{k}"),
                 prompt_version=ENTRY_PROMPT_VERSION,
                 lot_percent=int(_median([self._num(v["parsed"].get('lot_percent'),
-                                                   70, 0, 85) for v in src])),
+                                                   70, 0, lim["lot_max"]) for v in src])),
                 entry_seconds_before=TRADING_CONFIG['entry_seconds_before'],
                 exit_minutes_after=int(_median([self._num(v["parsed"].get('exit_minutes'),
-                                                          10, 5, 15) for v in src])),
+                                                          10, lim["exit"][0], lim["exit"][1])
+                                                for v in src])),
                 stop_loss_percent=_median([self._num(v["parsed"].get('stop_loss_percent'),
                                                      40, 0, 100) for v in src]),
-                stop_loss_pips=sl if sl <= 0 else min(max(sl, 25.0), 80.0),
-                take_profit_pips=tp if tp <= 0 else min(max(tp, 8.0), 120.0),
+                stop_loss_pips=sl if sl <= 0 else min(max(sl, lim["sl"][0]), lim["sl"][1]),
+                take_profit_pips=tp if tp <= 0 else min(max(tp, lim["tp"][0]), lim["tp"][1]),
                 reasoning=reasoning,
                 data_summary=data_context,
                 timestamp=utcnow(),
@@ -1598,6 +1758,24 @@ decision in JSON format."""
             logger.error(f"Ensemble aggregation error: {e}")
             return self._rule_based_decision(event, data_context)
 
+    def _limits_for(self, pair: Optional[str]) -> Dict:
+        """Numeric contract ranges for the instrument the decision is for.
+
+        Forex pairs (no instrument profile) get the class defaults — the exact
+        literals the clamps used before profiles existed. A non-forex CFD
+        (XAUUSD, GER40, ...) gets the ranges declared in instrument_profiles so
+        a gold stop of "$8" (80 pips at 1 pip = $0.10) is not squeezed into
+        the forex 25-80 window.
+        """
+        prof = profile_for(pair)
+        if prof is None:
+            return {"lot_max": self.LOT_MAX, "exit": self.EXIT_RANGE,
+                    "sl": self.SL_RANGE, "tp": self.TP_RANGE,
+                    "units": "pips"}
+        return {"lot_max": int(prof.lot_max), "exit": tuple(prof.exit_range),
+                "sl": tuple(prof.sl_range), "tp": tuple(prof.tp_range),
+                "units": prof.units_label}
+
     @staticmethod
     def _num(value, default, lo=None, hi=None):
         """Coerce an LLM-returned numeric field to float and clamp it to the
@@ -1618,7 +1796,10 @@ decision in JSON format."""
         text. `model` overrides the engine's default for THIS call only —
         used by the F4c mixed panel, which routes each vote to a different
         OpenRouter id through the same client."""
-        system_prompt = self._system_prompt()
+        # The instrument of the decision in flight (set by _llm_decision) picks
+        # the schema ranges; None -> forex text. Kept as instance state so the
+        # many `_chat(prompt)` call sites and test doubles keep their signature.
+        system_prompt = self._system_prompt(getattr(self, "_active_pair", None))
         use_model = model or self.model
         if self.provider == "openrouter":
             # OpenRouter uses OpenAI-compatible API

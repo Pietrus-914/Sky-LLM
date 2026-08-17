@@ -13,6 +13,7 @@ from config import LLM_CONFIG, OPENROUTER_API_KEY, POSITION_MANAGEMENT_CONFIG
 from llm_util import openrouter_headers, reasoning_body
 from position_manager import OpenPosition, PositionCommand
 from trading_units import forex_pip_size
+from instrument_profiles import profile_value
 
 
 EXIT_SYSTEM_PROMPT = """You are an expert forex position manager for the SkyTower-FX news trading strategy.
@@ -242,6 +243,10 @@ Respond with JSON only."""
     def _llm_decision(self, pos: OpenPosition) -> PositionCommand:
         """Use LLM to make exit decision."""
         prompt = self._build_prompt(pos)
+        # Non-forex instruments may carry their own exit narrative in
+        # instrument_profiles; forex keeps EXIT_SYSTEM_PROMPT verbatim.
+        system_prompt = profile_value(pos.symbol, "exit_system_prompt",
+                                      EXIT_SYSTEM_PROMPT)
 
         logger.info(f"ExitEngine: Calling LLM for {pos.symbol} (P/L: ${pos.profit_usd:.2f})")
 
@@ -249,7 +254,7 @@ Respond with JSON only."""
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": EXIT_SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
                 # Same reason as the entry budget (config.LLM_CONFIG): with a
@@ -273,7 +278,7 @@ Respond with JSON only."""
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=900,
-                system=EXIT_SYSTEM_PROMPT,
+                system=system_prompt,
                 messages=[{"role": "user", "content": prompt}],
                 timeout=30.0
             )
@@ -283,7 +288,7 @@ Respond with JSON only."""
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": EXIT_SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=900,
@@ -362,7 +367,8 @@ Respond with JSON only."""
                           else 0 < cmd.tp_price < price - margin)
         # Units sanity: a genuine TP lives within a few hundred pips of the
         # market; 500 pips is far beyond any clamp/stat this system produces.
-        within_band = abs(cmd.tp_price - price) <= 500 * pip_size
+        band_pips = profile_value(pos.symbol, "tp_sanity_band_pips", 500.0)
+        within_band = abs(cmd.tp_price - price) <= band_pips * pip_size
         if on_profit_side and within_band:
             return cmd
         logger.warning(
@@ -397,7 +403,8 @@ Respond with JSON only."""
         # and the server still marks the position break-even-protected.
         if total_pnl > 30.0 and not pos.sl_moved_to_be and pos.profit_usd > 0:
             pip_size = forex_pip_size(pos.symbol)
-            buffer = pip_size  # 1 pip buffer
+            # 1 pip buffer on forex; a non-forex profile may widen it
+            buffer = pip_size * profile_value(pos.symbol, "rule_be_buffer_pips", 1.0)
 
             if pos.direction == "BUY":
                 new_sl = pos.entry_price + buffer
@@ -428,7 +435,8 @@ Respond with JSON only."""
         # Rule 3: Trail SL to protect profits
         if total_pnl > 40.0 and pos.sl_moved_to_be:
             pip_size = forex_pip_size(pos.symbol)
-            trail_distance = pip_size * 10  # 10 pips
+            # 10 pips on forex; a non-forex profile may declare its own trail
+            trail_distance = pip_size * profile_value(pos.symbol, "rule_trail_pips", 10.0)
 
             if pos.direction == "BUY":
                 potential_sl = pos.current_price - trail_distance

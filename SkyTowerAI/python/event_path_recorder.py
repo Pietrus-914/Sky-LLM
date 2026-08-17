@@ -35,13 +35,16 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 from timeutil import utcnow, to_naive_utc as _naive_utc, utc_epoch as _utc_epoch
+from instrument_profiles import symbol_carries_currency as _symbol_carries_currency
 from market_context import (pip_size, normalize_pair,
                             infer_broker_offset_seconds, entry_age_seconds)
+
 from calendar_fetcher import is_non_data_event
 from event_reaction_history import (normalize_event_name,
                                     is_test_event_name,
                                     apply_release_to_record,
                                     atomic_rewrite_jsonl)
+
 
 # Single measurement pass: M1x60 still covers T0 at T+31 min
 MEASURE_AFTER_SECONDS = 31 * 60
@@ -292,7 +295,7 @@ class EventPathRecorder:
         out = []
         for pair, entry in market_snapshot.items():
             norm = normalize_pair(pair)
-            if len(norm) < 6 or currency not in (norm[:3], norm[3:6]):
+            if not _symbol_carries_currency(norm, currency):
                 continue
             if entry_age_seconds(entry, now) <= max_age:
                 out.append(norm)

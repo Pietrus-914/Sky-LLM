@@ -43,6 +43,12 @@ def news_spread_pips(pair: str) -> float:
     """Typical NEWS spread for the pair — the cost every entry crosses.
     Direction-hit alone flatters the model: the 2026-07 path study showed
     only ~56-83% of even HIGH-impact 5-min moves clear this spread."""
+    # Non-forex CFDs carry their news spread in instrument_profiles (in the
+    # instrument's own pip unit); forex keeps the config table.
+    from instrument_profiles import profile_value
+    profiled = profile_value(pair, "typical_news_spread_pips", None)
+    if profiled is not None:
+        return float(profiled)
     value = TYPICAL_NEWS_SPREADS.get(normalize_pair(pair or ""))
     if isinstance(value, dict):
         try:

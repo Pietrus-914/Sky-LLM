@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 from event_reaction_history import normalize_event_name, parse_numeric
 from market_context import normalize_pair
+from instrument_profiles import same_asset_class
 
 # How many episodes the prompt gets at most (token budget)
 MAX_EPISODES = 3
@@ -53,6 +54,10 @@ def find_similar_episodes(paths: List[Dict], event_name: str, currency: str,
         if not isinstance(p, dict) or p.get('test') or not p.get('pair'):
             continue
         if (p.get('currency') or '').upper() != currency:
+            continue
+        # Never let a $0.10-pip gold path stand in for a forex pair (or the
+        # reverse): magnitudes are only comparable inside one asset class
+        if not same_asset_class(p.get('pair'), pair_norm):
             continue
         name = (p.get('event_name_normalized')
                 or normalize_event_name(p.get('event_name') or ''))

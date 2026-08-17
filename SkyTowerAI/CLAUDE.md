@@ -3,7 +3,7 @@
 ## Quick Summary
 SkyTower-AI is an automated forex trading system that trades high-impact economic news events. A Flask server analyzes each event (COT data, retail sentiment used contrarian, forecast vs previous, market context pushed by MT5) and decides BUY/SELL/SKIP via an LLM panel (OpenRouter) with a rule-based fallback. The MT5 Expert Advisor executes; **the server also manages the exit** (EA keeps only technical guardrails).
 
-State: server **4.1.0**, **711 tests green** (05.08.2026), running natively on Windows. Active branch `gpt_review` (see `GPT_REVIEW_PLAN.md`). Docs wiki: `../wiki/index.md`.
+State: server **4.1.0**, **864 tests green** (17.08.2026), running natively on Windows. Active branch `feature/multi-instrument` (instrument profiles + event→instrument routing; see `../wiki/pages/multi-instrument.md`). Docs wiki: `../wiki/index.md`.
 
 ## Project Location
 `C:\Users\pietr\Documents\Sky tower\SkyTowerAI\`
@@ -47,6 +47,7 @@ SkyTowerAI/
 │   ├── zone_analyzer.py          # Liquidity pools / FVG / order blocks
 │   ├── target_calculator.py      # TP/SL targets from zones
 │   ├── trading_units.py          # Centralized pip/volume units (gpt_review Stage 2)
+│   ├── instrument_profiles.py    # Non-forex CFD units/clamps (XAUUSD 1 pip=$0.10, GER40/US500 points); forex = None
 │   ├── timeutil.py               # UTC helpers (utcnow, to_naive_utc, utc_epoch)
 │   ├── llm_util.py               # LLM plumbing
 │   ├── mt5_data_exporter.py      # MT5 data export utility
@@ -56,7 +57,7 @@ SkyTowerAI/
 │   │                             #   — the server does NOT import these
 │   ├── knowledge/                # TRACKED: event_playbooks.json (curated, hot-reload),
 │   │                             #   learned_stats.json (GENERATED — never edit by hand),
-│   │                             #   historical_paths.jsonl.gz (44 679 paths 2021-26)
+│   │                             #   historical_paths.jsonl.gz (49 400 paths 2021-26 incl. 4 721 XAUUSD)
 │   ├── templates/dashboard.html  # Dashboard incl. PL guide tab ("Przewodnik")
 │   ├── logs/                     # GITIGNORED runtime: *.jsonl, server.log,
 │   │                             #   currency_regimes.json, runtime_overrides.json,
@@ -65,7 +66,7 @@ SkyTowerAI/
 ├── mt5/
 │   ├── SkyTowerAI_EA.mq5         # Expert Advisor (~1950 lines — use offset/limit reads!)
 │   └── SkyTower_Zones.mq5        # Zone indicator
-├── tests/                        # 696 tests: unit/ integration/ e2e/ (pytest)
+├── tests/                        # 864 tests (17.08.2026): unit/ integration/ e2e/ (pytest)
 ├── START.bat                     # PRIMARY launcher: server (auto-restart) + MT5, idempotent
 ├── start_server.bat              # Server only (creates venv on first run)
 ├── start_server_24_7.bat         # 24/7 variant with watchdog loop
@@ -102,6 +103,7 @@ LLM access is via **OpenRouter** (`OPENROUTER_API_KEY` in `python/.env` — NEVE
 | `SKYTOWER_FAKE_EVENT_IN_SECONDS` | unset | Dry-run: inject synthetic event (reactions get `test:true`); REMOVE after test! |
 | `SKYTOWER_EXTRA_EVENTS` | unset | Extra event names for the whitelist |
 | `SKYTOWER_TRADE_ALL_EVENTS` | `false` | ON = trade every event ≥ MIN_IMPACT (whitelist ignored); panel switch, persisted |
+| `SKYTOWER_INSTRUMENT_ROUTING` | unset (OFF) | Event → instrument routing, e.g. `USD:XAUUSD;NZD:NZDUSD` — first routed symbol whose EA chart pushes fresh data IN THE RIGHT UNIT claims that currency's decisions; a symbol must be a forex pair or a profiled instrument AND carry the currency as a leg (same validation for env/file/panel); panel card outranks env (persisted `instrument_routing`). Non-forex symbols need a profile in `instrument_profiles.py` and `InpPipSizeOverride` on the EA chart — the EA echoes `pip_size` and a mismatched chart is never routed to / served |
 | `SKYTOWER_PROFIT_PROTECTION_PERCENT` | `50` | Profit-protection: close on ≥X% drop from peak (range 10-95; out-of-range values fall back with a WARNING) |
 | `SKYTOWER_PROFIT_PROTECTION_FLOOR_PCT` | `30` | Profit-protection arms only once peak ≥ X% of `max_loss_usd` (range 5-200, min $10) |
 | `SKYTOWER_PROFIT_PROTECTION_GRACE_SECONDS` | `120` | No profit-protection closes this long after open (range 0-600) |
@@ -153,6 +155,7 @@ EA confidence gate: `InpMinConfidence` (0.5); `forced:true` signals bypass it.
 | `/api/regimes` | GET/POST | Auto regimes per currency; POST = manual override |
 | `/api/calibration` | GET | Calibration ledger |
 | `/api/config/risk` | GET/POST | Panel-owned risk limits (persisted) |
+| `/api/config/routing` | GET/POST | Event → instrument routing table + live per-symbol data freshness (persisted) |
 | `/api/datasources/status` | GET | Health of calendar/COT/sentiment sources |
 | `/api/targets` | POST | Zone-based TP/SL targets (EA at position open) |
 | `/api/trade-executed` | POST | Fallback trade notification (also counts toward daily limit) |
@@ -188,7 +191,7 @@ EA confidence gate: `InpMinConfidence` (0.5); `forced:true` signals bypass it.
 ```powershell
 curl http://127.0.0.1:5555/health          # status
 # START.bat = server + MT5; start_server.bat = server only
-python\venv\Scripts\python.exe -m pytest -q   # run tests (711, ~19 s)
+python\venv\Scripts\python.exe -m pytest -q   # run tests (864, ~18 s; 2 known failures in test_config read the operator's runtime_overrides.json)
 ```
 Add tradeable event names: `config.py` → TIER1/TIER2 or `SKYTOWER_EXTRA_EVENTS`.
 

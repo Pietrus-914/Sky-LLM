@@ -4,8 +4,17 @@
 #ifndef SKYTOWERAI_UNITS_MQH
 #define SKYTOWERAI_UNITS_MQH
 
+// Optional pip-size override in PRICE units (0 = auto forex rule below).
+// Set once from the EA input in OnInit (InpPipSizeOverride) so a non-forex
+// CFD chart (XAUUSD 0.10, GER40/US500 1.0) counts every downstream pip
+// quantity — spread gates, SL/TP distances, BE detection, reports — in the
+// instrument's own unit instead of point*10.
+double g_skyPipSizeOverride = 0.0;
+
 double SkyPipSize(string symbol)
 {
+   if(g_skyPipSizeOverride > 0.0)
+      return g_skyPipSizeOverride;
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    if(point <= 0 || !MathIsValidNumber(point))

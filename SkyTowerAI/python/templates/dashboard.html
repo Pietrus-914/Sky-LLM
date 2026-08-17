@@ -1090,6 +1090,28 @@
                 </div>
             </div>
 
+            <!-- Event -> instrument routing (multi-instrument) -->
+            <div class="config-section">
+                <h3>Instrument Routing (event → instrument)</h3>
+                <div class="config-row">
+                    <label for="routingInput">Routing table</label>
+                    <input type="text" id="routingInput" placeholder="USD:XAUUSD;NZD:NZDUSD"
+                           style="min-width:260px">
+                    <button class="btn btn-small" id="btnSaveRouting" type="button">Zapisz</button>
+                </div>
+                <div id="routingStatus" style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">
+                    Routing OFF — decyzje idą na pary z DEFAULT_PAIRS.
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px">
+                    Dla eventu w danej walucie serwer próbuje najpierw instrumentów z tej listy
+                    (po kolei) i bierze PIERWSZY, którego wykres z EA pcha świeże dane
+                    (&le; 30 min). Brak danych = dzisiejszy przepływ (para FX). Instrumenty
+                    nie-FX (XAUUSD, GER40, US500) muszą mieć profil w
+                    <code>instrument_profiles.py</code>, a EA na ich wykresie musi mieć
+                    <code>InpPipSizeOverride</code> = pip profilu (XAUUSD 0.10). Puste = wyłączone.
+                </div>
+            </div>
+
             <!-- Active Currencies -->
             <div class="config-section">
                 <h3>Active Currencies</h3>
@@ -1397,6 +1419,10 @@
                         <tr><td colspan="3" style="color:var(--text-muted)"><b>Zarządzanie wyjściem = SERWER.</b> Inputy InpExitStrategy / InpPartialCloseTP1 / InpTP1ClosePercent / InpMoveSLToBreakeven / InpTrailAfterTP1 / InpTrailDistancePips / InpFallbackExitMinutes USUNIĘTO 18.07.2026 — kod EA nigdy ich nie wykonywał (martwe przełączniki obiecujące działanie, którego nie było). Częściowe zamknięcia, przesunięcie SL i wyjście prowadzi silnik wyjścia na serwerze przez komendy MODIFY_SL / PARTIAL_CLOSE / CLOSE w odpowiedzi na /api/position/report. Po stronie EA zostaje tylko twardy limit czasu (InpMaxHoldMinutes) i awaryjny spread.</td></tr>
                         <tr><td><b>InpEmergencySpreadPips</b></td><td>Awaryjne zamknięcie otwartej pozycji, gdy spread przekroczy X pipsów.</td><td>15</td></tr>
                         <tr><td><b>InpPushMarketData / InpReportReactions</b></td><td>Wysyłka świec do serwera (kontekst dla LLM) + raportowanie reakcji po evencie (baza wiedzy). Nie wyłączać.</td><td>true / true</td></tr>
+                        <tr><td><b>InpPipSizeOverride</b></td><td>Od 17.08.2026. Definicja „pipsa" w jednostkach ceny dla instrumentów nie-FX: <b>XAUUSD = 0.10</b> (1 pip = $0.10), GER40/US500 = 1.0 (1 pkt). Musi równać się profilowi w <code>instrument_profiles.py</code> — inaczej EA liczy spread w centach i blokuje wejścia. Na wykresach FX zostaje 0 (reguła forex, zachowanie bez zmian). Sprawdź w logu Experts linię <code>SkyTower SPEC:</code>.</td><td>0 (FX) / 0.10 (XAUUSD)</td></tr>
+                        <tr><td><b>InpMinSLPips / InpMaxSLPips</b></td><td>Od 17.08.2026. Sanity-limity SL w pipsach jednostki wykresu (dawniej twarde 20-100). Na FX zostawić 20/100. Na instrumentach nie-FX ustawić wg <code>ea_inputs</code> profilu (XAUUSD 20/100, US500 8/60) — inaczej EA po cichu poszerzy/skróci SL względem decyzji serwera.</td><td>20 / 100</td></tr>
+                        <tr><td><b>InpMaxMarginUsePercent</b></td><td>Cap lota wolnym marginem (OrderCalcMargin). 0 = brak capu (jak dotąd). Na złocie/indeksach (dźwignia 1:100 u Purple) ustaw ~50, inaczej lot z SL może przekroczyć wolny margin (retcode 10019 = brak wejścia).</td><td>0 (FX) / 50 (XAUUSD)</td></tr>
+                        <tr><td colspan="3" style="color:var(--text-muted)"><b>Wykres XAUUSD (5. wykres, opcjonalny):</b> InpPipSizeOverride=0.10, InpMaxSpreadPips=15 ($1.50), InpEmergencySpreadPips=40 ($4), InpSlippage=30, InpMaxMarginUsePercent=50, InpMinSLPips=20, InpMaxSLPips=100, strefy OFF. EA raportuje swój pip w każdym pushu (<code>pip_size</code>) — przy rozjeździe z profilem serwer NIE kieruje decyzji na ten wykres i NIE serwuje sygnału (karta Instrument Routing pokazuje „ZŁA JEDNOSTKA"). Eventy USD trafiają na złoto dopiero po włączeniu routingu w karcie <b>Instrument Routing</b> (Event Config → <code>USD:XAUUSD</code>); bez świeżych danych z wykresu XAUUSD serwer zostaje przy parze FX. Szczegóły: RUNBOOK „Instrumenty nie-FX".</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -2087,6 +2113,52 @@
                     showToast('Serwer nieosiągalny — przełącznik niezapisany', false);
                 }
             });
+
+            // Instrument routing persists immediately on its own button
+            // (same reason as trade-all: never reset by a racing bulk Save)
+            $('btnSaveRouting').addEventListener('click', async function() {
+                try {
+                    var resp = await fetch(BASE_URL + '/api/config/routing', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ instrument_routing: $('routingInput').value })
+                    });
+                    var body = await resp.json();
+                    showToast(resp.ok ? 'Routing zapisany' : ('Routing odrzucony: ' + (body.message || '')), resp.ok);
+                    if (resp.ok) renderRouting(body);
+                } catch(e) {
+                    showToast('Serwer nieosiągalny — routing niezapisany', false);
+                }
+            });
+        }
+
+        function renderRouting(data) {
+            var table = data.instrument_routing || {};
+            var parts = [];
+            Object.keys(table).forEach(function(cur) {
+                parts.push(cur + ':' + table[cur].join(','));
+            });
+            $('routingInput').value = parts.join(';');
+            var live = data.live || {};
+            var lines = [];
+            Object.keys(live).forEach(function(cur) {
+                var rows = live[cur].map(function(r) {
+                    var st = r.fresh ? 'świeże dane' : (r.has_data ? 'dane nieświeże (' + Math.round((r.age_seconds||0)/60) + ' min)' : 'BRAK danych z EA');
+                    if (r.unit_ok === false) st += ', ZŁA JEDNOSTKA: EA pip ' + r.reported_pip_size + ' (popraw InpPipSizeOverride)';
+                    return r.symbol + ' [' + st + (r.profile ? ', profil ' + r.profile : '') + ']';
+                });
+                lines.push(cur + ' → ' + rows.join(' → '));
+            });
+            $('routingStatus').textContent = lines.length
+                ? lines.join(' | ')
+                : 'Routing OFF — decyzje idą na pary z DEFAULT_PAIRS.';
+        }
+
+        async function loadRoutingConfig() {
+            try {
+                var data = await apiFetch('/api/config/routing');
+                renderRouting(data);
+            } catch(e) { /* offline */ }
         }
 
         function getConfigState() {
@@ -2936,6 +3008,7 @@
                 } catch(e) { /* offline */ }
                 loadRiskConfig();
                 loadModelsConfig();
+                loadRoutingConfig();
                 loadRegimes();
                 loadProposals();
             })();
