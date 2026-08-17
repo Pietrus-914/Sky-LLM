@@ -77,8 +77,8 @@ foreach ($name in @("SkyTowerAI_EA", "SkyTower_Zones")) {
 }
 
 # --- 3. Synchronizacja datafolderow wszystkich terminali ----------------
-$sources = @("SkyTowerAI_EA.mq5", "SkyTowerAI_Zones.mqh", "SkyTowerAI_Panel.mqh",
-             "SkyTower_Zones.mq5")
+$sources = @("SkyTowerAI_EA.mq5", "SkyTowerAI_Units.mqh", "SkyTowerAI_Zones.mqh",
+             "SkyTowerAI_Panel.mqh", "SkyTower_Zones.mq5")
 $terminals = Get-ChildItem "$env:APPDATA\MetaQuotes\Terminal" -Directory -ErrorAction SilentlyContinue |
     Where-Object { Test-Path (Join-Path $_.FullName "MQL5") }
 if (-not $terminals) {

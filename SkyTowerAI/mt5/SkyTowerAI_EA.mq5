@@ -27,6 +27,7 @@ input int      InpCheckInterval = 60;            // Signal Check Interval (secon
 
 input group "=== Trading Settings ==="
 input double   InpRiskPercent = 10.0;            // Risk % per trade (of balance)
+input double   InpMaxMarginUsePercent = 0.0;     // Max % of free margin per position (0 = no cap = today's behaviour; set ~50 on gold/index charts at 1:100)
 input double   InpMaxLotPercent = 80.0;          // Max Lot % (default from server)
 input int      InpSlippage = 50;                 // Max Slippage (points)
 input double   InpMinConfidence = 0.5;           // Min Confidence to trade
@@ -35,6 +36,7 @@ input bool     InpUseSpreadLotReduction = true;  // Reduce lot by spread level
 
 input group "=== Safety Settings ==="
 input double   InpMaxSpreadPips = 10.0;          // Max Spread (pips)
+input double   InpPipSizeOverride = 0.0;         // Pip size in price units (0 = auto forex rule; XAUUSD 0.10, GER40/US500 1.0)
 input bool     InpUseStopLoss = true;            // Use Stop Loss
 input double   InpDefaultSLPercent = 40.0;       // Default SL % of risk
 // NOTE: the daily trade limit lives ONLY on the server (dashboard →
@@ -549,6 +551,15 @@ void TryRecoverOpenPosition()
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   //--- Pip unit override must be armed before ANY SkyPipSize/spread call
+   //--- (recovery, spread gates, reports all run through it).
+   g_skyPipSizeOverride = InpPipSizeOverride;
+   Print("Pip size override: ",
+         (InpPipSizeOverride > 0.0)
+            ? DoubleToString(InpPipSizeOverride, 5) + " price units"
+            : "0 (auto forex rule)",
+         " -> effective pip ", DoubleToString(SkyPipSize(_Symbol), 5));
+
    //--- Generate unique magic number per symbol if auto mode
    g_magicNumber = InpMagicNumber;
    if(g_magicNumber == 0)
@@ -637,6 +648,35 @@ int OnInit()
          SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL),
          " pts | freeze level: ",
          SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL), " pts");
+   // Symbol specification needed to configure a per-instrument profile
+   // (pip override, spread gates, budget) — grep the log for "SkyTower SPEC:".
+   double specAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double specMargin1Lot = -1.0;
+   if(specAsk <= 0
+      || !OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, 1.0, specAsk, specMargin1Lot)
+      || !MathIsValidNumber(specMargin1Lot))
+      specMargin1Lot = -1.0;
+   PrintFormat("SkyTower SPEC: symbol=%s digits=%d point=%s pip=%s "
+               "tick_size=%s tick_value=%.5f contract_size=%.2f "
+               "vol_min=%s vol_step=%s vol_max=%s "
+               "currency_profit=%s currency_margin=%s leverage=1:%d "
+               "calc_mode=%d margin_1lot=%.2f spread_pips=%.2f",
+               _Symbol,
+               (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS),
+               DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_POINT), 8),
+               DoubleToString(SkyPipSize(_Symbol), 8),
+               DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE), 8),
+               SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE),
+               SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE),
+               DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN), 4),
+               DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP), 4),
+               DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX), 2),
+               SymbolInfoString(_Symbol, SYMBOL_CURRENCY_PROFIT),
+               SymbolInfoString(_Symbol, SYMBOL_CURRENCY_MARGIN),
+               (int)AccountInfoInteger(ACCOUNT_LEVERAGE),
+               (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_CALC_MODE),
+               specMargin1Lot,
+               SkySpreadPips(_Symbol));
    Print("==============================================");
 
    //--- Check server connection
@@ -1916,6 +1956,13 @@ void ExecuteEventTrade()
          success = trade.Sell(lots, symbol, bid, sl, 0, "SkyTower-AI");
    }
 
+   // 10019 (no money): the free-margin cap in CalculateLotSize should keep
+   // this from happening; if it still does, no retry — sizing must change.
+   if(!success && trade.ResultRetcode() == TRADE_RETCODE_NO_MONEY)
+      Print("Order rejected: not enough margin (retcode 10019) for ",
+            DoubleToString(lots, volumeDigits), " lots - lower ",
+            "InpMaxMarginUsePercent/budget or raise leverage");
+
    bool requestConfirmed = ConfirmTradeRequest(success, "Trade execution");
 
    // Bind only the canonical live position. ResultOrder() is an order ticket,
@@ -2885,8 +2932,53 @@ double CalculateLotSize(string symbol, string direction, double lotPercent,
 
    double lots = riskAmount / lossPerLot;
 
+   // Free-margin cap. At forex leverage (1:500) the margin per lot is tiny
+   // and this never binds; on 1:100 index/gold CFDs the risk-based lot can
+   // exceed what the account can carry and the broker answers 10019
+   // (no money). Margin is symmetric for CFDs, so the trade's own side and
+   // entry price are used only because they are already known here.
+   double marginPerLot = 0;
+   if(InpMaxMarginUsePercent > 0
+      && OrderCalcMargin(orderType, symbol, 1.0, entryPrice, marginPerLot)
+      && MathIsValidNumber(marginPerLot) && marginPerLot > 0)
+   {
+      double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+      double maxLotsByMargin =
+         (freeMargin * InpMaxMarginUsePercent / 100.0) / marginPerLot;
+      if(MathIsValidNumber(maxLotsByMargin) && lots > maxLotsByMargin)
+      {
+         Print("Lot capped by free margin: risk-based ",
+               DoubleToString(lots, 4), " -> ",
+               DoubleToString(maxLotsByMargin, 4),
+               " lots (free margin ", DoubleToString(freeMargin, 2),
+               ", margin/lot ", DoubleToString(marginPerLot, 2),
+               ", cap ", DoubleToString(InpMaxMarginUsePercent, 0), "%)");
+         lots = maxLotsByMargin;
+      }
+   }
+
    // Never promote an under-minimum risk result to the broker minimum.
    return SkyNormalizeVolumeDown(symbol, lots);
+}
+
+//+------------------------------------------------------------------+
+//| Instrument root: uppercase, "/" removed, cut at the first broker    |
+//| suffix separator ('.', '_' or '-'). GER40.cash -> GER40,           |
+//| XAUUSD.pro -> XAUUSD, EURUSD_SB -> EURUSD, US500-F -> US500.        |
+//+------------------------------------------------------------------+
+string SkyRootOf(string s)
+{
+   string root = s;
+   StringReplace(root, "/", "");
+   StringToUpper(root);
+   int cut = StringLen(root);
+   int dot = StringFind(root, ".");
+   int under = StringFind(root, "_");
+   int dash = StringFind(root, "-");
+   if(dot >= 0 && dot < cut) cut = dot;
+   if(under >= 0 && under < cut) cut = under;
+   if(dash >= 0 && dash < cut) cut = dash;
+   return StringSubstr(root, 0, cut);
 }
 
 //+------------------------------------------------------------------+
@@ -2894,6 +2986,15 @@ double CalculateLotSize(string symbol, string direction, double lotPercent,
 //+------------------------------------------------------------------+
 string ConvertPairToSymbol(string pair)
 {
+   // Root guard FIRST: a server pair whose instrument root equals the
+   // chart's root (GER40 vs GER40.cash, XAUUSD vs XAUUSD.pro, and every
+   // forex case) always resolves to the chart's own symbol. Recovery
+   // filters POSITION_SYMBOL == _Symbol, and 5-char index roots would
+   // otherwise fall through to the forex-suffix probe below.
+   string pairRoot = SkyRootOf(pair);
+   if(StringLen(pairRoot) > 0 && pairRoot == SkyRootOf(_Symbol))
+      return _Symbol;
+
    string symbol = pair;
    StringReplace(symbol, "/", "");
 
