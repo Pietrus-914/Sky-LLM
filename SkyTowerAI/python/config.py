@@ -161,11 +161,27 @@ if _extra_events.strip():
     TIER2_EVENTS = TIER2_EVENTS + [e.strip() for e in _extra_events.split(",") if e.strip()]
 
 # Pełne rostery (niezmienne bazy do filtrowania). Panel zapisuje listę
-# WŁĄCZONYCH nazw (enabled_events w runtime_overrides.json); TIER1_EVENTS/
+# WYŁĄCZONYCH nazw (disabled_events w runtime_overrides.json); TIER1_EVENTS/
 # TIER2_EVENTS są filtrowanym widokiem tych rosterów — nigdy odwrotnie,
 # inaczej pierwszy zapis z panelu bezpowrotnie skróciłby bazę.
+# Semantyka "wyłączone", nie "włączone": nazwa DODANA do rostera po ostatnim
+# zapisie z panelu jest domyślnie AKTYWNA. Stary format (enabled_events =
+# lista włączonych) przycinał roster do tego, co panel znał w chwili zapisu —
+# dashboard z 13 hardcodowanymi nazwami wycinał w ten sposób "Federal Funds
+# Rate"/"Official Bank Rate"/"Overnight Rate" dodane 29.07 (FOMC/BoE/BoC
+# niehandlowalne po każdym Save). Migracja legacy w _apply_runtime_overrides.
 TIER1_EVENTS_ALL = list(TIER1_EVENTS)
 TIER2_EVENTS_ALL = list(TIER2_EVENTS)
+
+# Nazwy, które dashboard sprzed 18.08.2026 renderował i wysyłał w `events`.
+# Tylko TE mógł operator świadomie odznaczyć — brak każdej innej nazwy w
+# legacy `enabled_events` to skutek nieświadomości panelu, nie decyzja.
+LEGACY_PANEL_EVENT_ROSTER = (
+    "Interest Rate Decision", "Cash Rate", "Official Cash Rate",
+    "Non-Farm Payrolls", "NFP", "CPI",
+    "Employment Change", "Unemployment Rate", "GDP", "Advance GDP",
+    "Retail Sales", "New Home Sales", "Existing Home Sales",
+)
 
 # Wszystkie high impact events (dla kompatybilności)
 HIGH_IMPACT_EVENTS = TIER1_EVENTS + TIER2_EVENTS
@@ -495,10 +511,12 @@ def _read_runtime_overrides() -> dict:
 
 
 def save_runtime_overrides(updates: dict):
-    """Merge updates into the overrides file (atomic write). An existing but
-    unparseable file is moved to *.corrupt-<timestamp> first so the operator's
-    previous panel state is preserved for inspection instead of being
-    replaced by a file holding only this one key."""
+    """Merge updates into the overrides file (atomic write). A value of None
+    REMOVES that key (used to retire superseded keys such as the legacy
+    `enabled_events`). An existing but unparseable file is moved to
+    *.corrupt-<timestamp> first so the operator's previous panel state is
+    preserved for inspection instead of being replaced by a file holding only
+    this one key."""
     import json
     data = _read_runtime_overrides()
     if not data and os.path.exists(_OVERRIDES_FILE) and os.path.getsize(_OVERRIDES_FILE) > 0:
@@ -513,7 +531,11 @@ def save_runtime_overrides(updates: dict):
                 _note(f"corrupt runtime_overrides.json moved to {aside}")
             except OSError:
                 pass
-    data.update(updates)
+    for key, value in updates.items():
+        if value is None:
+            data.pop(key, None)
+        else:
+            data[key] = value
     os.makedirs(os.path.dirname(_OVERRIDES_FILE), exist_ok=True)
     tmp = _OVERRIDES_FILE + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
@@ -521,24 +543,90 @@ def save_runtime_overrides(updates: dict):
     os.replace(tmp, _OVERRIDES_FILE)
 
 
+def _is_str_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(e, str) for e in value)
+
+
+def _apply_disabled_events(disabled) -> None:
+    """Rebuild the effective TIER lists from the immutable rosters minus the
+    disabled names (never shrinks the *_ALL baselines)."""
+    global TIER1_EVENTS, TIER2_EVENTS, HIGH_IMPACT_EVENTS
+    disabled_set = set(disabled or ())
+    TIER1_EVENTS = [e for e in TIER1_EVENTS_ALL if e not in disabled_set]
+    TIER2_EVENTS = [e for e in TIER2_EVENTS_ALL if e not in disabled_set]
+    HIGH_IMPACT_EVENTS = TIER1_EVENTS + TIER2_EVENTS
+
+
+def disabled_event_names() -> list:
+    """Roster names currently switched off (what the panel persists)."""
+    effective = set(TIER1_EVENTS) | set(TIER2_EVENTS)
+    return [n for n in TIER1_EVENTS_ALL + TIER2_EVENTS_ALL if n not in effective]
+
+
+def set_enabled_events(enabled: list, known_roster: list = None) -> list:
+    """Panel contract: the dashboard posts the names it shows CHECKED (out of
+    the full rosters it received from /api/config/events). Everything else in
+    the rosters becomes disabled; unknown names are ignored. Persists
+    `disabled_events` and retires the legacy `enabled_events` key. Returns the
+    disabled list.
+
+    `known_roster` — the names the CLIENT actually rendered. A tab loaded
+    before a roster-changing restart (code deploy, SKYTOWER_EXTRA_EVENTS edit)
+    still holds the old roster, and without this scope its Save would disable
+    every name added since: the same silent-loss shape as the bug this key
+    replaced, just narrower. Names outside `known_roster` keep whatever state
+    they have. Omitted (scripted POST, older panel) = today's behaviour: the
+    complement of the FULL rosters.
+    """
+    enabled_set = set(enabled)
+    roster = TIER1_EVENTS_ALL + TIER2_EVENTS_ALL
+    if not _is_str_list(known_roster):
+        disabled = [n for n in roster if n not in enabled_set]
+    else:
+        known = set(known_roster)
+        still_off = set(disabled_event_names())
+        disabled = []
+        for name in roster:
+            # A name the client rendered: its checkbox is the verdict.
+            # A name it never saw: leave it exactly as it is.
+            off = (name not in enabled_set) if name in known else (name in still_off)
+            if off:
+                disabled.append(name)
+    _apply_disabled_events(disabled)
+    save_runtime_overrides({"disabled_events": disabled, "enabled_events": None})
+    return disabled
+
+
 def _apply_runtime_overrides():
     data = _read_runtime_overrides()
     if not data:
         return
     global MIN_IMPACT_LEVEL, TRADE_ALL_EVENTS
-    global TIER1_EVENTS, TIER2_EVENTS, HIGH_IMPACT_EVENTS
     if str(data.get('min_impact', '')).upper() in ("LOW", "MEDIUM", "HIGH"):
         MIN_IMPACT_LEVEL = str(data['min_impact']).upper()
     if isinstance(data.get('trade_all_events'), bool):
         TRADE_ALL_EVENTS = data['trade_all_events']
-    # Panel-persisted event whitelist: list of ENABLED names, applied as a
-    # filter over the immutable *_ALL rosters (unknown names are ignored).
-    enabled = data.get('enabled_events')
-    if isinstance(enabled, list) and all(isinstance(e, str) for e in enabled):
-        enabled_set = set(enabled)
-        TIER1_EVENTS = [e for e in TIER1_EVENTS_ALL if e in enabled_set]
-        TIER2_EVENTS = [e for e in TIER2_EVENTS_ALL if e in enabled_set]
-        HIGH_IMPACT_EVENTS = TIER1_EVENTS + TIER2_EVENTS
+    # Panel-persisted event whitelist: list of DISABLED names, applied as a
+    # filter over the immutable *_ALL rosters (unknown names are ignored,
+    # roster additions stay enabled). Legacy `enabled_events` (a list of
+    # ENABLED names written by the pre-18.08.2026 dashboard, which only knew
+    # LEGACY_PANEL_EVENT_ROSTER) is migrated: only names that panel could
+    # actually show count as deliberately disabled — every other roster name
+    # it silently dropped (Federal Funds Rate, Official Bank Rate, Overnight
+    # Rate, ...) is re-enabled, and the migration is reported.
+    disabled = data.get('disabled_events')
+    if _is_str_list(disabled):
+        _apply_disabled_events(disabled)
+    elif _is_str_list(data.get('enabled_events')):
+        legacy_enabled = set(data['enabled_events'])
+        migrated = [n for n in LEGACY_PANEL_EVENT_ROSTER if n not in legacy_enabled]
+        rescued = [n for n in TIER1_EVENTS_ALL + TIER2_EVENTS_ALL
+                   if n not in legacy_enabled and n not in LEGACY_PANEL_EVENT_ROSTER]
+        _apply_disabled_events(migrated)
+        _note(f"runtime_overrides.json: legacy 'enabled_events' migrated to "
+              f"'disabled_events' ({len(migrated)} name(s) stay disabled: {migrated}); "
+              f"roster names the old panel could not display are re-enabled: "
+              f"{rescued}. Save the Event Config panel once to persist the new key.")
     for key, lo, hi, cast in (("max_daily_trades", 1, 100, int),
                               ("max_daily_loss_usd", 10, 1_000_000, float),
                               ("max_loss_usd", 5, 100_000, float),

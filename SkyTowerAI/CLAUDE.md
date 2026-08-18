@@ -3,7 +3,7 @@
 ## Quick Summary
 SkyTower-AI is an automated forex trading system that trades high-impact economic news events. A Flask server analyzes each event (COT data, retail sentiment used contrarian, forecast vs previous, market context pushed by MT5) and decides BUY/SELL/SKIP via an LLM panel (OpenRouter) with a rule-based fallback. The MT5 Expert Advisor executes; **the server also manages the exit** (EA keeps only technical guardrails).
 
-State: server **4.1.0**, **864 tests green** (17.08.2026), running natively on Windows. Active branch `feature/multi-instrument` (instrument profiles + event→instrument routing; see `../wiki/pages/multi-instrument.md`). Docs wiki: `../wiki/index.md`.
+State: server **4.1.0**, **913 tests green** (18.08.2026), running natively on Windows. Active branch `feature/multi-instrument` (instrument profiles + event→instrument routing; see `../wiki/pages/multi-instrument.md`). Docs wiki: `../wiki/index.md`.
 
 ## Project Location
 `C:\Users\pietr\Documents\Sky tower\SkyTowerAI\`
@@ -38,6 +38,7 @@ SkyTowerAI/
 │   ├── decision_history.py       # Decision audit + track record (SHARED instance with engine)
 │   ├── market_context.py         # EA-pushed OHLC -> LLM market context + cross-pair
 │   ├── event_reaction_history.py # Post-event reaction records
+│   ├── event_cluster.py          # Same-minute releases: dominant member + siblings (shared with tools/)
 │   ├── event_path_recorder.py    # Price paths of ALL monitored events (+ measure_path)
 │   ├── regime_tracker.py         # Auto monetary-policy regimes per currency
 │   ├── calibration.py            # Calibration ledger (per-model keys, spread-aware)
@@ -66,7 +67,7 @@ SkyTowerAI/
 ├── mt5/
 │   ├── SkyTowerAI_EA.mq5         # Expert Advisor (~1950 lines — use offset/limit reads!)
 │   └── SkyTower_Zones.mq5        # Zone indicator
-├── tests/                        # 864 tests (17.08.2026): unit/ integration/ e2e/ (pytest)
+├── tests/                        # 913 tests (18.08.2026): unit/ integration/ e2e/ (pytest)
 ├── START.bat                     # PRIMARY launcher: server (auto-restart) + MT5, idempotent
 ├── start_server.bat              # Server only (creates venv on first run)
 ├── start_server_24_7.bat         # 24/7 variant with watchdog loop
@@ -114,7 +115,8 @@ LLM access is via **OpenRouter** (`OPENROUTER_API_KEY` in `python/.env` — NEVE
 
 ## Trading Rules & Risk
 
-- **Event filter**: impact threshold (`MIN_IMPACT_LEVEL`) + name whitelist (TIER1/TIER2 + extras), or every event ≥ MIN_IMPACT when `TRADE_ALL_EVENTS` is ON. Speeches/testimony/press conferences (`NON_DATA_EVENT_MARKERS`) are NEVER traded in any mode. Shared predicate: `CalendarAggregator._event_is_tradeable`.
+- **Event filter**: impact threshold (`MIN_IMPACT_LEVEL`) + name whitelist (TIER1/TIER2 + extras), or every event ≥ MIN_IMPACT when `TRADE_ALL_EVENTS` is ON. Speeches/testimony/press conferences (`NON_DATA_EVENT_MARKERS`) are NEVER traded in any mode. Shared predicate: `CalendarAggregator._event_is_tradeable`. The panel persists the **DISABLED complement** (`disabled_events`), so a roster name added by a newer server is enabled by default and the dashboard renders its checkboxes from `GET /api/config/events` (`tier1_events_all`/`tier2_events_all`) — never from a list baked into the HTML. Storing the ENABLED list instead is what silently un-traded FOMC/BoE/BoC for three weeks (18.08.2026 fix; legacy files are migrated on load via `LEGACY_PANEL_EVENT_ROSTER`).
+- **One decision per release**: events sharing currency + minute are ONE price path, so `event_cluster.py` picks a dominant (impact → family → modified-variant → name — the SAME order `tools/build_learned_stats.py` uses to bundle statistics) and the updater analyzes it once, marking the siblings analyzed and passing them into the prompt as `CO-RELEASED AT THE SAME MINUTE`. Serial analysis previously bought up to 4 panels per release, each against a shrinking panel deadline, and labelled the trade with the weakest sibling.
 - **Pairs**: signal is served only to the EA asking about the decision's pair; EA runs on `DEFAULT_PAIRS` charts (NZDUSD, USDCAD, AUDUSD, GBPUSD; broker suffixes like `.pro` handled).
 - **Risk lives ONLY in the dashboard panel** (Risk & Daily Limits → `/api/config/risk`, persisted in `logs/runtime_overrides.json`; precedence default < env < panel). Defaults: max loss **$100/trade**, **$300/day** (block until midnight UTC), **5 trades/day**, **30 min** max hold. **Profit protection** (reworked 05.08.2026 after the NZD postmortem) is panel-configurable too: close on ≥50% drop from peak, but only once the peak reached **30% of max_loss_usd** (not a flat $20), only **120 s after open** (release whipsaw is off-limits), only after **2 consecutive breaching reports** (like emergency spread), and **never at negative total P/L** (that belongs to max-loss/SL). Every `/api/signal` carries `max_loss_usd` — **the EA REJECTS signals without it** (old server = no trading, by design). Daily limits are enforced server-side; closed trades persist in `logs/trade_history.jsonl` and counters rebuild after restart.
 - **Lot sizing (EA)**: from SL distance; budget = min(balance × `InpRiskPercent`%, `max_loss_usd`). Optional lot reductions (`InpUseConfidenceLot`, `InpUseSpreadLotReduction`) — operator prefers **false**. Spread ENTRY blocks always active (`InpMaxSpreadPips`; >15 pips never enter).

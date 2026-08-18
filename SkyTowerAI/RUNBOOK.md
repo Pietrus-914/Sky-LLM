@@ -138,6 +138,52 @@ bez czekania na realny kalendarz. Na koncie demo z podpiętym EA (USDCAD):
 - Kalibracja decyzji: karta Calibration (tab AI) albo `curl http://127.0.0.1:5555/api/calibration`
 - Reżimy walut: karta Currency Regimes albo `curl http://127.0.0.1:5555/api/regimes`
 
+### Lista handlowanych nazw eventów (panel → Event Config)
+
+Listę Tier 1/Tier 2 **renderuje serwer** (`GET /api/config/events` →
+`tier1_events_all`, `tier2_events_all`, `disabled_events`), a Zapisz utrwala
+nazwy **odznaczone** (`disabled_events` w `logs/runtime_overrides.json`).
+Dzięki temu nazwa dodana w nowej wersji serwera jest **domyślnie aktywna**.
+
+> **Do 18.08.2026 było odwrotnie i to był bug:** panel miał 13 nazw wpisanych
+> na sztywno w `dashboard.html`, a serwer zapisywał listę WŁĄCZONYCH nazw —
+> więc każdy Zapis wycinał z whitelisty nazwy, których panel nie znał. Od
+> 29.07.2026 roster miał m.in. `Federal Funds Rate`, `Official Bank Rate`,
+> `Overnight Rate` (tak FF nazywa decyzje Fed/BoE/BoC) — po pierwszym Zapisie
+> te decyzje **przestawały być handlowane**, bez śladu w panelu.
+
+Sprawdzenie, co jest naprawdę uzbrojone (bez zgadywania z panelu):
+```powershell
+curl http://127.0.0.1:5555/api/config/events   # 24/7: port 5556
+# tier1_events / tier2_events = efektywna whitelista; disabled_events = wyłączone
+```
+Migracja starego pliku dzieje się **sama przy starcie**: `enabled_events` jest
+tłumaczone na `disabled_events`, a nazwy, których stary panel nie umiał
+pokazać, wracają do gry. Serwer wypisuje wtedy ostrzeżenie `legacy
+'enabled_events' migrated…` (widoczne w oknie serwera i w `logs/server.log`).
+Po migracji: **najpierw odśwież panel twardo (Ctrl+F5), potem kliknij raz
+Zapisz** w Event Config, żeby utrwalić nowy klucz. Kolejność ma znaczenie —
+karta otwarta jeszcze sprzed restartu ma starą listę nazw; nowy panel wysyła
+razem z zapisem listę nazw, które wyświetlał (`roster`), więc serwer nie
+wyłączy nazw, których ta karta nie znała, ale karta sprzed 18.08.2026 tego
+pola nie ma i jej Zapis cofnąłby migrację (naprawa: odśwież i zapisz jeszcze
+raz — wszystkie nazwy są widoczne na liście jako odznaczone).
+
+### Jedna decyzja na publikację (klaster tej samej minuty)
+
+Eventy tej samej waluty i minuty (CAD `CPI m/m` + `Median/Trimmed/Common CPI
+y/y`; NFP + `Average Hourly Earnings` + `Unemployment Rate`) to **jedna
+publikacja i jedna ścieżka ceny**, więc od 18.08.2026 serwer analizuje je raz:
+wybiera „dominanta" (impact → rodzina → wariant → nazwa), a rodzeństwo od razu
+oznacza jako przeanalizowane. W logu widać:
+```
+Release cluster: 4 events at 12:30 UTC (CAD) -> analyzing CPI m/m (HIGH); shadowed: [...]
+Co-released this minute: ['Median CPI y/y', 'Trimmed CPI y/y', 'Common CPI y/y']
+```
+Wcześniej każdy sibling kupował własny panel (do ~4× koszt), każdy kolejny
+startował później względem deadline'u panelu, a trade lądował pod nazwą
+najsłabszego członka publikacji (produkcja 17.08.2026: „Common CPI y/y”).
+
 ## Zatrzymanie / restart
 
 Natywnie: zamknij okno serwera (EA przestanie dostawać sygnały = nie handluje);

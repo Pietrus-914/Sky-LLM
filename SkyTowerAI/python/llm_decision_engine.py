@@ -22,6 +22,7 @@ from decision_history import DecisionHistory
 from llm_util import openrouter_headers, reasoning_body
 from market_context import normalize_pair
 from instrument_profiles import profile_for, same_asset_class
+from event_cluster import co_release_brief
 from config import (LLM_CONFIG, TRADING_CONFIG, DEFAULT_PAIRS,
                     HIGH_IMPACT_EVENTS, OPENROUTER_API_KEY, FORCE_DECISION,
                     ENSEMBLE_K, ENSEMBLE_MODELS)
@@ -344,21 +345,28 @@ confidence — do NOT inflate it just because a direction is required."""
             self.client = None
             logger.info("Using rule-based decision engine (no LLM)")
 
-    def analyze_event(self, event: EconomicEvent, market_context: Dict = None) -> TradingDecision:
+    def analyze_event(self, event: EconomicEvent, market_context: Dict = None,
+                      co_released: List[Dict] = None) -> TradingDecision:
         """
         Analyze an upcoming economic event and make a trading decision
 
         Args:
-            event: The economic event to analyze
+            event: The economic event to analyze — for a same-minute cluster
+                this is the DOMINANT member (event_cluster.pick_dominant), the
+                one the trade and its statistics are filed under.
             market_context: Optional dict from market_context.build_market_context()
                 (trend, ATR, S/R zones from EA-pushed OHLC). None when no EA
                 has pushed data for this event yet.
+            co_released: Other prints of the SAME release minute
+                (event_cluster.co_release_brief) — the market prices their
+                combined surprise, so the model must see them. Empty/None for
+                a solitary event, and then the prompt is unchanged.
 
         Returns:
             TradingDecision object
         """
         # Gather all data
-        data_context = self._gather_data(event, market_context)
+        data_context = self._gather_data(event, market_context, co_released)
 
         # Make decision (LLM or rule-based)
         if self.client:
@@ -397,7 +405,8 @@ confidence — do NOT inflate it just because a direction is required."""
                            f"profile default {prof.default_sl_pips:g} pips")
         return decision
 
-    def _gather_data(self, event: EconomicEvent, market_context: Dict = None) -> Dict:
+    def _gather_data(self, event: EconomicEvent, market_context: Dict = None,
+                     co_released: List[Dict] = None) -> Dict:
         """Gather all relevant data for decision making"""
         currency = event.currency.upper()
         source_status = {}
@@ -572,6 +581,11 @@ confidence — do NOT inflate it just because a direction is required."""
         if instrument:
             ctx["instrument"] = instrument
             source_status["instrument"] = instrument["name"]
+        # Same-minute co-releases (event_cluster): only present for a cluster,
+        # so a solitary event's prompt is byte-identical to before.
+        if co_released:
+            ctx["co_released"] = list(co_released)
+            source_status["co_released"] = len(ctx["co_released"])
         return ctx
 
     @staticmethod
@@ -1256,6 +1270,19 @@ confidence — do NOT inflate it just because a direction is required."""
             playbook_block = (f"\nEVENT PLAYBOOK (curated observations from historical charts "
                               f"of this event type — small-sample frequencies, NOT rules"
                               f"{stats_xref}):\n{data_context['playbook']}\n")
+        # Same-minute co-releases: the tape prices the COMBINED surprise, so
+        # a decision made on the headline alone can be blindsided by a
+        # contradicting sibling (CAD CPI m/m prints with Median/Trimmed/Common
+        # CPI; NFP with Average Hourly Earnings and the Unemployment Rate).
+        # Present only for a cluster — a solitary event's prompt is unchanged.
+        co_release_block = ""
+        if data_context.get('co_released'):
+            co_release_block = (
+                f"\nCO-RELEASED AT THE SAME MINUTE (these print SIMULTANEOUSLY with the "
+                f"event above — the market reacts to the COMBINED surprise, and a "
+                f"conflicting sibling can flatten or reverse the move implied by the "
+                f"headline alone. You are trading the whole release, not one line of it):\n"
+                f"{json.dumps(data_context['co_released'], indent=2)}\n")
         # Machine-measured base rates for this event/pair (F3 learning loop)
         learned_block = ""
         if data_context.get('learned_stats'):
@@ -1296,7 +1323,7 @@ confidence — do NOT inflate it just because a direction is required."""
 
 EVENT DETAILS:
 {json.dumps(data_context['event'], indent=2)}
-
+{co_release_block}
 COT (INSTITUTIONAL) ANALYSIS:
 {json.dumps(data_context['cot_analysis'], indent=2)}
 
@@ -2052,4 +2079,14 @@ decision in JSON format."""
             return None
 
         logger.info(f"Analyzing upcoming event: {event.event_name} ({event.currency})")
-        return self.analyze_event(event)
+        return self.analyze_event(event, co_released=self._co_released_for(event))
+
+    def _co_released_for(self, event) -> List[Dict]:
+        """Other prints of this event's release minute, read from the calendar
+        cache (never a fetch — this runs inside request handlers). Best-effort:
+        the co-release block is context, never a precondition for deciding."""
+        try:
+            return co_release_brief(event, self.calendar.peek_cached_events())
+        except Exception as e:
+            logger.debug(f"Co-release lookup failed: {e}")
+            return []

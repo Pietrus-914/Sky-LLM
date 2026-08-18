@@ -169,14 +169,19 @@ def run_updater_once(world):
     with server.decision_lock:
         if server.next_decision is None:
             preload = config.TRADING_CONFIG["preload_seconds"]
-            for event in server._get_next_unanalyzed_events():
+            events = server._get_next_unanalyzed_events()
+            for event in events:
                 t = event.datetime_utc
                 t = t.replace(tzinfo=None) if t.tzinfo else t
                 until = (t - utcnow()).total_seconds()
                 if until < -30:
                     continue
                 if 0 < until <= preload:
-                    event_to_analyze = event
+                    # one decision per RELEASE (same currency + minute)
+                    event_to_analyze, shadowed = server._select_release_group(
+                        events, event)
+                    for sibling in shadowed:
+                        server._mark_event_analyzed(sibling, "co-released")
                     break
                 if until > preload:
                     break

@@ -470,3 +470,34 @@ learned_stats (decyzja operatora).
 
 Testy: 864 zielone (+22), 2 znane wstępne w test_config. EA skompilowany
 (0 err, .ex5 17.08 19:51), nadal NIE wgrany do datafolderów (krok operatora).
+
+## 2026-08-18 INGEST | Selekcja eventów: panel przycinał whitelistę, klaster jednej minuty szedł seryjnie
+
+- Wejście: przegląd logów produkcji (port 5556) 17–18.08.2026 + screeny panelu;
+  weryfikacja w kodzie (workflow 5 agentów), potem adversarialny review naprawy
+  (6 kątów × weryfikacja, 25 agentów).
+- Nowa strona: [pages/event-selection.md](pages/event-selection.md) — oba bugi,
+  naprawa, świadome ograniczenia. Zaktualizowane: `wiki/index.md`,
+  `SkyTowerAI/CLAUDE.md` (moduł `event_cluster.py`, reguły selekcji, 913 testów),
+  `RUNBOOK.md` (sekcje „Lista handlowanych nazw eventów" i „Jedna decyzja na
+  publikację"), Przewodnik w dashboardzie (Tier 1/2 + Active Currencies).
+- Bug 1: panel miał 13 nazw na sztywno, roster w `config.py` 19 (od 29.07 nazwy
+  Fed/BoE/BoC z feedu FF), a serwer zapisywał listę WŁĄCZONYCH → każdy Zapisz
+  wycinał decyzje banków centralnych z whitelisty, niewidocznie. Naprawa:
+  zapisujemy `disabled_events`, roster renderuje serwer, migracja legacy przy
+  starcie, Zapis niesie `roster` karty (stara karta nie wyłączy nazw, których
+  nie widziała). Usunięta martwa gałąź POST `tier1_events`/`tier2_events`
+  (string w body robił z whitelisty napis iterowany znak po znaku).
+- Bug 2: eventy tej samej waluty i minuty analizowane seryjnie — do 4 paneli na
+  publikację, malejący deadline, trade pod nazwą najsłabszego siblinga
+  (produkcja 17.08: „Common CPI y/y" zamiast „CPI m/m"). Naprawa:
+  `event_cluster.py` (dominant po impact → rodzina → wariant → nazwa, porządek
+  DZIELONY z `tools/build_learned_stats.py`), jedna analiza na publikację,
+  rodzeństwo w prompcie jako `CO-RELEASED AT THE SAME MINUTE`. Prompt
+  pojedynczego eventu bajt w bajt bez zmian → `ENTRY_PROMPT_VERSION` bez zmian.
+- Review: 2 ustalenia przeżyły weryfikację — (1) Zapis ze starej karty
+  (wdrożone: scope `roster` + Ctrl+F5 w RUNBOOK), (2) klaster cross-currency
+  USD+CAD (~11 min/rok) — świadomie NIE grupujemy po instrumencie, opis
+  w „Znane ograniczenia". Reszta odrzucona jako pre-existing albo nietrafiona.
+- Testy: 913 zielonych (+49), 2 znane wstępne w `test_config` (operatorski
+  `runtime_overrides.json` pinuje model).
