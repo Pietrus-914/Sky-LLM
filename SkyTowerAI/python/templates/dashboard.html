@@ -1055,7 +1055,7 @@
             <div class="config-section">
                 <h3>Tier 1 Events (Best Reactions - Always Trade)</h3>
                 <div class="config-grid" id="tier1Grid">
-                    <!-- Populated by JS -->
+                    <!-- Rendered from GET /api/config/events (server roster) -->
                 </div>
             </div>
 
@@ -1063,8 +1063,14 @@
             <div class="config-section">
                 <h3>Tier 2 Events (Good Reactions - Trade with Caution)</h3>
                 <div class="config-grid" id="tier2Grid">
-                    <!-- Populated by JS -->
+                    <!-- Rendered from GET /api/config/events (server roster) -->
                 </div>
+            </div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:-6px;margin-bottom:14px">
+                Listę nazw podaje serwer, a zapisywane są nazwy <b>odznaczone</b> — nazwa
+                dodana w nowszej wersji serwera jest domyślnie aktywna i sama pojawi się
+                na tej liście (do 18.08.2026 panel miał nazwy wpisane na sztywno i każdy
+                zapis wycinał z whitelisty te, których nie znał — m.in. decyzje Fed/BoE/BoC).
             </div>
 
             <!-- Impact Filter -->
@@ -1361,7 +1367,8 @@
                         <tr><td><b>Profit protection: close on drop from peak (%)</b></td><td>Guardrail ochrony zysku: zamyka, gdy CAŁKOWITY zysk trade'u (floating + zrealizowane partiale) spadnie o ten procent od szczytu. Po postmortem NZD (04.08.2026) działa ostrożnie: uzbraja się dopiero od progu poniżej, nie działa w karencji po otwarciu, wymaga potwierdzenia w <b>2 kolejnych raportach EA</b> (jak spread awaryjny), przy oddaniu &ge;90% dużego szczytu (&ge;2&times; próg) zamyka od razu, a <b>nigdy nie zamyka na minusie</b> — czerwony trade to sprawa max loss / SL brokera, nie „ochrony zysku". Zamknięcie musi też pokryć poduszkę prowizji (~7$/lot), żeby „ochrona" nie realizowała straty netto.</td><td>50</td></tr>
                         <tr><td><b>Profit protection arms at peak &ge; (% of max loss)</b></td><td>Próg uzbrojenia jako procent budżetu „Max loss per trade" (minimum 10$). Skaluje się z wielkością pozycji: stary płaski próg 20$ przy locie 1.57 to było ~1.3 pipsa — uzbrajał się na szumie spreadu sekundy przed publikacją.</td><td>30</td></tr>
                         <tr><td><b>Profit protection grace (s)</b></td><td>Karencja po otwarciu: przez tyle sekund guardrail w ogóle nie zamyka. Whipsaw publikacji (retrace 25-45% szpikulca wg playbooków) dzieje się właśnie w tym oknie. 0 = brak karencji.</td><td>120</td></tr>
-                        <tr><td><b>Tier 1 / Tier 2 / Currencies</b></td><td>Które typy eventów i waluty są aktywne.</td><td>bez zmian</td></tr>
+                        <tr><td><b>Tier 1 / Tier 2</b> (lista nazw)</td><td>Które nazwy eventów są handlowane, gdy „Trade ALL events" jest OFF. <b>Listę renderuje SERWER</b> (nie panel), a zapis zachowuje nazwy ODZNACZONE — więc nazwa dodana w nowej wersji serwera (np. „Federal Funds Rate", „Official Bank Rate", „Overnight Rate" — tak FF nazywa decyzje Fed/BoE/BoC) jest domyślnie AKTYWNA i pojawia się na liście po odświeżeniu. <b>Do 18.08.2026 było odwrotnie:</b> panel miał 13 nazw wpisanych na sztywno i każdy Zapis wycinał z whitelisty nazwy, których nie znał — decyzje Fed/BoE/BoC przestawały być handlowane po cichu. Jeśli serwer jest nieosiągalny przy wczytywaniu, lista pokazuje błąd, a Zapis <b>nie rusza</b> whitelisty (zapisze tylko resztę ustawień). To samo, gdy serwer odpowie <b>bez rostera</b> (starsza wersja) — zamiast wiecznego „loading…” zobaczysz czerwony komunikat. Zapis wysyła też listę nazw, którą ta karta wyświetliła, więc serwer wyłącza wyłącznie nazwy z tego zakresu — <b>karta otwarta sprzed restartu (albo sprzed 18.08.2026) nie wyłączy nazw, których nie widziała</b>. Mimo to po aktualizacji serwera warto raz odświeżyć panel twardo (Ctrl+F5), żeby zobaczyć pełną listę.</td><td>wszystko zaznaczone</td></tr>
+                        <tr><td><b>Active Currencies</b></td><td><b>Karta poglądowa — serwer ignoruje te checkboxy.</b> Waluty brane pod uwagę wynikają z <code>config.CURRENCY_PAIRS</code> (NZD, CAD, AUD, USD, GBP, SEK, NOK) i zmienia się je w kodzie, nie w panelu. EUR jest zaznaczone z domyślnych ustawień przeglądarki, ale eventy EUR nie wchodzą do pipeline'u — wykres EURUSD dostarcza tylko danych.</td><td>bez znaczenia</td></tr>
                         <tr><td><b>Currency Regimes (auto)</b></td><td>Reżim polityki banku (hiking/cutting/hold) per waluta — etykieta do statystyk reakcji, <b>nie wpływa na ryzyko</b>. Aktualizuje się SAM z każdej zarejestrowanej decyzji o stopach (niejednoznaczny hold ocenia LLM po reakcji rynku). Dropdown = ręczny override do następnej decyzji banku. EUR/JPY/CHF nie mają par na wykresach, więc nie auto-aktualizują się — dla nich override ręczny.</td><td>auto</td></tr>
                     </tbody>
                 </table>
@@ -1581,25 +1588,15 @@
 
         CET_OFFSET_HOURS = getCETOffset();
 
-        // Event tier definitions
-        var TIER1_EVENTS = [
-            'Interest Rate Decision',
-            'Cash Rate',
-            'Official Cash Rate',
-            'Non-Farm Payrolls',
-            'NFP',
-            'CPI'
-        ];
-
-        var TIER2_EVENTS = [
-            'Employment Change',
-            'Unemployment Rate',
-            'GDP',
-            'Advance GDP',
-            'Retail Sales',
-            'New Home Sales',
-            'Existing Home Sales'
-        ];
+        // Event tier rosters — filled from GET /api/config/events
+        // (tier1_events_all / tier2_events_all). NEVER hardcode names here:
+        // a client roster older than config.py clipped every newer roster
+        // name (Federal Funds Rate, Official Bank Rate, Overnight Rate…) out
+        // of the whitelist on each Save, because Save posts the checked
+        // names and the server disables the rest. Empty until the API answers.
+        var TIER1_EVENTS = [];
+        var TIER2_EVENTS = [];
+        var eventRosterLoaded = false;
 
         var CURRENCIES = ['NZD', 'CAD', 'AUD', 'USD', 'GBP', 'EUR', 'SEK', 'NOK'];
 
@@ -2059,26 +2056,74 @@
         // ============================================================
         // EVENT CONFIG TAB
         // ============================================================
-        function initConfigTab() {
-            // Tier 1
-            var grid1 = $('tier1Grid');
-            TIER1_EVENTS.forEach(function(name) {
-                var id = 'tier1_' + name.replace(/\s+/g, '_');
-                grid1.innerHTML += '<div class="checkbox-item">' +
-                    '<input type="checkbox" id="' + id + '" checked>' +
-                    '<label for="' + id + '">' + escapeHtml(name) + '</label>' +
-                '</div>';
-            });
+        function eventCheckboxId(tier, name) {
+            return tier + '_' + name.replace(/\s+/g, '_');
+        }
 
-            // Tier 2
-            var grid2 = $('tier2Grid');
-            TIER2_EVENTS.forEach(function(name) {
-                var id = 'tier2_' + name.replace(/\s+/g, '_');
-                grid2.innerHTML += '<div class="checkbox-item">' +
-                    '<input type="checkbox" id="' + id + '" checked>' +
-                    '<label for="' + id + '">' + escapeHtml(name) + '</label>' +
-                '</div>';
-            });
+        // Render both tier grids from the server rosters; checked = not in
+        // the server's disabled list (the effective whitelist, survives
+        // restarts). Called once the API answers and after every Save.
+        // Returns true when the roster was rendered. A FALSE here is not a
+        // no-op: the grids stay unrendered and Save must keep its hands off
+        // the whitelist, so the caller has to show why.
+        function renderEventRoster(sc) {
+            if (!sc || !Array.isArray(sc.tier1_events_all) || !Array.isArray(sc.tier2_events_all)) return false;
+            TIER1_EVENTS = sc.tier1_events_all.slice();
+            TIER2_EVENTS = sc.tier2_events_all.slice();
+            var disabled = Array.isArray(sc.disabled_events) ? sc.disabled_events : [];
+            function fill(gridId, tier, names) {
+                var html = '';
+                names.forEach(function(name) {
+                    var id = eventCheckboxId(tier, name);
+                    var checked = disabled.indexOf(name) < 0 ? ' checked' : '';
+                    html += '<div class="checkbox-item">' +
+                        '<input type="checkbox" id="' + id + '"' + checked + '>' +
+                        '<label for="' + id + '">' + escapeHtml(name) + '</label>' +
+                    '</div>';
+                });
+                $(gridId).innerHTML = html ||
+                    '<span class="no-data">roster empty</span>';
+            }
+            fill('tier1Grid', 'tier1', TIER1_EVENTS);
+            fill('tier2Grid', 'tier2', TIER2_EVENTS);
+            eventRosterLoaded = true;
+            return true;
+        }
+
+        function showRosterError(msg) {
+            if (eventRosterLoaded) return;   // keep the checkboxes already on screen
+            $('tier1Grid').innerHTML = '<span class="no-data" style="color:var(--accent-red)">' +
+                escapeHtml(msg) + ' (Zapisz NIE zmieni whitelisty)</span>';
+            $('tier2Grid').innerHTML = '';
+        }
+
+        // The server is the ONLY source of truth for the event roster, the
+        // whitelist, min-impact and trade-all. Called on load and after every
+        // Save, so the panel always shows what is actually armed.
+        async function loadEventConfig() {
+            try {
+                var sc = await apiFetch('/api/config/events');
+                // A 200 carrying no roster (server older than 18.08.2026, or a
+                // proxy trimming the body) used to leave the grids stuck on
+                // "loading..." forever: renderEventRoster returned silently and
+                // nothing threw, so the catch below never ran.
+                if (!renderEventRoster(sc)) {
+                    showRosterError('serwer nie podał rosteru (tier1_events_all) — lista eventów niezaładowana');
+                }
+                if (sc.min_impact) $('minImpact').value = sc.min_impact;
+                if (typeof sc.trade_all_events === 'boolean') {
+                    $('tradeAllEvents').checked = sc.trade_all_events;
+                }
+            } catch(e) {
+                showRosterError('serwer nieosiągalny — lista eventów niezaładowana');
+            }
+        }
+
+        function initConfigTab() {
+            // Tier grids are rendered by renderEventRoster() once the server
+            // answers — until then Save must not touch the whitelist
+            $('tier1Grid').innerHTML = '<span class="no-data">loading roster from server…</span>';
+            $('tier2Grid').innerHTML = '<span class="no-data">loading roster from server…</span>';
 
             // Currencies
             var gridC = $('currencyGrid');
@@ -2162,31 +2207,37 @@
         }
 
         function getConfigState() {
-            var enabledEvents = [];
-
-            TIER1_EVENTS.forEach(function(name) {
-                var id = 'tier1_' + name.replace(/\s+/g, '_');
-                var el = $(id);
-                if (el && el.checked) enabledEvents.push(name);
-            });
-
-            TIER2_EVENTS.forEach(function(name) {
-                var id = 'tier2_' + name.replace(/\s+/g, '_');
-                var el = $(id);
-                if (el && el.checked) enabledEvents.push(name);
-            });
-
             var enabledCurrencies = [];
             CURRENCIES.forEach(function(cur) {
                 var el = $('cur_' + cur);
                 if (el && el.checked) enabledCurrencies.push(cur);
             });
 
-            return {
-                events: enabledEvents,
+            var payload = {
                 currencies: enabledCurrencies,
                 min_impact: $('minImpact').value
             };
+
+            // The whitelist is sent ONLY when the roster came from the server:
+            // posting `events` from an unloaded (empty) roster would disable
+            // every name at once.
+            if (eventRosterLoaded) {
+                var enabledEvents = [];
+                TIER1_EVENTS.forEach(function(name) {
+                    var el = $(eventCheckboxId('tier1', name));
+                    if (el && el.checked) enabledEvents.push(name);
+                });
+                TIER2_EVENTS.forEach(function(name) {
+                    var el = $(eventCheckboxId('tier2', name));
+                    if (el && el.checked) enabledEvents.push(name);
+                });
+                payload.events = enabledEvents;
+                // The roster THIS page rendered. The server only flips names
+                // that are in it, so a tab left open across a server upgrade
+                // cannot disable a name it never showed.
+                payload.roster = TIER1_EVENTS.concat(TIER2_EVENTS);
+            }
+            return payload;
             // NOTE: trade_all_events is intentionally NOT bulk-saved here —
             // it persists immediately via its own change handler (see init),
             // so a Save that races the async config load can't reset it.
@@ -2254,6 +2305,9 @@
                     } else {
                         showToast('Configuration saved (applies immediately, survives restarts)');
                     }
+                    // Re-read the roster: the server may hold names this page
+                    // has not seen (older tab, roster grown after a deploy)
+                    loadEventConfig();
                 } else if (!riskResp.ok) {
                     var err = await riskResp.json().catch(function(){ return {}; });
                     showToast('Risk limits rejected: ' + (err.message || riskResp.status), false);
@@ -2496,16 +2550,13 @@
         }
 
         function resetConfig() {
-            // Check all Tier 1
+            // Check every roster name (defaults = nothing disabled)
             TIER1_EVENTS.forEach(function(name) {
-                var id = 'tier1_' + name.replace(/\s+/g, '_');
-                var el = $(id);
+                var el = $(eventCheckboxId('tier1', name));
                 if (el) el.checked = true;
             });
-            // Check all Tier 2
             TIER2_EVENTS.forEach(function(name) {
-                var id = 'tier2_' + name.replace(/\s+/g, '_');
-                var el = $(id);
+                var el = $(eventCheckboxId('tier2', name));
                 if (el) el.checked = true;
             });
             // Reset currencies
@@ -2962,50 +3013,12 @@
             refreshDashboard();
             startIntervals();
 
-            // Load saved config from localStorage if available
-            try {
-                var saved = localStorage.getItem('skytower_event_config');
-                if (saved) {
-                    var config = JSON.parse(saved);
-                    // Restore event checkboxes
-                    if (config.events) {
-                        TIER1_EVENTS.forEach(function(name) {
-                            var id = 'tier1_' + name.replace(/\s+/g, '_');
-                            var el = $(id);
-                            if (el) el.checked = config.events.indexOf(name) >= 0;
-                        });
-                        TIER2_EVENTS.forEach(function(name) {
-                            var id = 'tier2_' + name.replace(/\s+/g, '_');
-                            var el = $(id);
-                            if (el) el.checked = config.events.indexOf(name) >= 0;
-                        });
-                    }
-                    // Restore currencies
-                    if (config.currencies) {
-                        CURRENCIES.forEach(function(cur) {
-                            var el = $('cur_' + cur);
-                            if (el) el.checked = config.currencies.indexOf(cur) >= 0;
-                        });
-                    }
-                    // Restore impact
-                    if (config.min_impact) {
-                        $('minImpact').value = config.min_impact;
-                    }
-                }
-            } catch(e) {
-                // Ignore localStorage errors
-            }
-
-            // Server-persisted settings are the source of truth — override
-            // whatever localStorage said once the API answers
+            // NOTE: the old localStorage restore ('skytower_event_config')
+            // was removed — nothing ever WROTE that key, and a client-side
+            // copy of the whitelist can only contradict the server, which is
+            // the single source of truth (persisted in runtime_overrides.json).
             (async function() {
-                try {
-                    var sc = await apiFetch('/api/config/events');
-                    if (sc.min_impact) $('minImpact').value = sc.min_impact;
-                    if (typeof sc.trade_all_events === 'boolean') {
-                        $('tradeAllEvents').checked = sc.trade_all_events;
-                    }
-                } catch(e) { /* offline */ }
+                await loadEventConfig();   // roster + whitelist + min impact + trade-all
                 loadRiskConfig();
                 loadModelsConfig();
                 loadRoutingConfig();

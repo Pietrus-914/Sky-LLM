@@ -39,6 +39,7 @@ from exit_decision_engine import ExitDecisionEngine
 from decision_history import DecisionHistory
 from event_path_recorder import EventPathRecorder
 from regime_tracker import RegimeTracker
+import event_cluster
 
 app = Flask(__name__)
 CORS(app)
@@ -174,9 +175,16 @@ def config_events():
     if request.method == 'GET':
         return jsonify({
             "status": "ok",
+            # Effective (filtered) lists — what trade selection uses now
             "tier1_events": cfg.TIER1_EVENTS,
             "tier2_events": cfg.TIER2_EVENTS,
             "all_events": cfg.HIGH_IMPACT_EVENTS,
+            # Full rosters + the disabled subset: the dashboard renders its
+            # checkboxes from THESE (never from a list baked into the HTML —
+            # a stale client roster clipped every roster addition on Save)
+            "tier1_events_all": cfg.TIER1_EVENTS_ALL,
+            "tier2_events_all": cfg.TIER2_EVENTS_ALL,
+            "disabled_events": cfg.disabled_event_names(),
             "currencies": list(cfg.CURRENCY_PAIRS.keys()),
             "min_impact": getattr(cfg, "MIN_IMPACT_LEVEL", "MEDIUM"),
             "trade_all_events": getattr(cfg, "TRADE_ALL_EVENTS", False),
@@ -185,23 +193,41 @@ def config_events():
 
     # POST: update event config at runtime
     data = request.json or {}
-    if 'tier1_events' in data:
-        cfg.TIER1_EVENTS = data['tier1_events']
-    if 'tier2_events' in data:
-        cfg.TIER2_EVENTS = data['tier2_events']
-    if 'tier1_events' in data or 'tier2_events' in data:
-        cfg.HIGH_IMPACT_EVENTS = cfg.TIER1_EVENTS + cfg.TIER2_EVENTS
-    # The dashboard's Save sends {events: [...enabled names...]} — a flat
-    # whitelist across both tiers. This key was silently dropped before, so
-    # panel checkbox edits never reached trade selection. Applied as a filter
-    # over the immutable *_ALL rosters and persisted across restarts.
+    # NOTE: the legacy 'tier1_events'/'tier2_events' write branch was removed
+    # (18.08.2026). It had no caller (dashboard, EA and RUNBOOK only ever read
+    # those fields from the GET), no validation and no persistence, and it
+    # assigned the request body straight into cfg.TIER1_EVENTS — breaking the
+    # invariant that the effective lists are a SUBSET of the *_ALL rosters.
+    # A string body made HIGH_IMPACT_EVENTS a string, which the tradeable
+    # predicate then iterated per CHARACTER (calendar_fetcher.py:660) so that
+    # 'c' matched almost every release.
+    # The dashboard's Save sends {events: [...checked names...]} — a flat
+    # whitelist across both tiers, drawn from the FULL rosters it received
+    # via GET. Everything else in the rosters becomes disabled; persisted as
+    # `disabled_events` (roster additions after a Save stay enabled — the
+    # old `enabled_events` key clipped them, see config.LEGACY_PANEL_EVENT_ROSTER).
     if 'events' in data and isinstance(data['events'], list) \
             and all(isinstance(e, str) for e in data['events']):
-        enabled_set = set(data['events'])
-        cfg.TIER1_EVENTS = [e for e in cfg.TIER1_EVENTS_ALL if e in enabled_set]
-        cfg.TIER2_EVENTS = [e for e in cfg.TIER2_EVENTS_ALL if e in enabled_set]
-        cfg.HIGH_IMPACT_EVENTS = cfg.TIER1_EVENTS + cfg.TIER2_EVENTS
-        cfg.save_runtime_overrides({"enabled_events": sorted(enabled_set)})
+        # 'roster' = the names the client actually rendered; names outside it
+        # keep their state, so a tab opened before a roster-changing restart
+        # cannot disable what it never displayed. A client that sends no
+        # roster is scoped to config.LEGACY_PANEL_EVENT_ROSTER (that IS the
+        # pre-18.08.2026 dashboard, whose Save would otherwise silently and
+        # PERMANENTLY re-disable the six names it never had a checkbox for);
+        # a script that really wants the full complement sends
+        # "roster": "*" (cfg.ROSTER_ALL).
+        roster_arg = data.get('roster')
+        if not (cfg._is_str_list(roster_arg) or roster_arg == cfg.ROSTER_ALL):
+            logger.warning(
+                "POST /api/config/events without a 'roster' field - this is a "
+                "pre-18.08.2026 dashboard or a script. Only the legacy roster "
+                "is in scope; names outside it keep their current state. Hard-"
+                f"refresh the panel (Ctrl+F5), or send \"roster\": \"{cfg.ROSTER_ALL}\" "
+                "to disable the complement of the FULL roster on purpose.")
+        disabled = cfg.set_enabled_events(data['events'], known_roster=roster_arg)
+        if disabled:
+            logger.info(f"Event whitelist: {len(disabled)} roster name(s) disabled "
+                        f"via dashboard: {disabled}")
         if not cfg.HIGH_IMPACT_EVENTS:
             logger.warning("Dashboard saved an EMPTY event whitelist — no "
                            "named events will trade while TRADE_ALL_EVENTS "
@@ -2800,11 +2826,29 @@ def _analyzed_event_key(event) -> str:
     return f"{currency}_{name}_{dt_str}"
 
 
-def _mark_event_analyzed(event):
-    """Mark an event as already analyzed (SKIP). Prevents re-analysis."""
+def _mark_event_analyzed(event, reason: str = "SKIP"):
+    """Mark an event as already analyzed. Prevents re-analysis."""
     key = _analyzed_event_key(event)
     analyzed_events[key] = utcnow()
-    logger.info(f"Event marked as analyzed (SKIP): {key}")
+    logger.info(f"Event marked as analyzed ({reason}): {key}")
+
+
+def _select_release_group(events, reference):
+    """(dominant, shadowed) for the release `reference` belongs to.
+
+    Statistical agencies publish a family at one timestamp (CAD CPI m/m with
+    Median/Trimmed/Common CPI y/y; NFP with Average Hourly Earnings). There is
+    ONE price path, so there is one decision: the dominant member is analyzed
+    and the rest are marked analyzed immediately — before this, each sibling
+    bought its own panel on the next 15 s scan, each starting later against
+    the panel's max(T-20s, 10s) deadline, and the trade ended up labelled with
+    the weakest member of the release (production, 17.08.2026).
+
+    Caller holds decision_lock.
+    """
+    group = event_cluster.same_release(events, reference)
+    dominant, shadowed = event_cluster.pick_dominant(group)
+    return (dominant or reference), shadowed
 
 
 def _is_event_analyzed(event) -> bool:
@@ -3104,8 +3148,21 @@ def background_decision_updater():
                             # Event already passed, skip
                             continue
                         elif 0 < time_until <= PRELOAD_SECONDS:
-                            # In pre-load window — analyze this event
-                            event_to_analyze = event
+                            # In pre-load window — analyze this RELEASE (the
+                            # whole same-minute cluster, one decision)
+                            event_to_analyze, shadowed = _select_release_group(
+                                events, event)
+                            for sibling in shadowed:
+                                _mark_event_analyzed(
+                                    sibling,
+                                    f"co-released with {event_to_analyze.event_name}")
+                            if shadowed:
+                                logger.info(
+                                    f"Release cluster: {len(shadowed) + 1} events at "
+                                    f"{event_time:%H:%M} UTC ({event_to_analyze.currency}) "
+                                    f"-> analyzing {event_to_analyze.event_name} "
+                                    f"({event_to_analyze.impact}); shadowed: "
+                                    f"{[s.event_name for s in shadowed]}")
                             break
                         elif time_until > PRELOAD_SECONDS:
                             # Next event is too far away, stop scanning
@@ -3134,7 +3191,24 @@ def background_decision_updater():
                     else:
                         logger.info("No market context available (EA has not pushed price data)")
 
-                    new_decision = decision_engine.analyze_event(event_to_analyze, market_ctx)
+                    # Everything else printing in this same minute — the tape
+                    # prices the COMBINED surprise, so the model must see the
+                    # siblings even when the name whitelist ignores them.
+                    # peek_cached_events(): the cache is warm (PHASE 1 just
+                    # read it) and it can never fetch — a network stall here
+                    # would eat the preload window the panel needs.
+                    co_released = []
+                    try:
+                        co_released = event_cluster.co_release_brief(
+                            event_to_analyze, calendar.peek_cached_events())
+                    except Exception as e:
+                        logger.debug(f"Co-release lookup failed: {e}")
+                    if co_released:
+                        logger.info(f"Co-released this minute: "
+                                    f"{[c['name'] for c in co_released]}")
+
+                    new_decision = decision_engine.analyze_event(
+                        event_to_analyze, market_ctx, co_released=co_released)
                     elapsed = time.time() - start_time
 
                     # Record ALL decisions to audit log. Recording is an AUDIT

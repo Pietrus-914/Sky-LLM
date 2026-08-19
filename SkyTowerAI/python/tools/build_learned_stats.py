@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from regime_tracker import is_rate_decision
+from event_cluster import dominance_rank, family_rank  # noqa: F401 (family_rank re-exported)
 
 SCHEMA_VERSION = 1
 
@@ -67,48 +67,16 @@ _PARAMS = {
     "alias_min_bundled": ALIAS_MIN_BUNDLED,
 }
 
-_IMPACT_RANK = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-
-# Event families ordered by which one "owns" a shared release minute.
-# Substring match on the normalized name; first hit wins. Rate decisions are
-# rank 0 via is_rate_decision (handles all central-bank naming variants).
-_FAMILY_ORDER = (
-    ("non-farm", "nonfarm", "payroll"),
-    ("cpi",),
-    ("gdp",),
-    ("employment change",),
-    ("unemployment rate",),
-    ("retail sales",),
-    ("ppi",),
-    ("pmi",),
-    ("trade balance",),
-)
-
-# "Core CPI m/m" must not outrank "CPI m/m" alphabetically — modified
-# variants of a release yield the canonical bundle name to the plain one
-_MODIFIER_TOKENS = ("core", "final", "flash", "prelim", "revised", "trimmed")
-
-
-def family_rank(name_norm: str) -> int:
-    if is_rate_decision(name_norm):
-        return 0
-    for i, tokens in enumerate(_FAMILY_ORDER):
-        if any(t in name_norm for t in tokens):
-            return i + 1
-    return 50
-
-
+# Dominance ordering lives in event_cluster.py — the SAME ranking decides
+# which member of a same-minute release the live updater analyzes and labels
+# the trade with. Two copies would let the decision be filed under one name
+# while its base rates are bundled under another.
 def dominance_key(record):
     """Sort key: lower = more dominant. The trailing name keeps same-currency
     bundle resolution deterministic (canonical member = first alphabetically
     among unmodified names)."""
-    name = record.get("event_name_normalized", "")
-    return (
-        _IMPACT_RANK.get(record.get("impact", ""), 3),
-        family_rank(name),
-        1 if any(t in name for t in _MODIFIER_TOKENS) else 0,
-        name,
-    )
+    return dominance_rank(record.get("event_name_normalized", ""),
+                          record.get("impact", ""))
 
 
 def event_stat_key(record) -> str:
