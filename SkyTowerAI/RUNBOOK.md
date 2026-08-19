@@ -161,13 +161,27 @@ Migracja starego pliku dzieje się **sama przy starcie**: `enabled_events` jest
 tłumaczone na `disabled_events`, a nazwy, których stary panel nie umiał
 pokazać, wracają do gry. Serwer wypisuje wtedy ostrzeżenie `legacy
 'enabled_events' migrated…` (widoczne w oknie serwera i w `logs/server.log`).
-Po migracji: **najpierw odśwież panel twardo (Ctrl+F5), potem kliknij raz
-Zapisz** w Event Config, żeby utrwalić nowy klucz. Kolejność ma znaczenie —
-karta otwarta jeszcze sprzed restartu ma starą listę nazw; nowy panel wysyła
-razem z zapisem listę nazw, które wyświetlał (`roster`), więc serwer nie
-wyłączy nazw, których ta karta nie znała, ale karta sprzed 18.08.2026 tego
-pola nie ma i jej Zapis cofnąłby migrację (naprawa: odśwież i zapisz jeszcze
-raz — wszystkie nazwy są widoczne na liście jako odznaczone).
+Po migracji: **odśwież panel twardo (Ctrl+F5), potem kliknij raz Zapisz**
+w Event Config, żeby utrwalić nowy klucz.
+
+Nowy panel wysyła razem z zapisem listę nazw, które faktycznie wyświetlił
+(`roster`), więc serwer wyłącza **tylko** nazwy z tego zakresu — karta otwarta
+sprzed restartu nie ruszy nazw, których nie znała. Karta **sprzed 18.08.2026**
+tego pola nie ma, więc jej Zapis serwer zawęża do
+`config.LEGACY_PANEL_EVENT_ROSTER` (13 nazw, które stary panel umiał pokazać)
+i wypisuje ostrzeżenie:
+```
+POST /api/config/events without a 'roster' field - this is a pre-18.08.2026 dashboard or a script...
+```
+Dzięki temu Zapis ze starej karty **nie cofa migracji** — decyzje Fed/BoE/BoC
+zostają włączone. (Wcześniej cofał, i to trwale: nazwy lądowały w nowym kluczu
+`disabled_events`, którego migracja legacy już nie naprawia.)
+
+Skrypt, który naprawdę chce „wyłącz wszystko poza tym, co wymieniam", musi
+powiedzieć to wprost — pole `"roster": "*"`:
+```powershell
+curl -X POST http://127.0.0.1:5555/api/config/events -H "Content-Type: application/json" -d "{\"events\":[\"CPI\"],\"roster\":\"*\"}"
+```
 
 ### Jedna decyzja na publikację (klaster tej samej minuty)
 

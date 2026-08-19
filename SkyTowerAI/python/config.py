@@ -409,8 +409,15 @@ SERVER_CONFIG = {
 # =============================================================================
 # The dashboard saves operational settings (risk limits, min impact) here so
 # nobody has to edit .env by hand. Precedence: default < env < this file.
-_OVERRIDES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               'logs', 'runtime_overrides.json')
+#
+# SKYTOWER_OVERRIDES_FILE relocates it. This exists for TESTS: config.py is
+# imported (and re-imported in a subprocess by test_config) from the real
+# python/ directory, so without a hook every test that asserts a default or an
+# env override actually reads the OPERATOR's live panel state — which is how
+# two model-override tests came to fail on every run, silently retiring the
+# only check that SKYTOWER_ENTRY_MODEL still reaches LLM_CONFIG.
+_OVERRIDES_FILE = os.getenv("SKYTOWER_OVERRIDES_FILE") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'logs', 'runtime_overrides.json')
 
 # Persistent closed-trades log (PositionManager) — daily statistics survive
 # watchdog restarts. Lives next to the other JSONL stores in logs/.
@@ -563,35 +570,57 @@ def disabled_event_names() -> list:
     return [n for n in TIER1_EVENTS_ALL + TIER2_EVENTS_ALL if n not in effective]
 
 
-def set_enabled_events(enabled: list, known_roster: list = None) -> list:
+# Sentinel for `known_roster`: "I speak for the WHOLE roster, disable
+# everything I did not list." Scripted callers that really want the full
+# complement must say so explicitly — see set_enabled_events.
+ROSTER_ALL = "*"
+
+
+def set_enabled_events(enabled: list, known_roster=None) -> list:
     """Panel contract: the dashboard posts the names it shows CHECKED (out of
-    the full rosters it received from /api/config/events). Everything else in
-    the rosters becomes disabled; unknown names are ignored. Persists
+    the full rosters it received from /api/config/events). Everything else the
+    caller SPEAKS FOR becomes disabled; unknown names are ignored. Persists
     `disabled_events` and retires the legacy `enabled_events` key. Returns the
     disabled list.
 
-    `known_roster` — the names the CLIENT actually rendered. A tab loaded
-    before a roster-changing restart (code deploy, SKYTOWER_EXTRA_EVENTS edit)
-    still holds the old roster, and without this scope its Save would disable
-    every name added since: the same silent-loss shape as the bug this key
-    replaced, just narrower. Names outside `known_roster` keep whatever state
-    they have. Omitted (scripted POST, older panel) = today's behaviour: the
-    complement of the FULL rosters.
+    `known_roster` — the names the CLIENT actually rendered, i.e. the scope it
+    is entitled to switch off. Names outside it keep whatever state they have.
+    A tab loaded before a roster-changing restart (code deploy,
+    SKYTOWER_EXTRA_EVENTS edit) still holds the old roster, and without this
+    scope its Save would disable every name added since — the same silent-loss
+    shape as the bug this key replaced.
+
+    Accepted values:
+      * a list of names — the client's rendered roster (what the panel sends);
+      * ROSTER_ALL ("*") — "the full roster", for scripted callers that
+        deliberately want the complement of everything;
+      * omitted/invalid — LEGACY_PANEL_EVENT_ROSTER, the only roster a
+        client that does not announce one could plausibly have rendered.
+
+    The default is deliberately NOT the full roster. The pre-18.08.2026
+    dashboard posts `events` without `roster`, and an operator whose tab (or
+    browser cache) predates the fix would otherwise re-disable the six names
+    it never displayed — Federal Funds Rate, Official Bank Rate, Overnight
+    Rate, Nonfarm Payrolls, Consumer Price Index, Gross Domestic Product —
+    and persist them under the NEW key, where the legacy migration can no
+    longer rescue them. That turns a self-healing bug into a permanent one.
     """
     enabled_set = set(enabled)
     roster = TIER1_EVENTS_ALL + TIER2_EVENTS_ALL
-    if not _is_str_list(known_roster):
-        disabled = [n for n in roster if n not in enabled_set]
-    else:
+    if known_roster == ROSTER_ALL:
+        known = set(roster)
+    elif _is_str_list(known_roster):
         known = set(known_roster)
-        still_off = set(disabled_event_names())
-        disabled = []
-        for name in roster:
-            # A name the client rendered: its checkbox is the verdict.
-            # A name it never saw: leave it exactly as it is.
-            off = (name not in enabled_set) if name in known else (name in still_off)
-            if off:
-                disabled.append(name)
+    else:
+        known = set(LEGACY_PANEL_EVENT_ROSTER)
+    still_off = set(disabled_event_names())
+    disabled = []
+    for name in roster:
+        # A name the client rendered: its checkbox is the verdict.
+        # A name it never saw: leave it exactly as it is.
+        off = (name not in enabled_set) if name in known else (name in still_off)
+        if off:
+            disabled.append(name)
     _apply_disabled_events(disabled)
     save_runtime_overrides({"disabled_events": disabled, "enabled_events": None})
     return disabled

@@ -1367,7 +1367,7 @@
                         <tr><td><b>Profit protection: close on drop from peak (%)</b></td><td>Guardrail ochrony zysku: zamyka, gdy CAŁKOWITY zysk trade'u (floating + zrealizowane partiale) spadnie o ten procent od szczytu. Po postmortem NZD (04.08.2026) działa ostrożnie: uzbraja się dopiero od progu poniżej, nie działa w karencji po otwarciu, wymaga potwierdzenia w <b>2 kolejnych raportach EA</b> (jak spread awaryjny), przy oddaniu &ge;90% dużego szczytu (&ge;2&times; próg) zamyka od razu, a <b>nigdy nie zamyka na minusie</b> — czerwony trade to sprawa max loss / SL brokera, nie „ochrony zysku". Zamknięcie musi też pokryć poduszkę prowizji (~7$/lot), żeby „ochrona" nie realizowała straty netto.</td><td>50</td></tr>
                         <tr><td><b>Profit protection arms at peak &ge; (% of max loss)</b></td><td>Próg uzbrojenia jako procent budżetu „Max loss per trade" (minimum 10$). Skaluje się z wielkością pozycji: stary płaski próg 20$ przy locie 1.57 to było ~1.3 pipsa — uzbrajał się na szumie spreadu sekundy przed publikacją.</td><td>30</td></tr>
                         <tr><td><b>Profit protection grace (s)</b></td><td>Karencja po otwarciu: przez tyle sekund guardrail w ogóle nie zamyka. Whipsaw publikacji (retrace 25-45% szpikulca wg playbooków) dzieje się właśnie w tym oknie. 0 = brak karencji.</td><td>120</td></tr>
-                        <tr><td><b>Tier 1 / Tier 2</b> (lista nazw)</td><td>Które nazwy eventów są handlowane, gdy „Trade ALL events" jest OFF. <b>Listę renderuje SERWER</b> (nie panel), a zapis zachowuje nazwy ODZNACZONE — więc nazwa dodana w nowej wersji serwera (np. „Federal Funds Rate", „Official Bank Rate", „Overnight Rate" — tak FF nazywa decyzje Fed/BoE/BoC) jest domyślnie AKTYWNA i pojawia się na liście po odświeżeniu. <b>Do 18.08.2026 było odwrotnie:</b> panel miał 13 nazw wpisanych na sztywno i każdy Zapis wycinał z whitelisty nazwy, których nie znał — decyzje Fed/BoE/BoC przestawały być handlowane po cichu. Jeśli serwer jest nieosiągalny przy wczytywaniu, lista pokazuje błąd, a Zapis <b>nie rusza</b> whitelisty (zapisze tylko resztę ustawień).</td><td>wszystko zaznaczone</td></tr>
+                        <tr><td><b>Tier 1 / Tier 2</b> (lista nazw)</td><td>Które nazwy eventów są handlowane, gdy „Trade ALL events" jest OFF. <b>Listę renderuje SERWER</b> (nie panel), a zapis zachowuje nazwy ODZNACZONE — więc nazwa dodana w nowej wersji serwera (np. „Federal Funds Rate", „Official Bank Rate", „Overnight Rate" — tak FF nazywa decyzje Fed/BoE/BoC) jest domyślnie AKTYWNA i pojawia się na liście po odświeżeniu. <b>Do 18.08.2026 było odwrotnie:</b> panel miał 13 nazw wpisanych na sztywno i każdy Zapis wycinał z whitelisty nazwy, których nie znał — decyzje Fed/BoE/BoC przestawały być handlowane po cichu. Jeśli serwer jest nieosiągalny przy wczytywaniu, lista pokazuje błąd, a Zapis <b>nie rusza</b> whitelisty (zapisze tylko resztę ustawień). To samo, gdy serwer odpowie <b>bez rostera</b> (starsza wersja) — zamiast wiecznego „loading…” zobaczysz czerwony komunikat. Zapis wysyła też listę nazw, którą ta karta wyświetliła, więc serwer wyłącza wyłącznie nazwy z tego zakresu — <b>karta otwarta sprzed restartu (albo sprzed 18.08.2026) nie wyłączy nazw, których nie widziała</b>. Mimo to po aktualizacji serwera warto raz odświeżyć panel twardo (Ctrl+F5), żeby zobaczyć pełną listę.</td><td>wszystko zaznaczone</td></tr>
                         <tr><td><b>Active Currencies</b></td><td><b>Karta poglądowa — serwer ignoruje te checkboxy.</b> Waluty brane pod uwagę wynikają z <code>config.CURRENCY_PAIRS</code> (NZD, CAD, AUD, USD, GBP, SEK, NOK) i zmienia się je w kodzie, nie w panelu. EUR jest zaznaczone z domyślnych ustawień przeglądarki, ale eventy EUR nie wchodzą do pipeline'u — wykres EURUSD dostarcza tylko danych.</td><td>bez znaczenia</td></tr>
                         <tr><td><b>Currency Regimes (auto)</b></td><td>Reżim polityki banku (hiking/cutting/hold) per waluta — etykieta do statystyk reakcji, <b>nie wpływa na ryzyko</b>. Aktualizuje się SAM z każdej zarejestrowanej decyzji o stopach (niejednoznaczny hold ocenia LLM po reakcji rynku). Dropdown = ręczny override do następnej decyzji banku. EUR/JPY/CHF nie mają par na wykresach, więc nie auto-aktualizują się — dla nich override ręczny.</td><td>auto</td></tr>
                     </tbody>
@@ -2063,8 +2063,11 @@
         // Render both tier grids from the server rosters; checked = not in
         // the server's disabled list (the effective whitelist, survives
         // restarts). Called once the API answers and after every Save.
+        // Returns true when the roster was rendered. A FALSE here is not a
+        // no-op: the grids stay unrendered and Save must keep its hands off
+        // the whitelist, so the caller has to show why.
         function renderEventRoster(sc) {
-            if (!sc || !Array.isArray(sc.tier1_events_all) || !Array.isArray(sc.tier2_events_all)) return;
+            if (!sc || !Array.isArray(sc.tier1_events_all) || !Array.isArray(sc.tier2_events_all)) return false;
             TIER1_EVENTS = sc.tier1_events_all.slice();
             TIER2_EVENTS = sc.tier2_events_all.slice();
             var disabled = Array.isArray(sc.disabled_events) ? sc.disabled_events : [];
@@ -2084,6 +2087,14 @@
             fill('tier1Grid', 'tier1', TIER1_EVENTS);
             fill('tier2Grid', 'tier2', TIER2_EVENTS);
             eventRosterLoaded = true;
+            return true;
+        }
+
+        function showRosterError(msg) {
+            if (eventRosterLoaded) return;   // keep the checkboxes already on screen
+            $('tier1Grid').innerHTML = '<span class="no-data" style="color:var(--accent-red)">' +
+                escapeHtml(msg) + ' (Zapisz NIE zmieni whitelisty)</span>';
+            $('tier2Grid').innerHTML = '';
         }
 
         // The server is the ONLY source of truth for the event roster, the
@@ -2092,16 +2103,19 @@
         async function loadEventConfig() {
             try {
                 var sc = await apiFetch('/api/config/events');
-                renderEventRoster(sc);
+                // A 200 carrying no roster (server older than 18.08.2026, or a
+                // proxy trimming the body) used to leave the grids stuck on
+                // "loading..." forever: renderEventRoster returned silently and
+                // nothing threw, so the catch below never ran.
+                if (!renderEventRoster(sc)) {
+                    showRosterError('serwer nie podał rosteru (tier1_events_all) — lista eventów niezaładowana');
+                }
                 if (sc.min_impact) $('minImpact').value = sc.min_impact;
                 if (typeof sc.trade_all_events === 'boolean') {
                     $('tradeAllEvents').checked = sc.trade_all_events;
                 }
             } catch(e) {
-                if (!eventRosterLoaded) {
-                    $('tier1Grid').innerHTML = '<span class="no-data" style="color:var(--accent-red)">serwer nieosiągalny — lista eventów niezaładowana (Zapisz NIE zmieni whitelisty)</span>';
-                    $('tier2Grid').innerHTML = '';
-                }
+                showRosterError('serwer nieosiągalny — lista eventów niezaładowana');
             }
         }
 

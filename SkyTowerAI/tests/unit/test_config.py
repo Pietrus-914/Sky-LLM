@@ -160,13 +160,24 @@ class TestSpreadLotReduction:
 class TestModelEnvOverrides:
     """Entry/exit models are env-overridable per machine (no code edits)."""
 
-    def _fresh_config(self, env):
-        import subprocess, sys, os, json
+    def _fresh_config(self, env, tmp_path=None):
+        """Import config.py in a clean subprocess.
+
+        SKYTOWER_OVERRIDES_FILE points at a path that does not exist, so the
+        run sees default < env and nothing else. Without it the subprocess
+        loads the OPERATOR's logs/runtime_overrides.json, whose panel-set
+        entry_model outranks both the code default and the env var under
+        test — both assertions below then failed on every run, and the env
+        pass-through they exist to protect was never actually exercised.
+        """
+        import subprocess, sys, os, json, tempfile
         code = (
             "import json, config; "
             "print(json.dumps({'entry': config.LLM_CONFIG['model'], "
             "'exit': config.POSITION_MANAGEMENT_CONFIG['exit_llm_model']}))")
-        full_env = {**os.environ, **env}
+        pristine = os.path.join(str(tmp_path) if tmp_path else tempfile.mkdtemp(),
+                                "no_runtime_overrides.json")
+        full_env = {**os.environ, "SKYTOWER_OVERRIDES_FILE": pristine, **env}
         out = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True, text=True, check=True,

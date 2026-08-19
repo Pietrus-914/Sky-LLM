@@ -501,3 +501,77 @@ Testy: 864 zielone (+22), 2 znane wstępne w test_config. EA skompilowany
   w „Znane ograniczenia". Reszta odrzucona jako pre-existing albo nietrafiona.
 - Testy: 913 zielonych (+49), 2 znane wstępne w `test_config` (operatorski
   `runtime_overrides.json` pinuje model).
+
+## 2026-08-19 INGEST | QA + code review commita a00afb2 — 6 poprawek
+
+Przegląd jakości commita `a00afb2` (fix whitelisty eventów + klaster jednej
+minuty) na życzenie operatora: „sprawdź, czy wszystko zostało zrobione
+prawidłowo… popraw wszystkie błędy i niczego nie zostawiaj na potem".
+Sześć ustaleń, wszystkie naprawione w tej samej sesji.
+
+**1. POST bez `roster` cofał migrację — i to TRWALE (najpoważniejsze).**
+`a00afb2` dodał pole `roster` (zakres nazw, które karta wyrenderowała), ale
+tylko dla NOWEGO panelu; klient bez tego pola nadal dostawał dopełnienie
+PEŁNEGO rostera. Panel sprzed 18.08.2026 — czyli karta zostawiona otwarta
+przez restart albo HTML z cache przeglądarki (`/` nie ustawia `Cache-Control`)
+— wysyła dokładnie taki POST i wyłączyłby 6 nazw, których nigdy nie
+wyświetlił (`Federal Funds Rate`, `Official Bank Rate`, `Overnight Rate`,
+`Nonfarm Payrolls`, `Consumer Price Index`, `Gross Domestic Product`),
+zapisując je w NOWYM kluczu `disabled_events`, którego migracja legacy już nie
+naprawia. Bug samoleczący (restart go cofał) zamieniłby się w trwały.
+Zabezpieczeniem była wyłącznie linijka w RUNBOOK-u dla człowieka („najpierw
+Ctrl+F5") — dla buga, który właśnie kosztował trzy tygodnie niehandlowanych
+decyzji Fed/BoE/BoC.
+Naprawa: brak/niepoprawny `roster` = zakres `LEGACY_PANEL_EVENT_ROSTER`
+(jedyny roster, jaki taki klient mógł mieć) + WARNING w logu. Skrypt, który
+świadomie chce dopełnienie całego rostera, wysyła `"roster": "*"`
+(`config.ROSTER_ALL`).
+
+**2. Długie aliasy nazw przegrywały własną publikację.** `FAMILY_ORDER`
+dopasowywał tylko skróty (`cpi`, `gdp`), więc nazwy z rostera `Consumer Price
+Index` i `Gross Domestic Product` spadały na rangę 50 i przy równym impakcie
+przegrywały z modyfikowanym rodzeństwem: `Consumer Price Index m/m` (HIGH,
+ranga 50) < `Core CPI m/m` (HIGH, ranga 2). Dokładnie to mylne etykietowanie,
+które commit miał usunąć — tyle że przez alias, dla którego ten roster
+istnieje. Naprawa: rodziny łapią też formy długie (+ `producer price index`,
+`purchasing managers`).
+
+**3. Brak `median`/`common` w `MODIFIER_TOKENS`.** Był tam `trimmed`, więc
+przy remisie decydował alfabet — a `common cpi y/y` sortuje się PRZED
+`cpi m/m`. Gdyby feed oznaczył `Common CPI y/y` jako HIGH (Median i Trimmed
+już tak mają), etykietę publikacji przejąłby wariant. Dziś ratuje to tylko
+impact MEDIUM. Naprawa: `median`, `common`, `underlying` dopisane.
+
+Punkty 2-3 zmieniają porządek DZIELONY z `tools/build_learned_stats.py`, więc
+statystyki przebudowano i porównano: `events` 203→203, `aliases` 0→0, plik
+identyczny z pominięciem znacznika czasu — zmiana działa tylko w przód,
+`knowledge/learned_stats.json` bez zmian.
+
+**4-5. Testy czytały żywy stan panelu operatora.** `config._OVERRIDES_FILE`
+był ścieżką na sztywno, więc `test_config` (subprocess) i nowy
+`test_event_whitelist_persistence` asertowały przeciw prawdziwemu
+`logs/runtime_overrides.json`. Skutki: 2 testy `TestModelEnvOverrides` failowały
+przy KAŻDYM uruchomieniu (commit opisał je jako „znane"), przez co
+sprawdzenie, czy `SKYTOWER_ENTRY_MODEL` w ogóle dociera do `LLM_CONFIG`, nie
+było już wykonywane; a `test_junk_value_is_ignored` czerwieniał w chwili
+wyłączenia dowolnego eventu w panelu — czyli testowanej funkcji (potwierdzone
+eksperymentalnie: `disabled_events: ["New Home Sales"]` → fail). Naprawa: hook
+`SKYTOWER_OVERRIDES_FILE`, fixture startuje od czystego rostera i czyści
+`CONFIG_NOTES` (asercja o migracji przechodziła na nocie z prawdziwego pliku —
+fałszywa zieleń).
+
+**6. Odpowiedź 200 bez rostera zostawiała panel na wiecznym „loading…".**
+`renderEventRoster` wychodził cicho, nic nie rzucało, więc `catch` w
+`loadEventConfig` nigdy nie biegł. Naprawa: funkcja zwraca bool, wywołujący
+pokazuje czerwony komunikat; `showRosterError` nie nadpisuje już
+wyrenderowanych checkboxów przy późniejszym błędzie sieci.
+
+- Zmienione: `python/config.py`, `python/server.py`, `python/event_cluster.py`,
+  `python/templates/dashboard.html` (+ Przewodnik), `tests/unit/test_config.py`,
+  `tests/unit/test_event_whitelist_persistence.py`,
+  `tests/integration/test_live_readiness_server.py`, `RUNBOOK.md`,
+  `SkyTowerAI/CLAUDE.md`, `wiki/pages/event-selection.md`.
+- Testy: **918 zielonych, zero failów** (było 913 + 2 stałe faile). Logika
+  panelu zweryfikowana osobno w harnessie node (roster → checkboxy → payload
+  Zapisu), składnia JS sprawdzona `node --check`.
+- Bez zmian: `ENTRY_PROMPT_VERSION`, `knowledge/learned_stats.json`, protokół EA.

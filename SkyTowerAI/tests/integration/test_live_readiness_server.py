@@ -37,7 +37,8 @@ class TestDashboardEventWhitelist:
         backup = (cfg.TIER1_EVENTS, cfg.TIER2_EVENTS, cfg.HIGH_IMPACT_EVENTS)
         try:
             response = client.post(
-                "/api/config/events", json={"events": ["CPI", "GDP"]}
+                "/api/config/events",
+                json={"events": ["CPI", "GDP"], "roster": cfg.ROSTER_ALL},
             )
             assert response.status_code == 200
             assert cfg.TIER1_EVENTS == ["CPI"]
@@ -53,7 +54,8 @@ class TestDashboardEventWhitelist:
             # must never shrink the immutable *_ALL baselines).
             response = client.post(
                 "/api/config/events",
-                json={"events": cfg.TIER1_EVENTS_ALL + cfg.TIER2_EVENTS_ALL},
+                json={"events": cfg.TIER1_EVENTS_ALL + cfg.TIER2_EVENTS_ALL,
+                      "roster": cfg.ROSTER_ALL},
             )
             assert response.status_code == 200
             assert cfg.TIER1_EVENTS == cfg.TIER1_EVENTS_ALL
@@ -68,7 +70,8 @@ class TestDashboardEventWhitelist:
         try:
             client.post(
                 "/api/config/events",
-                json={"events": ["CPI", "Totally Made Up Event"]},
+                json={"events": ["CPI", "Totally Made Up Event"],
+                      "roster": cfg.ROSTER_ALL},
             )
             assert cfg.HIGH_IMPACT_EVENTS == ["CPI"]
         finally:
@@ -111,15 +114,35 @@ class TestDashboardEventWhitelist:
         finally:
             cfg.TIER1_EVENTS, cfg.TIER2_EVENTS, cfg.HIGH_IMPACT_EVENTS = backup
 
-    def test_without_a_roster_the_complement_is_the_full_rosters(
+    def test_a_roster_less_save_is_scoped_to_the_legacy_panel(
             self, client, monkeypatch):
-        """Scripted POSTs (and the pre-18.08 panel) send no `roster` — the
-        documented contract stays: everything not listed is disabled."""
+        """The pre-18.08.2026 panel posts `events` with no `roster`. Scoping
+        that Save to the FULL roster would re-disable the six names it never
+        rendered and persist them under `disabled_events`, where the legacy
+        migration can no longer rescue them — a self-healing bug turned
+        permanent. Out-of-scope names keep their state instead."""
         saved = {}
         monkeypatch.setattr(cfg, "save_runtime_overrides", saved.update)
         backup = (cfg.TIER1_EVENTS, cfg.TIER2_EVENTS, cfg.HIGH_IMPACT_EVENTS)
         try:
-            client.post("/api/config/events", json={"events": ["CPI"]})
+            client.post("/api/config/events",
+                        json={"events": list(cfg.LEGACY_PANEL_EVENT_ROSTER)})
+            for name in ("Federal Funds Rate", "Official Bank Rate",
+                         "Overnight Rate", "Nonfarm Payrolls",
+                         "Consumer Price Index", "Gross Domestic Product"):
+                assert name in cfg.HIGH_IMPACT_EVENTS, name
+            assert saved["disabled_events"] == []
+        finally:
+            cfg.TIER1_EVENTS, cfg.TIER2_EVENTS, cfg.HIGH_IMPACT_EVENTS = backup
+
+    def test_roster_all_opts_into_the_full_complement(self, client, monkeypatch):
+        """A script that deliberately wants "disable everything else" says so
+        with "roster": "*" — the escape hatch the legacy scoping replaces."""
+        monkeypatch.setattr(cfg, "save_runtime_overrides", lambda _u: None)
+        backup = (cfg.TIER1_EVENTS, cfg.TIER2_EVENTS, cfg.HIGH_IMPACT_EVENTS)
+        try:
+            client.post("/api/config/events",
+                        json={"events": ["CPI"], "roster": cfg.ROSTER_ALL})
             assert cfg.HIGH_IMPACT_EVENTS == ["CPI"]
         finally:
             cfg.TIER1_EVENTS, cfg.TIER2_EVENTS, cfg.HIGH_IMPACT_EVENTS = backup

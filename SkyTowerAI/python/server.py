@@ -210,9 +210,21 @@ def config_events():
             and all(isinstance(e, str) for e in data['events']):
         # 'roster' = the names the client actually rendered; names outside it
         # keep their state, so a tab opened before a roster-changing restart
-        # cannot disable what it never displayed.
-        disabled = cfg.set_enabled_events(data['events'],
-                                          known_roster=data.get('roster'))
+        # cannot disable what it never displayed. A client that sends no
+        # roster is scoped to config.LEGACY_PANEL_EVENT_ROSTER (that IS the
+        # pre-18.08.2026 dashboard, whose Save would otherwise silently and
+        # PERMANENTLY re-disable the six names it never had a checkbox for);
+        # a script that really wants the full complement sends
+        # "roster": "*" (cfg.ROSTER_ALL).
+        roster_arg = data.get('roster')
+        if not (cfg._is_str_list(roster_arg) or roster_arg == cfg.ROSTER_ALL):
+            logger.warning(
+                "POST /api/config/events without a 'roster' field - this is a "
+                "pre-18.08.2026 dashboard or a script. Only the legacy roster "
+                "is in scope; names outside it keep their current state. Hard-"
+                f"refresh the panel (Ctrl+F5), or send \"roster\": \"{cfg.ROSTER_ALL}\" "
+                "to disable the complement of the FULL roster on purpose.")
+        disabled = cfg.set_enabled_events(data['events'], known_roster=roster_arg)
         if disabled:
             logger.info(f"Event whitelist: {len(disabled)} roster name(s) disabled "
                         f"via dashboard: {disabled}")

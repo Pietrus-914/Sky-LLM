@@ -30,16 +30,29 @@ import config as cfg
 
 @pytest.fixture
 def isolated_overrides(tmp_path, monkeypatch):
-    """Point config at a throwaway overrides file and restore the live
-    roster state afterwards (the operator's real panel state must survive)."""
+    """Point config at a throwaway overrides file, start from the PRISTINE
+    roster, and restore the live state afterwards (the operator's real panel
+    state must survive).
+
+    The reset matters: config.py applied the operator's real
+    logs/runtime_overrides.json at import, so without it a test asserting
+    "the full roster is intact" only passed while the operator happened to
+    have nothing disabled — disabling a single event in the panel (the very
+    feature under test) turned test_junk_value_is_ignored red. Clearing
+    CONFIG_NOTES likewise stops the migration assertion from passing on the
+    note that the REAL file emitted at import instead of the one this test
+    provoked.
+    """
     path = tmp_path / "runtime_overrides.json"
     monkeypatch.setattr(cfg, "_OVERRIDES_FILE", str(path))
     backup = (list(cfg.TIER1_EVENTS), list(cfg.TIER2_EVENTS),
               list(cfg.HIGH_IMPACT_EVENTS), list(cfg.CONFIG_NOTES))
+    cfg._apply_disabled_events([])      # pristine rosters, independent of the operator
+    cfg.CONFIG_NOTES.clear()
     yield path
-    (cfg.TIER1_EVENTS, cfg.TIER2_EVENTS,
-     cfg.HIGH_IMPACT_EVENTS, cfg.CONFIG_NOTES) = (
-        backup[0], backup[1], backup[2], backup[3])
+    (cfg.TIER1_EVENTS, cfg.TIER2_EVENTS, cfg.HIGH_IMPACT_EVENTS) = (
+        backup[0], backup[1], backup[2])
+    cfg.CONFIG_NOTES[:] = backup[3]
 
 
 def write_overrides(path, data):
@@ -122,7 +135,7 @@ class TestPersistenceRoundTrip:
         write_overrides(isolated_overrides,
                         {"enabled_events": ["CPI"], "max_loss_usd": 100.0})
 
-        cfg.set_enabled_events(["CPI", "GDP"])
+        cfg.set_enabled_events(["CPI", "GDP"], known_roster=cfg.ROSTER_ALL)
 
         stored = json.loads(isolated_overrides.read_text(encoding="utf-8"))
         assert "enabled_events" not in stored          # legacy key removed
@@ -133,7 +146,8 @@ class TestPersistenceRoundTrip:
 
     def test_survives_a_restart(self, isolated_overrides):
         cfg.set_enabled_events([n for n in cfg.TIER1_EVENTS_ALL + cfg.TIER2_EVENTS_ALL
-                                if n != "New Home Sales"])
+                                if n != "New Home Sales"],
+                               known_roster=cfg.ROSTER_ALL)
         # simulate a fresh import applying the file
         cfg._apply_disabled_events([])                  # wipe in-memory state
         cfg._apply_runtime_overrides()
@@ -141,7 +155,7 @@ class TestPersistenceRoundTrip:
         assert "Federal Funds Rate" in cfg.HIGH_IMPACT_EVENTS
 
     def test_disabled_event_names_mirrors_the_effective_lists(self, isolated_overrides):
-        cfg.set_enabled_events(["CPI"])
+        cfg.set_enabled_events(["CPI"], known_roster=cfg.ROSTER_ALL)
         disabled = cfg.disabled_event_names()
         assert "CPI" not in disabled
         assert "GDP" in disabled
@@ -172,7 +186,8 @@ class TestPersistenceRoundTrip:
         """A name outside the client's roster keeps whatever it already was —
         including 'disabled', so a stale Save cannot silently RE-enable it."""
         cfg.set_enabled_events([n for n in cfg.TIER1_EVENTS_ALL + cfg.TIER2_EVENTS_ALL
-                                if n != "Overnight Rate"])
+                                if n != "Overnight Rate"],
+                               known_roster=cfg.ROSTER_ALL)
         stale_roster = list(cfg.LEGACY_PANEL_EVENT_ROSTER)
 
         cfg.set_enabled_events(stale_roster, known_roster=stale_roster)
@@ -180,9 +195,35 @@ class TestPersistenceRoundTrip:
         assert "Overnight Rate" not in cfg.HIGH_IMPACT_EVENTS
         assert "Federal Funds Rate" in cfg.HIGH_IMPACT_EVENTS
 
-    def test_junk_roster_falls_back_to_the_full_complement(self, isolated_overrides):
+    def test_junk_roster_falls_back_to_the_legacy_scope(self, isolated_overrides):
+        """An unusable `roster` is treated as "not declared", so the scope is
+        the legacy panel roster — never the full one."""
         disabled = cfg.set_enabled_events(["CPI"], known_roster="CPI")
-        assert "GDP" in disabled
+        assert "GDP" in disabled                       # legacy name, unchecked
+        assert "Gross Domestic Product" not in disabled  # never rendered by it
+        assert "Federal Funds Rate" in cfg.HIGH_IMPACT_EVENTS
+
+    def test_roster_less_save_cannot_disable_a_modern_name(self, isolated_overrides):
+        """THE permanence trap: the pre-18.08.2026 panel posts `events` with
+        no `roster`. Scoping that to the full roster would let it re-disable
+        the six names it never displayed AND persist them under the new key,
+        where the legacy migration can no longer rescue them."""
+        legacy_save = list(cfg.LEGACY_PANEL_EVENT_ROSTER)
+
+        disabled = cfg.set_enabled_events(legacy_save)     # no roster field
+
+        assert disabled == []
+        for name in ("Federal Funds Rate", "Official Bank Rate", "Overnight Rate",
+                     "Nonfarm Payrolls", "Consumer Price Index",
+                     "Gross Domestic Product"):
+            assert name in cfg.HIGH_IMPACT_EVENTS, name
+        stored = json.loads(isolated_overrides.read_text(encoding="utf-8"))
+        assert stored["disabled_events"] == []
+
+    def test_roster_all_opts_into_the_full_complement(self, isolated_overrides):
+        """Scripts that really mean "disable everything else" say so."""
+        disabled = cfg.set_enabled_events(["CPI"], known_roster=cfg.ROSTER_ALL)
+        assert "Gross Domestic Product" in disabled
         assert cfg.HIGH_IMPACT_EVENTS == ["CPI"]
 
     def test_none_value_removes_a_key_without_touching_others(self, isolated_overrides):

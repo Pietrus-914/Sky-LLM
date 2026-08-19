@@ -37,21 +37,32 @@ IMPACT_RANK = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 # Event families ordered by which one "owns" a shared release minute.
 # Substring match on the normalized name; first hit wins. Rate decisions are
 # rank 0 via is_rate_decision (handles all central-bank naming variants).
+# Every family lists the long form as well as the abbreviation: the roster in
+# config.py carries BOTH ("CPI" and "Consumer Price Index", "GDP" and "Gross
+# Domestic Product") precisely because the feed's naming varies by currency.
+# A headline matched only by its long form used to fall through to rank 50 and
+# lose its own release to a modified sibling — "Consumer Price Index m/m"
+# (HIGH, rank 50) ranked BELOW "Core CPI m/m" (HIGH, rank 2).
 FAMILY_ORDER = (
     ("non-farm", "nonfarm", "payroll"),
-    ("cpi",),
-    ("gdp",),
+    ("cpi", "consumer price index"),
+    ("gdp", "gross domestic product"),
     ("employment change",),
     ("unemployment rate",),
     ("retail sales",),
-    ("ppi",),
-    ("pmi",),
+    ("ppi", "producer price index"),
+    ("pmi", "purchasing managers"),
     ("trade balance",),
 )
 
 # "Core CPI m/m" must not outrank "CPI m/m" alphabetically — modified
-# variants of a release yield the canonical bundle name to the plain one
-MODIFIER_TOKENS = ("core", "final", "flash", "prelim", "revised", "trimmed")
+# variants of a release yield the canonical bundle name to the plain one.
+# The BoC trio (median / trimmed / common CPI) are all modified variants;
+# listing only "trimmed" left the tie to the alphabet, where "common cpi y/y"
+# sorts BEFORE "cpi m/m" — so a Common CPI print flagged HIGH would have
+# stolen the label from the headline.
+MODIFIER_TOKENS = ("core", "final", "flash", "prelim", "revised",
+                   "trimmed", "median", "common", "underlying")
 
 
 def family_rank(name_norm: str) -> int:
