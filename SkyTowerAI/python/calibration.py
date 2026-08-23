@@ -30,11 +30,21 @@ from typing import Dict, List, Optional
 from config import TYPICAL_NEWS_SPREADS
 from event_reaction_history import normalize_event_name
 from market_context import normalize_pair
+from instrument_profiles import profile_value
 
 # |move| under this is flat noise — direction neither right nor wrong
 MIN_DIRECTIONAL_PIPS = 1.0
 # A skipped event that then moved at least this much was a "big mover"
 BIG_MOVE_PIPS = 15.0
+
+
+def _min_directional_pips(pair) -> float:
+    """Flat-noise gate in the pair's own pips (profile override for non-forex)."""
+    return float(profile_value(pair, "stats_min_directional_pips", MIN_DIRECTIONAL_PIPS))
+
+
+def _big_move_pips(pair) -> float:
+    return float(profile_value(pair, "calibration_big_move_pips", BIG_MOVE_PIPS))
 # Fallback when a pair has no configured news spread
 DEFAULT_NEWS_SPREAD_PIPS = 8.0
 
@@ -135,7 +145,7 @@ def score_decision(decision: Dict, paths_index: Dict) -> Optional[Dict]:
         "net_pips": None,  # signed 5-min move minus the news spread
         "playable": None,  # |move| cleared the news spread at all
     }
-    if direction in ('BUY', 'SELL') and abs(move) >= MIN_DIRECTIONAL_PIPS:
+    if direction in ('BUY', 'SELL') and abs(move) >= _min_directional_pips(key[3]):
         row["correct"] = (move > 0) == (direction == 'BUY')
         signed = move if direction == 'BUY' else -move
         row["net_pips"] = round(signed - spread, 1)
@@ -227,11 +237,13 @@ def build_summary(decisions: List[Dict], paths: List[Dict]) -> Dict:
         mid = len(moves) // 2
         median = (moves[mid] if len(moves) % 2
                   else (moves[mid - 1] + moves[mid]) / 2)
+        # "Big mover" in each row's own unit (gold: 50 pips, forex: 15)
+        big = sum(1 for r in skips
+                  if abs(r["move_5min_pips"]) >= _big_move_pips(r.get("pair")))
         summary["skips"] = {
             "n": len(skips),
             "median_abs_move_5min": round(median, 1),
-            "big_move_share": round(
-                sum(1 for m in moves if m >= BIG_MOVE_PIPS) / len(moves), 2),
+            "big_move_share": round(big / len(moves), 2),
         }
     return summary
 

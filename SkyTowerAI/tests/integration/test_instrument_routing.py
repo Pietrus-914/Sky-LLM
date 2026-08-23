@@ -225,10 +225,19 @@ class TestPromptInstrumentBlock:
         assert "SELL XAUUSD" in inst["direction_semantics"]
         prompt = engine._entry_prompt(ctx)
         assert "INSTRUMENT (this decision is for a NON-forex CFD" in prompt
-        assert "stop_loss_pips: 50-100 (= 5-10 price units)" in prompt
+        assert "stop_loss_pips: 60-120 (= 6-12 price units)" in prompt
         assert "1 pip = $0.10" in prompt
         # replay contract: the block is re-renderable from data_summary alone
         assert engine._entry_prompt(json.loads(json.dumps(ctx))) == prompt
+
+    def test_playbook_header_flags_forex_units_only_for_gold(self, tmp_path):
+        engine = make_engine(tmp_path)
+        with open(engine.playbooks_file, "w", encoding="utf-8") as f:
+            json.dump({"CPI m/m": {"pattern": "6-17 pips @1min, take profit fast"}}, f)
+        gold = engine._entry_prompt(engine._gather_data(usd_event(), {"pair": "XAUUSD"}))
+        assert "MEASURED ON FOREX PAIRS" in gold and "do NOT transfer to XAUUSD" in gold
+        fx = engine._entry_prompt(engine._gather_data(usd_event(), {"pair": "USDCAD"}))
+        assert "6-17 pips" in fx and "MEASURED ON FOREX PAIRS" not in fx
 
 
 # ---------------------------------------------------------------------------

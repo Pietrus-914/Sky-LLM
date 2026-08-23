@@ -159,7 +159,15 @@ def _render_one(ep: Dict, decisions: List[Dict],
         conf_txt = (f"@{round(conf * 100)}%"
                     if isinstance(conf, (int, float)) else "")
         then = f"; you then chose {direction}{conf_txt}"
-        if direction in ('BUY', 'SELL') and abs(move5) >= 1.0:
+        # Score the call ONLY against the instrument it was made on: the
+        # release minute joins a USDCAD decision to an XAUUSD episode (every
+        # USD print is measured on both charts), and a BUY USDCAD scored
+        # against gold's move would read as the opposite verdict.
+        dec_pair = normalize_pair(decision.get('pair') or '')
+        same_pair = (not dec_pair) or dec_pair == normalize_pair(ep.get('pair') or '')
+        if direction in ('BUY', 'SELL') and not same_pair:
+            then += f" on {dec_pair} (different instrument, not scored)"
+        elif direction in ('BUY', 'SELL') and abs(move5) >= 1.0:
             correct = (move5 > 0) == (direction == 'BUY')
             then += f" -> {'CORRECT' if correct else 'WRONG'}"
         pnl = _realized_pnl(decision, trades)

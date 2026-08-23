@@ -698,7 +698,10 @@ confidence — do NOT inflate it just because a direction is required."""
                 outcome = " -> outcome not measured yet"
                 evt_minute = (d.get('event_datetime') or '')[:16]
                 d_id = d.get('decision_id')
-                for r in self.reaction_history.get_matching(d.get('event_name', ''), currency, limit=10):
+                # pair= keeps the rows in the decision's ASSET CLASS (a
+                # forex decision never sees the gold chart's pip magnitude)
+                for r in self.reaction_history.get_matching(d.get('event_name', ''), currency,
+                                                            limit=10, pair=d.get('pair')):
                     r_id = r.get('decision_id')
                     if d_id and r_id:
                         # Exact lineage join (F2 EA echo) — immune to feed
@@ -1267,9 +1270,18 @@ confidence — do NOT inflate it just because a direction is required."""
             stats_xref = ("; where they disagree with LEARNED EVENT STATISTICS, "
                           "trust the statistics"
                           if data_context.get('learned_stats') else "")
+            # A profiled instrument gets the same curated text (it is keyed by
+            # event name), but its pips / fade rates were observed on FOREX
+            # charts — say so in the header instead of letting "6-17 pips"
+            # anchor a gold stop ($0.60-1.70). Forex header is unchanged.
+            inst = data_context.get('instrument')
+            unit_note = (f" — MEASURED ON FOREX PAIRS: the pip figures and fade rates below "
+                         f"are forex pips and do NOT transfer to {inst['name']}; use them "
+                         f"only for timing/behaviour, size stops on the {inst['name']} statistics"
+                         if inst else "")
             playbook_block = (f"\nEVENT PLAYBOOK (curated observations from historical charts "
                               f"of this event type — small-sample frequencies, NOT rules"
-                              f"{stats_xref}):\n{data_context['playbook']}\n")
+                              f"{stats_xref}{unit_note}):\n{data_context['playbook']}\n")
         # Same-minute co-releases: the tape prices the COMBINED surprise, so
         # a decision made on the headline alone can be blindsided by a
         # contradicting sibling (CAD CPI m/m prints with Median/Trimmed/Common
@@ -1438,6 +1450,7 @@ decision in JSON format."""
             sl_pips = self._num(decision_data.get('stop_loss_pips'), 0)
             tp_pips = self._num(decision_data.get('take_profit_pips'), 0)
             lim = self._limits_for(data_context.get('suggested_pair'))
+            self._log_clamped_units(data_context.get('suggested_pair'), sl_pips, tp_pips, lim)
             return TradingDecision(
                 event=event.event_name,
                 currency=event.currency,
@@ -1871,6 +1884,23 @@ decision in JSON format."""
             return response.choices[0].message.content
 
         raise RuntimeError(f"No LLM client for provider '{self.provider}'")
+
+    @staticmethod
+    def _log_clamped_units(pair, sl_pips: float, tp_pips: float, lim: Dict) -> None:
+        """A value outside the instrument's range is snapped silently by the
+        clamp. On a non-forex instrument that usually means the model answered
+        in the WRONG UNIT (dollars or points instead of pips: '8' for an $8
+        stop becomes the 60-pip floor, '800' points the 120 ceiling) — worth
+        a WARNING so the operator can see it in the log; forex is unchanged."""
+        if profile_for(pair) is None:
+            return
+        for label, value, rng in (("stop_loss_pips", sl_pips, lim["sl"]),
+                                  ("take_profit_pips", tp_pips, lim["tp"])):
+            if value > 0 and not (rng[0] <= value <= rng[1]):
+                logger.warning(
+                    f"{normalize_pair(pair)}: LLM {label}={value:g} is outside "
+                    f"{rng[0]:g}-{rng[1]:g} ({lim['units']}) — clamped; check the "
+                    f"model answered in pips, not price units")
 
     @staticmethod
     def _currency_bias_to_direction(bias: str, pair: str, currency: str) -> str:

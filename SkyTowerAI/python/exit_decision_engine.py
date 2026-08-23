@@ -13,7 +13,20 @@ from config import LLM_CONFIG, OPENROUTER_API_KEY, POSITION_MANAGEMENT_CONFIG
 from llm_util import openrouter_headers, reasoning_body
 from position_manager import OpenPosition, PositionCommand
 from trading_units import forex_pip_size
-from instrument_profiles import profile_value
+from instrument_profiles import profile_value, profile_for
+
+
+# The rule-based fallback thresholds were written for the $100-per-trade
+# era ($30 -> break-even, $60 -> partial, ...). Expressed as fractions of
+# the trade's effective risk they stay byte-identical at a $100 budget and
+# scale with larger budgets / margin-capped CFD lots instead of reacting to
+# spread noise (on a $1 000 forex budget $30 is ~1 pip; on 0.2 lot gold it
+# is $0.15 of price).
+RULE_BE_FRACTION = 0.30
+RULE_PARTIAL_FRACTION = 0.60
+RULE_TRAIL_FRACTION = 0.40
+RULE_CUT_LOSS_FRACTION = 0.20
+RULE_LATE_FLAT_FRACTION = 0.15
 
 
 EXIT_SYSTEM_PROMPT = """You are an expert forex position manager for the SkyTower-FX news trading strategy.
@@ -159,22 +172,42 @@ class ExitDecisionEngine:
         # RISK BUDGET: without it the model cannot tell a -$20 spread-noise
         # drawdown (priced into the stop) from a -$90 near-budget failure, so
         # the cut-loss principle degenerated into "negative at 5 min -> CLOSE".
-        budget = pos.max_loss_usd or POSITION_MANAGEMENT_CONFIG.get(
+        # The budget the model reasons about is the money REALLY at the stop
+        # (EA echo risk_usd) — on a margin-capped CFD chart that is a fraction
+        # of the panel value; the forced-close level stays the panel value.
+        panel_budget = pos.max_loss_usd or POSITION_MANAGEMENT_CONFIG.get(
             "max_loss_usd", 100.0)
+        budget = pos.effective_risk_usd(panel_budget)
         total_pnl = pos.profit_usd + pos.realized_usd
         used_pct = (abs(total_pnl) / budget * 100.0) if budget > 0 else 0.0
-        budget_line = (
-            f"- Risk budget for this trade: ${budget:.2f} "
-            f"(forced close at -${budget:.2f})\n"
-            f"- Current TOTAL P/L uses {used_pct:.0f}% of that budget"
-            + (" (LOSS)" if total_pnl < 0 else " (in profit)")
-        )
+        if budget < panel_budget:
+            budget_line = (
+                f"- Risk at the broker stop for this trade: ${budget:.2f}"
+                + (" (lot was CAPPED by free margin)" if pos.margin_capped else "")
+                + f"; panel max loss ${panel_budget:.2f} (forced close at -${panel_budget:.2f})\n"
+                f"- Current TOTAL P/L uses {used_pct:.0f}% of the risk at the stop"
+                + (" (LOSS)" if total_pnl < 0 else " (in profit)")
+            )
+        else:
+            budget_line = (
+                f"- Risk budget for this trade: ${budget:.2f} "
+                f"(forced close at -${budget:.2f})\n"
+                f"- Current TOTAL P/L uses {used_pct:.0f}% of that budget"
+                + (" (LOSS)" if total_pnl < 0 else " (in profit)")
+            )
+        if pos.planned_exit_minutes > 0:
+            budget_line += (
+                f"\n- Entry panel planned the exit around T+{pos.planned_exit_minutes} min "
+                f"(soft horizon: the measured edge of a news move decays after it; "
+                f"a position still developing may run, a stalled one should not)"
+            )
+        instrument_block = self._instrument_block(pos)
 
         # RECENT TRAJECTORY: "signs of recovery" was unmeasurable from a single
         # snapshot — the model only saw one P/L number and its own prior HOLDs.
         trajectory = self._format_trajectory(pos)
 
-        prompt = f"""CURRENT POSITION STATUS:
+        prompt = f"""CURRENT POSITION STATUS:{instrument_block}
 - Symbol: {pos.symbol}
 - Direction: {pos.direction}
 - Entry price: {pos.entry_price}
@@ -216,6 +249,30 @@ Based on this data, what should we do with this position RIGHT NOW?
 Respond with JSON only."""
 
         return prompt
+
+    @staticmethod
+    def _instrument_block(pos: OpenPosition) -> str:
+        """Unit legend for a NON-forex instrument, injected at the top of the
+        exit prompt (forex prompts stay byte-identical: empty string). The
+        system prompt's dollar figures are forex-era; the model is told to
+        reason in fractions of the risk at the stop instead."""
+        prof = profile_for(pos.symbol)
+        if prof is None:
+            return ""
+        pip = float(prof.pip_size)
+        spread_usd = pos.spread_pips * pip
+        be_buffer = profile_value(pos.symbol, "rule_be_buffer_pips", 1.0) * pip
+        risk = pos.effective_risk_usd(pos.max_loss_usd or 100.0)
+        return (
+            f"\nINSTRUMENT: {prof.name} ({prof.asset_class}, quoted in {prof.quote_currency}); "
+            f"{prof.units_label}; prices below are in price units, pips are {pip:g} price units "
+            f"each; current spread {pos.spread_pips:.1f} pips = {spread_usd:.2f} price units. "
+            f"Break-even buffer on this instrument is at least {be_buffer:.2f} price units "
+            f"beyond the entry. The dollar figures in the principles ($30/$40) are FOREX-era "
+            f"numbers — on this trade reason in fractions of the risk at the stop "
+            f"(${risk:.0f}): protect after ~30% of it is banked, cut only a loss of ~25%+ "
+            f"with no recovery."
+        )
 
     @staticmethod
     def _format_trajectory(pos: OpenPosition) -> str:
@@ -394,14 +451,25 @@ Respond with JSON only."""
         # Identical to profit_usd before any partial close (realized_usd = 0).
         total_pnl = pos.profit_usd + pos.realized_usd
 
-        # Rule 1: Move SL to break-even after $30+ profit.
+        # Thresholds scale with the trade's effective risk (see the RULE_*
+        # constants): identical to the historical $30/$60/$40/-$20/$15 at a
+        # $100 budget.
+        risk = pos.effective_risk_usd(
+            POSITION_MANAGEMENT_CONFIG.get("max_loss_usd", 100.0))
+        be_usd = risk * RULE_BE_FRACTION
+        partial_usd = risk * RULE_PARTIAL_FRACTION
+        trail_usd = risk * RULE_TRAIL_FRACTION
+        cut_usd = risk * RULE_CUT_LOSS_FRACTION
+        flat_usd = risk * RULE_LATE_FLAT_FRACTION
+
+        # Rule 1: Move SL to break-even after $30+ profit (30% of the risk).
         # `pos.profit_usd > 0` is NOT redundant with the total: realized profit
         # from an earlier partial can satisfy the total while the REMAINING leg
         # is underwater, and an entry+buffer stop is only a valid stop while
         # price is on the profitable side of entry. Without it a break-even
         # order lands on the wrong side of the market, the broker rejects it,
         # and the server still marks the position break-even-protected.
-        if total_pnl > 30.0 and not pos.sl_moved_to_be and pos.profit_usd > 0:
+        if total_pnl > be_usd and not pos.sl_moved_to_be and pos.profit_usd > 0:
             pip_size = forex_pip_size(pos.symbol)
             # 1 pip buffer on forex; a non-forex profile may widen it
             buffer = pip_size * profile_value(pos.symbol, "rule_be_buffer_pips", 1.0)
@@ -424,16 +492,16 @@ Respond with JSON only."""
                         reason=f"Rule: Move SL to BE after ${total_pnl:.0f} profit",
                     )
 
-        # Rule 2: Partial close after $60+ profit (if not done)
-        if total_pnl > 60.0 and not pos.partial_closed:
+        # Rule 2: Partial close after $60+ profit (60% of the risk; if not done)
+        if total_pnl > partial_usd and not pos.partial_closed:
             return PositionCommand(
                 action="PARTIAL_CLOSE",
                 close_percent=50,
                 reason=f"Rule: Partial close 50% at ${total_pnl:.0f} profit",
             )
 
-        # Rule 3: Trail SL to protect profits
-        if total_pnl > 40.0 and pos.sl_moved_to_be:
+        # Rule 3: Trail SL to protect profits (40% of the risk)
+        if total_pnl > trail_usd and pos.sl_moved_to_be:
             pip_size = forex_pip_size(pos.symbol)
             # 10 pips on forex; a non-forex profile may declare its own trail
             trail_distance = pip_size * profile_value(pos.symbol, "rule_trail_pips", 10.0)
@@ -457,15 +525,15 @@ Respond with JSON only."""
                         reason=f"Rule: Trailing SL (profit ${total_pnl:.0f})",
                     )
 
-        # Rule 4: Close if losing after 10 minutes with no recovery
-        if minutes_open > 10 and total_pnl < -20.0:
+        # Rule 4: Close if losing after 10 minutes with no recovery (20% of the risk)
+        if minutes_open > 10 and total_pnl < -cut_usd:
             return PositionCommand(
                 action="CLOSE",
                 reason=f"Rule: Losing ${total_pnl:.0f} after {minutes_open:.0f}min, cutting loss",
             )
 
-        # Rule 5: Close in late phase if profit is small
-        if minutes_open > 20 and abs(total_pnl) < 15.0:
+        # Rule 5: Close in late phase if profit is small (15% of the risk)
+        if minutes_open > 20 and abs(total_pnl) < flat_usd:
             return PositionCommand(
                 action="CLOSE",
                 reason=f"Rule: Late phase ({minutes_open:.0f}min), minimal P/L ${total_pnl:.0f}",

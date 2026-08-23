@@ -45,6 +45,8 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from event_cluster import dominance_rank, family_rank  # noqa: F401 (family_rank re-exported)
+from instrument_profiles import profile_value, symbol_carries_currency, profile_for
+from trading_units import forex_pip_size
 
 SCHEMA_VERSION = 1
 
@@ -52,6 +54,13 @@ SCHEMA_VERSION = 1
 MIN_MOVE_PIPS = 2.0
 # Currency-strength moves smaller than this don't count as "up"/"down"
 MIN_DIRECTIONAL_PIPS = 1.0
+
+
+def gates_for(pair):
+    """(min_move_pips, min_directional_pips) in the pair's own pips: the
+    forex globals, or the instrument profile's own gates (gold: 10 / 5)."""
+    return (float(profile_value(pair, "stats_min_move_pips", MIN_MOVE_PIPS)),
+            float(profile_value(pair, "stats_min_directional_pips", MIN_DIRECTIONAL_PIPS)))
 # Emit a (event, pair) block only from this many measured releases
 EMIT_MIN_N = 3
 # Bundle alias: emitted when the member's own clean sample is thinner than
@@ -119,6 +128,18 @@ def load_records(historical_path, live_path):
         if rec.get("move_1min_pips") is None:
             dropped["no_path"] += 1
             return
+        # Unit stamp (live records >= 23.08.2026): a path measured with a pip
+        # that is not the pair's current unit (gold pushed before its profile
+        # existed = 1000x numbers) is silently wrong — drop it.
+        stamp = rec.get("pip_size")
+        if stamp is not None:
+            try:
+                expected = forex_pip_size(rec.get("pair") or "")
+                if abs(float(stamp) - expected) > expected * 0.01:
+                    dropped["unit_mismatch"] += 1
+                    return
+            except (TypeError, ValueError):
+                pass
         key = (rec.get("event_key"), rec.get("pair"))
         prev = by_key.get(key)
         # source_rank: live=1 outranks historical=0; same rank keeps first
@@ -225,12 +246,19 @@ def _sign(v):
 def _currency_strength_move(rec, horizon="move_5min_pips"):
     """Move in CURRENCY-strength terms: positive = event currency stronger.
     Pair-price moves flip sign when the currency is the QUOTE side (e.g. USD
-    events on EURUSD or AUDUSD)."""
+    events on EURUSD or AUDUSD, and on profiled instruments quoted in it:
+    XAUUSD, US500). Profiled roots resolve through instrument_profiles so an
+    alias root ('GOLD') is handled like its canonical name."""
     move = rec.get(horizon)
     if move is None:
         return None
     pair = rec.get("pair") or ""
-    cur = rec.get("currency") or ""
+    cur = (rec.get("currency") or "").upper()
+    prof = profile_for(pair)
+    if prof is not None:
+        if not prof.carries_currency(cur):
+            return None
+        return -move if cur == prof.quote_currency else move
     if len(pair) < 6 or cur not in (pair[:3], pair[3:6]):
         return None
     return move if pair[:3] == cur else -move
@@ -239,6 +267,10 @@ def _currency_strength_move(rec, horizon="move_5min_pips"):
 def _pair_stats(recs):
     """Frequency stats for one (event, pair) sample of attributed releases."""
     out = {"n": len(recs)}
+    # Noise gates in the pair's own pip unit (forex globals, or the profile's)
+    MIN_MOVE_PIPS, MIN_DIRECTIONAL_PIPS = gates_for(recs[0].get("pair") if recs else None)
+    if (MIN_MOVE_PIPS, MIN_DIRECTIONAL_PIPS) != (2.0, 1.0):
+        out["gates_pips"] = {"min_move": MIN_MOVE_PIPS, "min_directional": MIN_DIRECTIONAL_PIPS}
 
     for label, field in (("abs_move_1min", "move_1min_pips"),
                          ("abs_move_5min", "move_5min_pips"),

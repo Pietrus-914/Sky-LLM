@@ -75,39 +75,100 @@ i klampy per instrument; **XAUUSD: 1 pip = $0.10**), routing w panelu
 którego wykres pcha świeże dane (≤30 min); brak danych = dotychczasowa para FX.
 
 1. Otwórz wykres **XAUUSD** i podepnij **SkyTowerAI_EA** (wymaga binarki
-   ≥ 17.08.2026 — patrz „Po zmianach w EA"). Inputy TYLKO na tym wykresie:
+   ≥ 23.08.2026 — patrz „Po zmianach w EA"). Inputy TYLKO na tym wykresie
+   (komplet = `instrument_profiles.py` → `ea_inputs`, karta Instrument Routing):
    - `InpPipSizeOverride = 0.10` (**obowiązkowe** — musi równać się `pip_size`
      profilu; bez tego EA liczy spread w centach i blokuje każde wejście)
-   - `InpMaxSpreadPips = 15` ($1.50; twardy limit EA to <15 pipsów w tej jednostce)
+   - `InpMaxSpreadPips = 25` ($2.50) i **`InpExtremeSpreadPips = 30`** ($3.00).
+     Do 23.08 próg EXTREME był zaszyty na sztywno jako 15 pipsów = $1.50 na
+     złocie — zwykły spread tuż przed publikacją — więc `InpMaxSpreadPips`
+     powyżej 15 nie miał żadnego znaczenia. Teraz cała tabela spreadu
+     (3/6/10/15) skaluje się przez `InpExtremeSpreadPips/15`; na FX zostaw 15
+     (zachowanie bit w bit). Wartości dla złota dobrano proporcjonalnie do
+     ruchu (FX: 10/15 pipsów na ruch 30-50; złoto: 25/30 na ruch 80) — dostrój
+     po kilku publikacjach z logu Experts („Spread EXTREME", „Trade blocked by
+     final spread check", „Spread too high").
+   - `InpUseSpreadLotReduction = false` (od 23.08 to także domyślna wartość EA)
    - `InpEmergencySpreadPips = 40` ($4.00)
-   - `InpSlippage = 30` (punkty = $0.30)
-   - `InpMaxMarginUsePercent = 50` (złoto u Purple ma dźwignię 1:100 — bez capu
-     lot wyliczony z SL może przekroczyć wolny margin → retcode 10019)
-   - `InpMinSLPips = 20`, `InpMaxSLPips = 100` (sanity SL w pipsach wykresu; dla
-     US500 wg profilu 8/60)
+   - `InpSlippage = 30` (punkty = $0.30; przy REQUOTE/PRICE_CHANGED EA ponawia
+     raz po świeżej cenie z podwójną tolerancją — wcześniej tracił event)
+   - `InpMaxMarginUsePercent = 50` (złoto u Purple ma dźwignię 1:100). Od 23.08
+     wartość 0 oznacza **auto** (cap dokładnie na wolnym marginie — tylko to,
+     co broker i tak odrzuciłby z 10019; lot, który broker by przyjął, nie jest
+     ruszany, więc FX przy 1:500 zachowuje się jak dotąd) — ale 50 zostawia
+     zapas na drawdown.
+   - `InpMinSLPips = 60`, `InpMaxSLPips = 120` (= klampy profilu 60-120 pipsów,
+     $6-12; poprzedni dolny próg $5 był wybijany knotem w ~25% TRAFNYCH decyzji
+     na CPI; dla US500 wg profilu 8/60)
    - strefy (`InpUseZoneIndicator`/`InpUseZoneBiasForDirection`) OFF
-   EA (build ≥ 17.08 19:51) raportuje swój efektywny pip jako `pip_size` w każdym
+   EA (build ≥ 17.08) raportuje swój efektywny pip jako `pip_size` w każdym
    pushu i raporcie; jeśli nie zgadza się z profilem ALBO go brak (stary build EA
    na wykresie XAUUSD), serwer NIE kieruje decyzji na ten wykres i NIE serwuje
    mu sygnału (log: „Unit mismatch", karta Instrument Routing: „ZŁA JEDNOSTKA").
-   Inputy `InpMinSLPips/InpMaxSLPips` muszą spełniać 0 < min ≤ max, inaczej EA
-   nie wystartuje (INIT_PARAMETERS_INCORRECT).
+   Build ≥ 23.08 dodatkowo raportuje `broker_utc_offset_sec` (offset zegara
+   brokera — serwer przestaje go zgadywać ze świec, co myliło się o 30/60 min,
+   gdy EA pchał nieświeże świece w przerwie złota 21:00-22:00 UTC) oraz
+   `risk_usd`/`margin_capped` — **realne** pieniądze na stopie (lot × strata/lot).
+   Inputy `InpMinSLPips/InpMaxSLPips` muszą spełniać 0 < min ≤ max, a
+   `InpExtremeSpreadPips` > 0, inaczej EA nie wystartuje (INIT_PARAMETERS_INCORRECT).
    Na wykresach FX inputy zostają domyślne (`InpPipSizeOverride=0`,
-   `InpMaxMarginUsePercent=0`) — zachowanie bit w bit jak wcześniej.
+   `InpExtremeSpreadPips=15`, `InpMaxMarginUsePercent=0`) — zachowanie jak wcześniej.
 2. Po podpięciu odczytaj w logu Experts linię **`SkyTower SPEC:`** — digits,
-   point, efektywny pip, contract size, margin za 1 lot, spread. Jeśli
-   `pip=` nie równa się 0.10 → popraw input. Wartości contract size / margin
-   wpisz do notatek profilu, jeśli różnią się od założeń.
+   point, efektywny pip, contract size, margin za 1 lot, spread, a od 23.08
+   także `max_spread`, `extreme_spread`, `margin_cap`. Jeśli `pip=` nie równa
+   się 0.10 → popraw input. Wartości contract size / margin wpisz do notatek
+   profilu, jeśli różnią się od założeń.
 3. Włącz routing dopiero po tym: panel → *Instrument Routing* → `USD:XAUUSD`
-   → Zapisz. Karta pokazuje na żywo, czy XAUUSD ma świeże dane z EA.
-   Bez EA na wykresie XAUUSD routing jest bezpiecznym no-op.
+   → Zapisz (alias `USD:GOLD` też działa — zapisuje się jako XAUUSD). Karta
+   pokazuje na żywo, czy XAUUSD ma świeże dane z EA. Bez EA na wykresie XAUUSD
+   routing jest bezpiecznym no-op. Wykres, którego świece M1 przestały się
+   przesuwać (przerwa złota, weekend, zamrożony feed), NIE jest „świeży" nawet
+   jeśli EA pcha dane — serwer nie kieruje na niego decyzji ani nie mierzy ścieżek.
 4. Dry-run: `SKYTOWER_FAKE_EVENT_IN_SECONDS=240` (event USD) — sygnał trafi na
    `?pair=XAUUSD`, wykres FX dostanie „Not selected". Po teście USUŃ linię z .env.
 
+**Ile naprawdę ryzykujesz na złocie (1:100).** Lot liczy się z dystansu SL
+(80 pipsów = $8 → $800 straty na 1 lot), ale przy 1:100 1 lot złota po $2 400
+wymaga $2 400 marginu. Z capem 50% na koncie $1 000 EA otworzy ~0,2 lota,
+czyli na stopie jest **~$160, nie panelowe $1 000**. Tabela: saldo $1 000 →
+0,2 lota → $160; $2 000 → 0,4 → $330; $5 000 → 1,0 → $800 (pełny budżet
+dopiero od ~$6 000). Serwer od 23.08 czyta `risk_usd` z EA i od NIEGO liczy
+próg uzbrojenia profit-protection (30% × $160 = $48, zamiast nieosiągalnych
+$300), a model wyjścia dostaje „Risk at the broker stop: $160 (lot CAPPED by
+free margin); panel max loss $1 000". Limit `max_loss_usd` nadal obowiązuje
+jako twarde zamknięcie. Stary EA bez echa = zachowanie sprzed zmiany.
+
+**Które eventy USD trafiają na złoto.** Whitelist Tier 1/2 jest forexowa.
+Gdy waluta jest kierowana na instrument z profilem, do jej listy dochodzą
+`extra_events` profilu, a `skip_events` są wycinane (także przy
+TRADE_ALL_EVENTS). Dla XAUUSD (z `tools/strategy_lab.py`, 4 721 ścieżek
+2023-26, wejście T0 w kierunku niespodzianki, exit 15 min, spread $1.2):
+CPI m/m +100 pipsów/decyzję, Core CPI +85, NFP +64, **Core PCE +28** i
+**PPI +14** (dodane), ADP +14, Retail Sales ~0 bez TP (+27 z TP 60),
+**New/Existing Home Sales −14** (wycięte — niespodzianka nie rusza złota),
+Unemployment Claims +1 (nieopłacalne po spreadzie). Ranking odtworzysz:
+`python tools\strategy_lab.py --pair XAUUSD --strategies pre_oracle --min-n 10`.
+Wejścia po publikacji (za 1. świecą albo przeciw niej) NIE mają na złocie
+wiarygodnej przewagi — edge to trafny kierunek PRZED publikacją i wyjście
+w 5-15 min (zysk na CPI maleje po 15. minucie).
+
+**Zmiany, które dotyczą też FX (świadome, od 23.08):** (a) progi rule-based
+fallbacku wyjść (gdy model wyjścia nie odpowiada) są ułamkami budżetu —
+30/60/40/−20/15% — czyli przy panelowych $1 000: BE po +$300, partial po
++$600, cięcie straty −$200 po 10 min, „płasko" <$150 po 20 min (stare sztywne
+$30/$60/$40/−$20/$15 z ery $100 oznaczały przy 3 lotach 1-2 pipsy szumu);
+przy budżecie $100 liczby są identyczne jak dawniej. (b) Model wyjścia dostaje
+linię „Entry panel planned the exit around T+X min" (horyzont z decyzji
+wejściowej) — także na FX. (c) `InpUseSpreadLotReduction` domyślnie false.
+Wszystko inne na FX bajt w bajt jak przed 23.08 (w tym `risk_usd`: na FX
+zastępuje budżet TYLKO gdy broker realnie przyciął lot marginem).
+
 Statystyki dla złota już są w `knowledge/learned_stats.json` (bloki `XAUUSD`
-dla eventów USD 2023-26, 4 721 ścieżek z HistData) — prompt dostaje sekcję
-INSTRUMENT (jednostki, zakresy SL/TP w pipsach 0.10 $, semantyka kierunku:
-niespodzianka pro-USD ⇒ SELL XAUUSD).
+dla eventów USD 2023-26, 4 721 ścieżek z HistData; od 23.08 liczone z bramkami
+szumu 10/5 pipsów zamiast forexowych 2/1 — blok ma pole `gates_pips`) — prompt
+dostaje sekcję INSTRUMENT (jednostki, zakresy SL/TP w pipsach 0.10 $, semantyka
+kierunku: niespodzianka pro-USD ⇒ SELL XAUUSD), a model wyjścia własny blok
+INSTRUMENT (pip, spread w $, bufor BE, ryzyko na stopie).
 
 ## KROK 3 — Weryfikacja obiegu danych (po ~2 minutach)
 

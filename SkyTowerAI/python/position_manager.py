@@ -17,7 +17,7 @@ from loguru import logger
 from config import POSITION_MANAGEMENT_CONFIG
 from position_store import PositionStore, PositionStoreError
 from trading_units import forex_pip_size
-from instrument_profiles import profile_value
+from instrument_profiles import profile_value, profile_for
 
 
 # How many EA report samples the exit model gets to see. At the 5-15s report
@@ -95,6 +95,15 @@ class OpenPosition:
     magic: int = 0
     max_loss_usd: float = 0.0
     recovered: bool = False
+    # Money actually at the broker stop when the trade opened (EA echo
+    # ``risk_usd``: final lots x loss per lot at the initial SL). On a 1:100
+    # CFD chart the free-margin cap makes this a fraction of max_loss_usd;
+    # 0 = unknown (older EA) -> every consumer falls back to max_loss_usd.
+    risk_usd: float = 0.0
+    margin_capped: bool = False
+    # Exit horizon the entry panel planned (decision exit_minutes_after),
+    # shown to the exit model as a soft horizon; 0 = unknown.
+    planned_exit_minutes: int = 0
 
     # Market context from EA
     spread_pips: float = 0.0
@@ -115,6 +124,20 @@ class OpenPosition:
     # and capped at PNL_SAMPLE_CAP. The exit prompt used to show a single
     # snapshot, which made its "no signs of recovery" rule unmeasurable.
     pnl_samples: List[Dict] = field(default_factory=list)
+
+    def effective_risk_usd(self, default_budget: float = 100.0) -> float:
+        """What this trade can really lose at its stop. The EA-reported risk
+        replaces the panel budget ONLY when it is below the budget AND the
+        trade is one where the budget is structurally unreachable: the lot
+        was capped by free margin, or the symbol is a profiled (non-forex)
+        instrument. A forex trade — even one the EA sized at 70% of the
+        budget via lot_percent — keeps the budget, so the forex guardrail /
+        exit-prompt / fallback numbers are unchanged by the new echo."""
+        budget = self.max_loss_usd or default_budget
+        if (self.risk_usd > 0 and self.risk_usd < budget
+                and (self.margin_capped or profile_for(self.symbol) is not None)):
+            return self.risk_usd
+        return budget
 
     def to_dict(self) -> Dict:
         d = asdict(self)
@@ -386,7 +409,8 @@ class PositionManager:
 
     def _position_from_data(self, data: Dict, entry_reasoning: str = "",
                             decision_id: str = "", forced: bool = False,
-                            recovered: bool = False) -> OpenPosition:
+                            recovered: bool = False,
+                            planned_exit_minutes: int = 0) -> OpenPosition:
         ticket = self._safe_int(data.get("ticket"))
         position_id = str(data.get("position_id") or ticket)
         symbol = str(data.get("symbol") or "").strip()
@@ -447,6 +471,10 @@ class PositionManager:
             forced=forced or bool(data.get("forced", False)),
             max_loss_usd=max_loss,
             recovered=recovered,
+            risk_usd=max(0.0, self._safe_float(data.get("risk_usd"))),
+            margin_capped=bool(data.get("margin_capped", False)),
+            planned_exit_minutes=max(0, self._safe_int(
+                data.get("planned_exit_minutes", planned_exit_minutes))),
             spread_pips=self._safe_float(data.get("spread_pips")),
             zone_bias=self._safe_float(data.get("zone_bias")),
             nearest_resistance=self._safe_float(data.get("nearest_resistance")),
@@ -514,6 +542,13 @@ class PositionManager:
         )
         if self._safe_float(data.get("max_loss_usd")) > 0:
             position.max_loss_usd = self._safe_float(data["max_loss_usd"])
+        # Risk at the INITIAL stop: the first positive echo is authoritative.
+        # An EA that re-adopted the position without trusted metadata reports
+        # the risk at the CURRENT stop (which shrinks to ~0 once the stop sits
+        # at break-even) — that must not overwrite the value persisted here.
+        if position.risk_usd <= 0 and self._safe_float(data.get("risk_usd")) > 0:
+            position.risk_usd = self._safe_float(data["risk_usd"])
+            position.margin_capped = bool(data.get("margin_capped", False))
         if not position.decision_id:
             position.decision_id = str(data.get("decision_id") or "")
         if not position.event_name or position.event_name.startswith("(recovered"):
@@ -651,7 +686,8 @@ class PositionManager:
 
     def on_position_opened(self, data: Dict, entry_reasoning: str = "",
                            decision_id: str = "", forced: bool = False,
-                           recovered: bool = False) -> str:
+                           recovered: bool = False,
+                           planned_exit_minutes: int = 0) -> str:
         """Idempotently register or reconcile a broker position.
 
         Returns ``opened``, ``reconciled`` or ``conflict``. A repeated open
@@ -715,6 +751,7 @@ class PositionManager:
                     decision_id=decision_id,
                     forced=forced,
                     recovered=recovered,
+                    planned_exit_minutes=planned_exit_minutes,
                 )
                 self.daily_trades += 1
                 self.pending_command = None
@@ -869,6 +906,8 @@ class PositionManager:
                     ),
                     "forced": position.forced,
                     "max_loss_usd": position.max_loss_usd,
+                    "risk_usd": position.risk_usd,
+                    "margin_capped": position.margin_capped,
                     "recovered": position.recovered,
                     "entry_price": position.entry_price,
                     "sl": position.sl,
@@ -1066,6 +1105,13 @@ class PositionManager:
             self.position.tp = data.get("tp", self.position.tp)
             self.position.profit_usd = data.get("profit_usd", self.position.profit_usd)
             self.position.tick_value = data.get("tick_value", self.position.tick_value)
+            # Risk echo from the EA (risk at the initial stop): the FIRST
+            # positive value wins — a later report from an EA that re-adopted
+            # the position without metadata carries the risk at the current
+            # (possibly break-even) stop and must not overwrite it.
+            if self.position.risk_usd <= 0 and self._safe_float(data.get("risk_usd")) > 0:
+                self.position.risk_usd = self._safe_float(data["risk_usd"])
+                self.position.margin_capped = bool(data.get("margin_capped", False))
             self.position.account_balance = data.get("account_balance", self.position.account_balance)
             self.position.spread_pips = data.get("spread_pips", 0.0)
             self.position.zone_bias = data.get("zone_bias", 0.0)
@@ -1454,7 +1500,12 @@ class PositionManager:
         protection_pct = self.config.get("profit_protection_percent", 50)
         floor_pct = self.config.get("profit_protection_floor_pct", 30)
         grace_s = self.config.get("profit_protection_grace_seconds", 120)
-        floor_usd = max(10.0, max_loss * (floor_pct / 100.0))
+        # The floor is a fraction of what the trade can REALLY lose. On a
+        # margin-capped gold chart (0.2 lot, $160 at the stop) 30% of the
+        # $1 000 panel budget was a $300 peak the trade could never reach,
+        # so the guardrail was dead; risk_usd from the EA fixes that and is
+        # identical to max_loss for a trade sized to the full budget.
+        floor_usd = max(10.0, pos.effective_risk_usd(max_loss) * (floor_pct / 100.0))
         # Gross-vs-net: the peak/total series excludes commission, so only a
         # total above this cushion is genuinely "still in profit" net.
         # Sized on the REMAINING lots: before any partial that equals the

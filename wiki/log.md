@@ -575,3 +575,36 @@ wyrenderowanych checkboxów przy późniejszym błędzie sieci.
   panelu zweryfikowana osobno w harnessie node (roster → checkboxy → payload
   Zapisu), składnia JS sprawdzona `node --check`.
 - Bez zmian: `ENTRY_PROMPT_VERSION`, `knowledge/learned_stats.json`, protokół EA.
+
+## 2026-08-23 INGEST | Audyt ścieżki złota: 25 ustaleń, EA + serwer, laboratorium strategii
+
+- Przeczytano: cały tor XAUUSD (server routing/signal, llm_decision_engine,
+  EA 3221 linii, position_manager, exit_decision_engine, event_path_recorder,
+  build_learned_stats, calibration, zone_analyzer, episode_retrieval) — 6
+  audytorów + 2 sceptyków na ustalenie (workflow), audyt statystyk osobno.
+- Laboratorium: nowe `python/tools/strategy_lab.py` + `research/GOLD_STRATEGY_LAB.md`
+  (ranking eventów USD na złocie, brak przewagi wejść po publikacji).
+- Zmienione: `mt5/SkyTowerAI_EA.mq5` (InpExtremeSpreadPips, auto margin cap,
+  echo risk_usd/margin_capped/broker_utc_offset_sec, metadane v3, retry
+  REQUOTE, re-check obcej pozycji; .ex5 23.08 20:48, 0/0),
+  `instrument_profiles.py` (pola: strefy, polityka eventów, bramki statystyk;
+  XAUUSD SL 60-120, ea_inputs), `config.py` (kanonizacja aliasu,
+  `routed_event_policy`), `calendar_fetcher.py` (polityka per instrument),
+  `position_manager.py` (`risk_usd`, `effective_risk_usd`, `planned_exit_minutes`),
+  `exit_decision_engine.py` (INSTRUMENT, ryzyko na stopie, skalowane reguły),
+  `server.py` (exit_minutes → pozycja, `/api/targets` pip, `zone_config_for`,
+  `bars_advanced_at`, echo offsetu), `market_context.py` (`broker_offset_seconds`,
+  asymetryczne okno, `entry_age_seconds` z zatrzymanymi świecami),
+  `event_path_recorder.py` (echo offsetu, `pip_size`, kanonizacja),
+  `episode_retrieval.py` (werdykt per para), `llm_decision_engine.py` (log
+  klampów, pair-gate reakcji), `event_reaction_history.py` (kanonizacja),
+  `tools/build_learned_stats.py` + `calibration.py` (bramki per instrument,
+  filtr stempla), `knowledge/learned_stats.json` (68 bloków XAUUSD),
+  `RUNBOOK.md`, `templates/dashboard.html` (Przewodnik), `SkyTowerAI/CLAUDE.md`,
+  `wiki/pages/multi-instrument.md`.
+- Testy: **962 zielone** (918 + 44 nowych; przegląd adwersaryjny zmian: 9 ustaleń naprawionych, patrz strona multi-instrument).
+- Dla operatora (maszyna 5556): wgrać .ex5 23.08 na WSZYSTKIE wykresy (FX z
+  domyślnymi inputami = bez zmian), na XAUUSD ustawić inputy wg RUNBOOK
+  (25/30/40, SL 60/120, reduction off), zrestartować serwer; `learned_stats.json`
+  hot-reloaduje się sam.
+

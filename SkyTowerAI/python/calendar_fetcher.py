@@ -633,6 +633,17 @@ class CalendarAggregator:
     def _tradeable_params() -> dict:
         """Read the flags that gate tradeability once per call (not per event)."""
         import config as cfg
+        # Per-instrument event policy for ROUTED currencies (instrument
+        # profiles: gold adds Core PCE / PPI and drops Home Sales). Resolved
+        # once per call, keyed by currency; forex routes yield empty tuples.
+        routing = getattr(cfg, "INSTRUMENT_ROUTING", {}) or {}
+        policy_fn = getattr(cfg, "routed_event_policy", None)
+        policies = {}
+        if callable(policy_fn):
+            for cur in routing:
+                extra, skip = policy_fn(cur)
+                if extra or skip:
+                    policies[cur] = (tuple(extra), tuple(skip))
         return {
             # Synthetic static-calendar events have GUESSED times — never trade
             # them unless explicitly enabled (they exist for display/dev only).
@@ -641,24 +652,35 @@ class CalendarAggregator:
             # TRADE_ALL_EVENTS: take every event at/above min-impact (already
             # impact-filtered in get_upcoming_events), ignoring the name list.
             "trade_all": getattr(cfg, "TRADE_ALL_EVENTS", False),
+            "event_policies": policies,
         }
 
     @staticmethod
-    def _event_is_tradeable(event, event_keywords, now, trade_static, trade_all) -> bool:
+    def _event_is_tradeable(event, event_keywords, now, trade_static, trade_all,
+                            event_policies=None) -> bool:
         """Single source of truth for 'should we trade this event?', shared by
         get_next_tradeable_event and get_tradeable_events so they can never
         drift. Order: not passed -> not synthetic-static -> not a talk event
-        -> (TRADE_ALL_EVENTS or a TIER name match)."""
+        -> instrument skip list (routed currency) -> (TRADE_ALL_EVENTS or a
+        TIER name match or the instrument's extra list)."""
         if event.datetime_utc < now:
             return False
         if event.source == "static" and not trade_static:
             return False
         if is_non_data_event(event.event_name):
             return False
+        event_lower = event.event_name.lower()
+        extra, skip = (), ()
+        if event_policies:
+            extra, skip = event_policies.get(
+                str(getattr(event, "currency", "") or "").upper(), ((), ()))
+        if any(name.lower() in event_lower for name in skip):
+            return False
         if trade_all:
             return True
-        event_lower = event.event_name.lower()
-        return any(kw.lower() in event_lower for kw in event_keywords)
+        if any(kw.lower() in event_lower for kw in event_keywords):
+            return True
+        return any(name.lower() in event_lower for name in extra)
 
     def _deduplicate(self, events: List[EconomicEvent]) -> List[EconomicEvent]:
         """Remove duplicate events from multiple sources"""

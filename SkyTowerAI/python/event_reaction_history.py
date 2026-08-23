@@ -16,7 +16,7 @@ from threading import Lock
 from typing import Dict, List, Optional
 
 from loguru import logger
-from instrument_profiles import same_asset_class
+from instrument_profiles import same_asset_class, canonical_symbol
 
 from market_context import pip_size
 
@@ -229,7 +229,10 @@ class EventReactionHistory:
         Optional: forecast, previous, actual.
         Pip moves are computed here.
         """
-        pair = (reaction.get('pair') or '').upper().replace('/', '')
+        # Canonical root (broker suffix stripped, profile alias resolved):
+        # the EA posts its raw _Symbol ('XAUUSD_raw'), and an exact-string
+        # consumer / the dashboard must see the same name the paths use.
+        pair = canonical_symbol(reaction.get('pair') or '')
         pip = pip_size(pair)
 
         def move_pips(later_price):

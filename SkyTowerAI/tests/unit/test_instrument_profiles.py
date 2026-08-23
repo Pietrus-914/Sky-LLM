@@ -171,7 +171,7 @@ class TestEngineClamps:
         fx = engine._limits_for("USD/CAD")
         assert (fx["sl"], fx["tp"], fx["exit"], fx["lot_max"]) == ((25.0, 80.0), (8.0, 120.0), (5, 15), 85)
         gold = engine._limits_for("XAUUSD")
-        assert gold["sl"] == (50.0, 100.0) and gold["tp"] == (30.0, 400.0)
+        assert gold["sl"] == (60.0, 120.0) and gold["tp"] == (30.0, 400.0)
         assert engine._limits_for(None) == fx
 
     def test_single_call_clamps_forex_unchanged(self, tmp_path, monkeypatch):
@@ -207,7 +207,7 @@ class TestEngineClamps:
         engine._chat = lambda prompt: reply(sl=150, tp=20)
         ctx = engine._gather_data(make_event(), {"pair": "XAUUSD.pro"})
         d = engine._llm_decision(make_event(), ctx)
-        assert d.stop_loss_pips == 100.0          # gold cap $10 (forex would clamp to 80)
+        assert d.stop_loss_pips == 120.0          # gold cap $12 (forex would clamp to 80)
         assert d.take_profit_pips == 30.0         # gold TP floor $3 (forex floor 8 would keep 20)
 
 
@@ -347,9 +347,19 @@ class TestCalibrationAndRecorder:
             jpy = EventPathRecorder._fresh_pairs(snap, "JPY", now, 180)
         finally:
             epr.entry_age_seconds = original
-        assert set(usd) == {"NZDUSD", "USDCAD", "XAUUSD", "US500"}
-        assert set(eur) == {"GER40", "EURJPY"}
-        assert set(jpy) == {"EURJPY"}
+        # (snapshot key, canonical pair): the key indexes the snapshot, the
+        # canonical name goes into the record (profile alias GOLD -> XAUUSD)
+        assert {c for _, c in usd} == {"NZDUSD", "USDCAD", "XAUUSD", "US500"}
+        assert {k for k, _ in usd} == {"NZDUSD", "USDCAD.pro", "XAUUSD.pro", "US500"}
+        assert {c for _, c in eur} == {"GER40", "EURJPY"}
+        assert {c for _, c in jpy} == {"EURJPY"}
+        snap["GOLD"] = {"received_at": now.isoformat()}
+        epr.entry_age_seconds = lambda entry, n: 0.0
+        try:
+            gold = EventPathRecorder._fresh_pairs(snap, "USD", now, 180)
+        finally:
+            epr.entry_age_seconds = original
+        assert ("GOLD", "XAUUSD") in gold
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +436,7 @@ class TestSystemPromptSchema:
     def test_gold_system_prompt_uses_profile_ranges(self, tmp_path):
         engine = make_engine(tmp_path)
         text = engine._system_prompt("XAUUSD.pro")
-        assert '"stop_loss_pips": 50 to 100 (pips (1 pip = $0.10 on XAUUSD)),' in text
+        assert '"stop_loss_pips": 60 to 120 (pips (1 pip = $0.10 on XAUUSD)),' in text
         assert '"take_profit_pips": 30 to 400 (' in text
         assert "25 to 80" not in text
 
@@ -456,6 +466,6 @@ class TestSystemPromptSchema:
         monkeypatch.setattr(lde, "FORCE_DECISION", False)
         ctx = engine._gather_data(make_event(), {"pair": "XAUUSD"})
         d = engine._llm_decision(make_event(), ctx)
-        assert "50 to 100" in seen["system"]
+        assert "60 to 120" in seen["system"]
         assert d.stop_loss_pips == 90.0
         assert getattr(engine, "_active_pair", None) is None   # reset after the call

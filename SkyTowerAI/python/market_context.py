@@ -108,14 +108,51 @@ from timeutil import to_naive_utc, utc_epoch as _utc_epoch
 
 
 def entry_age_seconds(entry: Dict, now: datetime = None) -> float:
-    """Age of a pushed market-data entry (its 'updated_at' ISO stamp) in
-    seconds. Canonical freshness helper — server gates and the path recorder
-    must agree on the same answer. inf when the stamp is missing/garbage."""
+    """Age of a pushed market-data entry in seconds: the 'updated_at' push
+    stamp, OR — when the server noticed that the newest M1 bar has not
+    advanced across pushes ('bars_advanced_at') — the time since the bars
+    last moved, whichever is older. A chart that keeps pushing the same
+    stale bars (gold daily break 21:00-22:00 UTC, weekend, feed halt) is
+    therefore NOT fresh, so it is neither routed to nor measured. Canonical
+    freshness helper — server gates and the path recorder must agree on the
+    same answer. inf when the stamp is missing/garbage."""
+    now = now or utcnow()
     try:
         ts = to_naive_utc(datetime.fromisoformat(entry.get('updated_at', '')))
-        return ((now or utcnow()) - ts).total_seconds()
+        age = (now - ts).total_seconds()
     except (ValueError, TypeError):
         return float('inf')
+    advanced = entry.get('bars_advanced_at')
+    if advanced:
+        try:
+            adv_ts = to_naive_utc(datetime.fromisoformat(advanced))
+            age = max(age, (now - adv_ts).total_seconds())
+        except (ValueError, TypeError):
+            pass
+    return age
+
+
+def broker_offset_seconds(entry: Optional[Dict], bars: List[Dict],
+                          pushed_at: datetime) -> Optional[int]:
+    """Broker clock offset for a pushed entry: the EA's own echo
+    ('broker_utc_offset_sec', EA >= 23.08.2026) when present and sane,
+    otherwise the bar-age inference. The echo is authoritative because the
+    inference is ambiguous by construction whenever the newest bar is ~30 or
+    ~60 min old (see infer_broker_offset_seconds)."""
+    if isinstance(entry, dict) and entry.get('broker_utc_offset_sec') is not None:
+        try:
+            echo = int(float(entry['broker_utc_offset_sec']))
+        except (TypeError, ValueError):
+            echo = None
+        if echo is not None and -12 * 3600 <= echo <= 14 * 3600:
+            # The EA measures TimeCurrent()-TimeGMT(): last server TICK time
+            # minus PC UTC = true offset + clock skew - seconds since that
+            # tick, i.e. an arbitrary second count. Bar epochs are exact
+            # minute multiples, so snap to the broker-offset grid (15 min
+            # covers every real broker incl. +5:30 / +5:45) or t0 lookups
+            # in the bar map miss by a few seconds and find nothing.
+            return int(round(echo / 900.0)) * 900
+    return infer_broker_offset_seconds(bars, pushed_at)
 
 
 def infer_broker_offset_seconds(bars: List[Dict], pushed_at: datetime) -> Optional[int]:
@@ -145,9 +182,18 @@ def infer_broker_offset_seconds(bars: List[Dict], pushed_at: datetime) -> Option
     if not -12 * 3600 <= offset <= 14 * 3600:
         return None
     # Residual = how far the newest bar sits from "just before the push".
-    # A fresh M1/M5 bar gives residual in [-120, 0]; beyond ~8 minutes the
-    # 30-min rounding can no longer be trusted — refuse instead of guessing.
-    if abs(raw - offset + 60) > 480:
+    # A fresh M1/M5 bar gives residual in [-60, +60]; a bar up to ~8 minutes
+    # old a NEGATIVE residual down to -480. A POSITIVE residual beyond one
+    # minute means the candidate offset is too small — the bar would sit
+    # in the FUTURE of the push — which is what a 23-29-min-old bar (gold
+    # daily break, halted feed) produced under the old symmetric window:
+    # offset 30 min short, accepted. Refuse instead of guessing. A bar
+    # 30-39 or ~60 min old remains INDISTINGUISHABLE from a fresh one with
+    # a 30/60-min smaller offset — bar times alone cannot settle it. That
+    # band is covered by the EA's own echo (broker_offset_seconds prefers
+    # it) and by the bars-stalled freshness gate (entry_age_seconds).
+    residual = raw - offset + 60
+    if residual > 120 or residual < -480:
         return None
     return offset
 
@@ -190,6 +236,7 @@ def build_market_context(
     registered_at: Optional[str] = None,
     spread_points: Optional[float] = None,
     spread_pips: Optional[float] = None,
+    broker_utc_offset_sec: Optional[int] = None,
 ) -> Optional[Dict]:
     """
     Build the market-context dict for the entry LLM prompt.
@@ -264,7 +311,10 @@ def build_market_context(
         # bar can be an hour old, which defeats the 30-min rounding)
         offset = None
         if finest in ("M1", "M5"):
-            offset = infer_broker_offset_seconds(usable[finest], push_ts or utcnow())
+            offset = broker_offset_seconds(
+                {"broker_utc_offset_sec": broker_utc_offset_sec}
+                if broker_utc_offset_sec is not None else None,
+                usable[finest], push_ts or utcnow())
         if offset is None:
             # Don't silently regress to mislabeled times — tell the model
             # (this note stays in the summary JSON the prompt renders)

@@ -42,6 +42,37 @@ Instrument Routing pokazuje `unit_ok`. Fail-closed dla instrumentów z profilem:
 Izolacja klas aktywów: cross-pair, epizody, learned-stats fallback i podsumowania
 reakcji nie mieszają magnitud złota (0.1 $/pip) z pipsami FX (`same_asset_class`).
 
+## Audyt ścieżki złota (23.08.2026) — co się zmieniło
+
+Pełny audyt kodu ścieżki XAUUSD (routing → prompt → EA → wyjścia → statystyki;
+25 potwierdzonych ustaleń po adwersaryjnej weryfikacji) + laboratorium
+strategii na 4 721 historycznych ścieżkach (`SkyTowerAI/research/GOLD_STRATEGY_LAB.md`).
+
+| Obszar | Problem | Naprawa |
+|---|---|---|
+| EA spread | próg EXTREME **zaszyty na 15 pipsów** ($1.50 na złocie = zwykły spread przed publikacją); `InpMaxSpreadPips` > 15 bez znaczenia | input `InpExtremeSpreadPips` (default 15 = FX bez zmian) skaluje tabelę 3/6/10/15; XAUUSD 30 ($3), `InpMaxSpreadPips` 25 |
+| EA margin | `InpMaxMarginUsePercent=0` = brak capu → na 1:100 retcode 10019 i stracony event | 0 = auto = dokładnie wolny margin (redukowany tylko lot, który broker odrzuciłby); cap nadal zalecany 50 |
+| EA ryzyko | serwer liczył progi od panelowego `max_loss_usd` ($1 000), a margin-capped lot złota ma na stopie ~$160 → profit-protection nieuzbrajalne, model wyjścia okłamywany | EA echo `risk_usd` + `margin_capped` (push, raport, metadane v3); `OpenPosition.effective_risk_usd()` = min(budżet, risk) → próg floor, prompt wyjścia, skalowane reguły fallbacku (30/60/40/−20/15% ryzyka — identyczne przy $100) |
+| EA wejście | REQUOTE/PRICE_CHANGED/PRICE_OFF = stracony event | 1 retry po świeżej cenie z 2× tolerancją |
+| EA blokada | obca pozycja na symbolu blokowała EA na stałe (do re-attach) | re-check co 30 s, odblokowanie po zamknięciu |
+| EA zegar | serwer zgadywał offset brokera ze świec; przy nieświeżych świecach (przerwa złota 21-22 UTC) mylił się o 30/60 min → błędne ścieżki/etykiety | echo `broker_utc_offset_sec` w pushu (autorytatywne); inferencja odrzuca pas 23-29 min; detekcja **zatrzymanych świec** (`bars_advanced_at`) → wykres nie jest świeży |
+| Prompt wyjścia | forexowe „$30 → BE", brak legendy jednostek | blok INSTRUMENT (pip, spread w $, bufor BE, ryzyko na stopie) + linia „Entry panel planned the exit around T+X min" (`exit_minutes` z decyzji wchodzi do `OpenPosition.planned_exit_minutes`) |
+| Klampy | SL floor 50 ($5) < p80 knotu niekorzystnego CPI (65); sufit 100 < p90 FOMC (101) | `sl_range (60, 120)`; `ea_inputs` InpMinSLPips 60 / InpMaxSLPips 120; ciche klampowanie nie-FX logowane jako WARNING (model odpowiedział w $ zamiast pipsów) |
+| Eventy | whitelist forexowa: Home Sales (na złocie −14 pipsów) grane, Core PCE/PPI (+28/+14) nie | `extra_events` / `skip_events` w profilu, `config.routed_event_policy`, predykat `_event_is_tradeable` stosuje je tylko dla waluty routowanej na instrument |
+| Strefy | tolerancja 3 pipsy = $0.30 → liquidity pools puste w ~70% okien | `zone_equal_level_tolerance_pips 15`, `zone_min_fvg_pips 10` przez `zone_config_for` |
+| Statystyki | bramki 2/1 pipsa = $0.20/$0.10 na złocie; „big move" 15 pipsów = $1.50 | profile: 10 / 5 / 50; 68 bloków XAUUSD przeliczone, FX bajt w bajt; stempel `pip_size` w rekordach ścieżek + filtr rozjazdu jednostek w builderze |
+| Epizody | decyzja USDCAD oceniana CORRECT/WRONG na ścieżce XAUUSD (odwrócony werdykt) | werdykt tylko dla tej samej pary, inaczej „(different instrument, not scored)" |
+| Routing | alias `USD:GOLD` walidowany, ale nigdy nie pasował do pushu XAUUSD | kanonizacja do nazwy profilu przy zapisie; recorder/reakcje też kanonizują |
+| Track record | reakcje bez pair-gate (magnituda złota w prompcie FX) | `get_matching(..., pair=)` |
+| `/api/targets` | GET z pipsem 0.0001 dla złota (martwy endpoint) | `forex_pip_size` |
+
+**Przegląd adwersaryjny zmian (16 agentów) — 9 ustaleń naprawionych przed zamknięciem:** echo offsetu wyrównane do siatki 15 min (inaczej rekorder nie trafiał w świecę T0), `_fresh_pairs` zwraca (klucz, nazwa kanoniczna) — alias nie wywala ticku rekordera, `effective_risk_usd` bramkowane do `margin_capped`/profilu (forex z lot_percent 70% zachowuje budżet), pierwsze echo `risk_usd` wygrywa (re-adopcja ze stopem na BE nie nadpisze), auto-cap marginu 100% zamiast 90% (forex nietknięty), metadane v1/v2 nie kasują estymaty, prawdziwe ryzyko liczone po fillu (retry/slippage), flagi zachowane przy adopcji po niejednoznacznym otwarciu. Świadome zmiany widoczne na FX: skalowane progi fallbacku wyjść (identyczne przy $100), linia planowanego horyzontu w prompcie wyjścia, `InpUseSpreadLotReduction` default false.
+
+**Czego laboratorium NIE potwierdziło:** wejścia po publikacji (za 1. świecą
+lub przeciw niej) nie mają na złocie spójnej przewagi — jedyny edge to trafny
+kierunek PRZED publikacją na CPI/NFP/PCE (+64…+100 pipsów/decyzję w suficie
+wyroczni) i wyjście do 15 min. Żadna strategia potwierdzeniowa nie została wdrożona.
+
 ## Czego celowo NIE zrobiono (v1)
 
 - Brak drugiego slotu decyzji / drugiej pozycji: jeden event → jeden instrument
@@ -53,9 +84,12 @@ reakcji nie mieszają magnitud złota (0.1 $/pip) z pipsami FX (`same_asset_clas
 
 ## Jak włączyć (operator)
 
-RUNBOOK → „Instrumenty nie-FX (od 17.08.2026)": wykres XAUUSD z EA ≥ 17.08
-(`InpPipSizeOverride=0.10`, spread 15/40, slippage 30, margin cap 50), odczyt
-`SkyTower SPEC:`, potem panel → Instrument Routing → `USD:XAUUSD`.
+RUNBOOK → „Instrumenty nie-FX": wykres XAUUSD z EA ≥ 23.08
+(`InpPipSizeOverride=0.10`, `InpMaxSpreadPips=25`, `InpExtremeSpreadPips=30`,
+`InpEmergencySpreadPips=40`, slippage 30, margin cap 50, SL 60/120, spread-lot
+reduction off), odczyt `SkyTower SPEC:`, potem panel → Instrument Routing →
+`USD:XAUUSD`. Stary EA (17.08) nadal działa z nowym serwerem — bez echa
+`risk_usd`/offsetu serwer zachowuje się jak przed 23.08.
 
 ## Testy
 
@@ -66,6 +100,10 @@ exit engine, kalibracja, recorder), `tests/integration/test_instrument_routing.p
 wygrywa, brak/stare dane = fallback, kolejność bez fallbacku po prefiksie, blok
 INSTRUMENT tylko dla złota i re-renderowalny, sygnał tylko do wykresu złota,
 endpoint, rozjazd jednostek blokuje routing i sygnał, izolacja klas aktywów w
-cross-pair/statystykach/epizodach/reakcjach). Łącznie 864 zielone (17.08.2026).
+cross-pair/statystykach/epizodach/reakcjach). Od 23.08: `tests/unit/test_gold_risk_reality.py`
+(22: echo ryzyka, floor profit-protection, prompt wyjścia, skalowanie reguł,
+alias routingu, polityka eventów, strefy, klampy) i `tests/unit/test_gold_data_integrity.py`
+(14: offset brokera — echo/asymetria/zatrzymane świece, epizody per para,
+bramki statystyk i kalibracji, stempel jednostki, `/api/targets`). Łącznie 962 zielone (23.08.2026).
 
-_Aktualizacja: 2026-08-17 · stan: feature/multi-instrument (po rundzie review)_
+_Aktualizacja: 2026-08-23 · stan: main (audyt ścieżki złota)_

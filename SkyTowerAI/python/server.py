@@ -20,7 +20,7 @@ from config import SERVER_CONFIG, TRADING_CONFIG, ZONE_CONFIG, EXIT_CONFIG, POSI
 # binding here would pin the import-time list (callers pass
 # event_keywords=None so calendar_fetcher reads it fresh).
 from config import CURRENCY_PAIRS, DEFAULT_PAIRS
-from instrument_profiles import profile_for
+from instrument_profiles import profile_for, zone_config_for
 from trading_units import forex_pip_size
 from market_context import (build_market_context, normalize_pair,
                             summarize_pair_brief, entry_age_seconds)
@@ -873,8 +873,9 @@ def calculate_targets():
         if direction not in ["BUY", "SELL"]:
             return jsonify({"status": "error", "message": "Direction must be BUY or SELL"}), 400
 
-        # Use default pip-based targets from config
-        pip_size = 0.0001 if "JPY" not in symbol else 0.01
+        # Use default pip-based targets from config (instrument-aware pip:
+        # the old forex literal produced sub-cent targets on XAUUSD)
+        pip_size = forex_pip_size(symbol)
 
         # Default targets: 15 pips TP1, 25 pips TP2, 20 pips SL
         tp1_pips = EXIT_CONFIG.get('default_tp1_pips', 15)
@@ -1107,7 +1108,23 @@ def report_market_data():
         ohlc_multi = {tf: (bars[-200:] if isinstance(bars, list) else [])
                       for tf, bars in ohlc_multi.items()}
 
+        # Bars-stalled detection: a chart keeps pushing (updated_at fresh)
+        # through the gold daily break / weekend / a feed halt while its
+        # newest M1 bar never advances. Track when the bars last moved so
+        # entry_age_seconds can refuse such a chart (routing, recorder).
+        newest_bar = _newest_bar_time(ohlc_multi)
+        now_iso = utcnow().isoformat()
+        offset_echo = data.get('broker_utc_offset_sec')
+        try:
+            offset_echo = int(float(offset_echo)) if offset_echo is not None else None
+        except (TypeError, ValueError):
+            offset_echo = None
         with market_data_lock:
+            previous = market_data_reports.get(pair) or {}
+            advanced_at = now_iso
+            if (newest_bar is not None and previous.get('last_bar_time') == newest_bar
+                    and previous.get('bars_advanced_at')):
+                advanced_at = previous['bars_advanced_at']
             market_data_reports[pair] = {
                 "pair": pair,
                 "ohlc_multi": ohlc_multi,
@@ -1117,7 +1134,11 @@ def report_market_data():
                 # or the forex rule); the server refuses to route/serve a chart
                 # whose unit disagrees with instrument_profiles / the forex rule
                 "pip_size": data.get('pip_size'),
-                "updated_at": utcnow().isoformat()
+                # EA >= 23.08.2026 echoes its broker clock offset; None = infer
+                "broker_utc_offset_sec": offset_echo,
+                "last_bar_time": newest_bar,
+                "bars_advanced_at": advanced_at,
+                "updated_at": now_iso
             }
 
         bars_info = {tf: len(bars) for tf, bars in ohlc_multi.items() if bars}
@@ -1154,6 +1175,23 @@ def _find_pair_data(store: dict, wanted_pair: str, currency: str = None):
 # Ignore EA-pushed OHLC older than this — a stale entry from a dead chart
 # must not claim decision.pair (no live EA would ever receive that signal)
 MARKET_DATA_MAX_AGE_SECONDS = 1800
+
+
+def _newest_bar_time(ohlc_multi) -> Optional[int]:
+    """Newest M1 bar time of a push (any timeframe as fallback), None when
+    no bar carries a usable time."""
+    if not isinstance(ohlc_multi, dict):
+        return None
+    for tf in ("M1", "M5", "M15", "H1"):
+        bars = ohlc_multi.get(tf)
+        if isinstance(bars, list) and bars:
+            try:
+                t = int(bars[-1].get("time", 0))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if t > 0:
+                return t
+    return None
 
 
 def _market_data_age_seconds(entry) -> float:
@@ -1274,7 +1312,11 @@ def _liquidity_pools_from_ohlc(ohlc_multi, pair_name):
     if bars is None:
         return None
     try:
-        result = analyze_from_ohlc_data(bars, pair_name, ZONE_CONFIG)
+        # Profiled instruments substitute their own pip-denominated
+        # detection thresholds (gold: $1.50 tolerance instead of $0.30 —
+        # with the forex value stop clusters were never found there).
+        result = analyze_from_ohlc_data(bars, pair_name,
+                                        zone_config_for(pair_name, ZONE_CONFIG))
     except Exception as e:
         logger.debug(f"Liquidity-pool analysis failed for {pair_name}: {e}")
         return None
@@ -1358,7 +1400,8 @@ def _build_market_context_for_event(event):
 
         context = build_market_context(
             ohlc_multi, pair_name, zones=zones, registered_at=data_timestamp,
-            spread_points=spread_points, spread_pips=spread_pips
+            spread_points=spread_points, spread_pips=spread_pips,
+            broker_utc_offset_sec=(market_entry or {}).get('broker_utc_offset_sec'),
         )
 
         # CROSS-PAIR PICTURE: brief summaries of OTHER fresh pairs that
@@ -2165,6 +2208,7 @@ def get_mt5_signal():
                     "decision_id": getattr(next_decision, 'decision_id', ''),
                     "reasoning": next_decision.reasoning,
                     "forced": getattr(next_decision, 'forced', False),
+                    "exit_minutes": normalized_numbers["exit_minutes"],
                     "served_at": utcnow(),
                 }
 
@@ -2357,6 +2401,7 @@ def position_opened():
         # late open report lands it may already hold the NEXT event's decision.
         entry_reasoning = ""
         forced_flag = False
+        planned_exit_minutes = 0
         decision_id = data.get("decision_id", "")
         with decision_lock:
             served = _last_served_signal
@@ -2364,10 +2409,13 @@ def position_opened():
                 decision_id = decision_id or served["decision_id"]
                 entry_reasoning = served["reasoning"]
                 forced_flag = served["forced"]
+                planned_exit_minutes = int(served.get("exit_minutes") or 0)
             elif next_decision:
                 decision_id = decision_id or getattr(next_decision, 'decision_id', '')
                 entry_reasoning = next_decision.reasoning
                 forced_flag = getattr(next_decision, 'forced', False)
+                planned_exit_minutes = int(
+                    getattr(next_decision, 'exit_minutes_after', 0) or 0)
 
         # forced is STICKY: any source that knows the entry was a
         # FORCE_DECISION coin flip wins. This is the endpoint the EA actually
@@ -2386,6 +2434,7 @@ def position_opened():
             decision_id=decision_id,
             forced=forced_flag,
             recovered=bool(data.get("recovered", False)),
+            planned_exit_minutes=planned_exit_minutes,
         )
         if registration == "conflict":
             return jsonify({

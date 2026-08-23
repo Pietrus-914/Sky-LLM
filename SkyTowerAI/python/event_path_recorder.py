@@ -35,9 +35,10 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 from timeutil import utcnow, to_naive_utc as _naive_utc, utc_epoch as _utc_epoch
-from instrument_profiles import symbol_carries_currency as _symbol_carries_currency
+from instrument_profiles import symbol_carries_currency as _symbol_carries_currency, canonical_symbol
 from market_context import (pip_size, normalize_pair,
-                            infer_broker_offset_seconds, entry_age_seconds)
+                            infer_broker_offset_seconds, entry_age_seconds,
+                            broker_offset_seconds)
 
 from calendar_fetcher import is_non_data_event
 from event_reaction_history import (normalize_event_name,
@@ -290,15 +291,19 @@ class EventPathRecorder:
 
     @staticmethod
     def _fresh_pairs(market_snapshot: Dict, currency: str, now: datetime,
-                     max_age: float) -> List[str]:
-        """Pushed pairs containing the currency, no fresher-than-max_age."""
+                     max_age: float) -> List[tuple]:
+        """``(snapshot_key, canonical_pair)`` for pushed pairs containing the
+        currency, no fresher-than-max_age. The snapshot is keyed by the push
+        root as the server stored it; the canonical name (profile alias
+        'GOLD' -> 'XAUUSD') is what the RECORD carries so rows merge with the
+        historical dataset — callers must index the snapshot with the key."""
         out = []
         for pair, entry in market_snapshot.items():
-            norm = normalize_pair(pair)
+            norm = canonical_symbol(pair)
             if not _symbol_carries_currency(norm, currency):
                 continue
             if entry_age_seconds(entry, now) <= max_age:
-                out.append(norm)
+                out.append((pair, norm))
         return out
 
     def _snapshot_spreads(self, market_snapshot: Dict, now: datetime):
@@ -306,9 +311,9 @@ class EventPathRecorder:
             dist = abs((now - entry["event_time"]).total_seconds())
             if dist > SPREAD_SNAP_WINDOW_SECONDS:
                 continue
-            for pair in self._fresh_pairs(market_snapshot, entry["currency"],
-                                          now, FRESH_PUSH_MAX_AGE_SECONDS):
-                spread = market_snapshot[pair].get('spread_points')
+            for key, pair in self._fresh_pairs(market_snapshot, entry["currency"],
+                                               now, FRESH_PUSH_MAX_AGE_SECONDS):
+                spread = market_snapshot[key].get('spread_points')
                 if spread is None:
                     continue
                 best = entry["spreads"].get(pair)
@@ -332,11 +337,11 @@ class EventPathRecorder:
             pairs = self._fresh_pairs(market_snapshot, entry["currency"], now,
                                       float('inf') if give_up
                                       else FRESH_PUSH_MAX_AGE_SECONDS)
-            for pair in pairs:
+            for key, pair in pairs:
                 if pair in measured:
                     continue
                 try:
-                    rec = self._measure_pair(entry, pair, market_snapshot[pair],
+                    rec = self._measure_pair(entry, pair, market_snapshot[key],
                                              give_up)
                 except Exception as e:
                     # One malformed pair must not poison the others or the tick
@@ -414,6 +419,11 @@ class EventPathRecorder:
             "regime": self._regime_for(entry["currency"]),
             "pair": pair,
             "broker_utc_offset_min": (offset // 60) if offset is not None else None,
+            # Unit stamp: the pip every *_pips field was divided by. Lets the
+            # aggregators drop a record measured with the wrong unit (a gold
+            # chart pushing before the XAUUSD profile existed would have
+            # produced 1000x numbers that were otherwise indistinguishable).
+            "pip_size": pip_size(pair) if pair else None,
             "data_status": status,
         }
 
@@ -429,7 +439,7 @@ class EventPathRecorder:
             pushed_at = datetime.fromisoformat(market_entry.get('updated_at', ''))
         except (ValueError, TypeError):
             return None
-        offset = infer_broker_offset_seconds(bars, pushed_at)
+        offset = broker_offset_seconds(market_entry, bars, pushed_at)
         if offset is None:
             return None
 

@@ -818,7 +818,7 @@ def normalize_instrument_routing(value, strict: bool = False) -> dict:
     strict=True (panel endpoint): the first problem raises ValueError so the
     operator sees exactly what was refused and nothing is applied.
     """
-    from instrument_profiles import validate_routing_symbol
+    from instrument_profiles import validate_routing_symbol, canonical_symbol
     if value is None:
         return {}
     if isinstance(value, str):
@@ -856,13 +856,19 @@ def normalize_instrument_routing(value, strict: bool = False) -> dict:
         cleaned = []
         for sym in syms:
             sym_u = str(sym).strip().upper().replace("/", "")
-            if not sym_u or sym_u in cleaned:
+            if not sym_u:
                 continue
             problem = validate_routing_symbol(sym_u, cur_u)
             if problem:
                 if strict:
                     raise ValueError(problem)
                 _note(f"instrument routing — {problem}; entry ignored")
+                continue
+            # Store the canonical root: a profile alias ('GOLD') validated
+            # fine but never matched the EA's 'XAUUSD' push, so the route
+            # silently fell back to DEFAULT_PAIRS.
+            sym_u = canonical_symbol(sym_u)
+            if sym_u in cleaned:
                 continue
             cleaned.append(sym_u)
         if cleaned:
@@ -879,6 +885,22 @@ def routing_candidates(currency: str) -> list:
     """Ordered instrument roots to try before DEFAULT_PAIRS for this currency
     (empty list = routing off for that currency)."""
     return list(INSTRUMENT_ROUTING.get((currency or "").upper(), []) or [])
+
+
+def routed_event_policy(currency: str) -> tuple:
+    """``(extra_events, skip_events)`` of the FIRST routed instrument for the
+    currency (the one the updater tries first), ``((), ())`` when the
+    currency is not routed or routes to a forex pair. Applied by
+    CalendarAggregator._event_is_tradeable on top of the TIER whitelist:
+    the forex whitelist was tuned for forex reactions and an instrument may
+    react to different releases. Note the policy follows the INTENDED route;
+    if the chart is stale at analysis time the event still falls back to
+    DEFAULT_PAIRS (documented, rare)."""
+    from instrument_profiles import event_policy_for
+    candidates = routing_candidates(currency)
+    if not candidates:
+        return (), ()
+    return event_policy_for(candidates[0])
 
 
 INSTRUMENT_ROUTING = parse_instrument_routing(os.getenv("SKYTOWER_INSTRUMENT_ROUTING", ""))

@@ -27,15 +27,16 @@ input int      InpCheckInterval = 60;            // Signal Check Interval (secon
 
 input group "=== Trading Settings ==="
 input double   InpRiskPercent = 10.0;            // Risk % per trade (of balance)
-input double   InpMaxMarginUsePercent = 0.0;     // Max % of free margin per position (0 = no cap = today's behaviour; set ~50 on gold/index charts at 1:100)
+input double   InpMaxMarginUsePercent = 0.0;     // Max % of free margin per position (0 = auto: only what free margin allows, i.e. the broker's own 10019 limit; set ~50 on gold/index charts at 1:100)
 input double   InpMaxLotPercent = 80.0;          // Max Lot % (default from server)
 input int      InpSlippage = 50;                 // Max Slippage (points)
 input double   InpMinConfidence = 0.5;           // Min Confidence to trade
 input bool     InpUseConfidenceLot = true;       // Reduce lot by decision confidence (server lot%)
-input bool     InpUseSpreadLotReduction = true;  // Reduce lot by spread level
+input bool     InpUseSpreadLotReduction = false; // Reduce lot by spread level (operator default: off — lot comes from the risk budget)
 
 input group "=== Safety Settings ==="
 input double   InpMaxSpreadPips = 10.0;          // Max Spread (pips)
+input double   InpExtremeSpreadPips = 15.0;      // Spread ceiling that blocks ANY entry (pips of this chart's unit; forex 15 = unchanged, XAUUSD 30 = $3.00)
 input double   InpPipSizeOverride = 0.0;         // Pip size in price units (0 = auto forex rule; XAUUSD 0.10, GER40/US500 1.0)
 input double   InpMinSLPips = 20.0;              // SL sanity floor (pips of this chart's unit; profile ea_inputs)
 input double   InpMaxSLPips = 100.0;             // SL sanity ceiling (pips of this chart's unit)
@@ -145,6 +146,20 @@ bool           g_tp1Hit = false;
 bool           g_slMovedToBE = false;
 double         g_originalLots = 0;
 
+// Risk actually at the broker stop when the position was opened (final
+// lots x loss per lot at the initial SL). On 1:100 CFD charts the free-
+// margin cap can shrink the lot far below the panel budget, so the server
+// needs THIS number (echoed as risk_usd) to arm profit protection and to
+// tell the exit model what is really at stake. 0 = unknown (server falls
+// back to max_loss_usd, i.e. today's behaviour).
+double         g_riskUsdAtOpen = 0;
+bool           g_marginCapped = false;
+// Foreign-position block is re-checked periodically so the chart unblocks
+// by itself once the manual/other-magic position is gone (it used to latch
+// until the EA was re-attached).
+bool           g_blockedByForeign = false;
+datetime       g_lastForeignRecheck = 0;
+
 // Zone indicator handle and data
 int            g_zoneIndicatorHandle = INVALID_HANDLE;
 double         g_zoneBias = 0;           // -1 to +1 from indicator
@@ -233,11 +248,13 @@ bool PersistRecoveryMetadata()
       return false;
    }
 
-   // Version 2 appends the forced marker. Column ADDED at the end so a v1
-   // file written by an older build still parses (its missing field reads as
-   // empty = not forced), which is also why v1 stays acceptable on load.
+   // Version 2 appends the forced marker, version 3 the risk at the initial
+   // stop + margin-capped flag. Columns are ADDED at the end so a v1/v2
+   // file written by an older build still parses (missing fields read as
+   // empty = not forced / unknown risk), which is also why they stay
+   // acceptable on load.
    FileWrite(handle,
-             "2",
+             "3",
              StringFormat("%I64u", g_currentTicket),
              StringFormat("%I64u", g_currentPositionId),
              StringFormat("%I64d", g_magicNumber),
@@ -247,7 +264,9 @@ bool PersistRecoveryMetadata()
              DoubleToString(g_originalLots, 8),
              g_currentEventName,
              g_tradeDecisionId,
-             g_tradeForced ? "1" : "0");
+             g_tradeForced ? "1" : "0",
+             DoubleToString(g_riskUsdAtOpen, 2),
+             g_marginCapped ? "1" : "0");
    FileFlush(handle);
    FileClose(handle);
    return true;
@@ -273,13 +292,15 @@ bool LoadRecoveryMetadata(ulong expectedPositionId, bool brokerSelected = true)
    string savedEventName = FileReadString(handle);
    string savedDecisionId = FileReadString(handle);
    string savedForced = FileIsEnding(handle) ? "" : FileReadString(handle);
+   string savedRiskUsd = FileIsEnding(handle) ? "" : FileReadString(handle);
+   string savedMarginCapped = FileIsEnding(handle) ? "" : FileReadString(handle);
    FileClose(handle);
 
    ulong positionId = (ulong)StringToInteger(savedPositionId);
    long magic = StringToInteger(savedMagic);
    double maxLoss = StringToDouble(savedMaxLoss);
    double originalLots = StringToDouble(savedOriginalLots);
-   if((version != "1" && version != "2")
+   if((version != "1" && version != "2" && version != "3")
       || positionId != expectedPositionId
       || magic != g_magicNumber
       || savedSymbol != _Symbol
@@ -296,6 +317,16 @@ bool LoadRecoveryMetadata(ulong expectedPositionId, bool brokerSelected = true)
    g_maxLossUSD = maxLoss;
    g_maxLossGuardEnabled = true;
    g_originalLots = originalLots;
+   // v3 columns: absent in a v1/v2 file (older build) -> keep whatever the
+   // adoption path estimated from the current stop instead of wiping it.
+   if(savedRiskUsd != "")
+   {
+      g_riskUsdAtOpen = StringToDouble(savedRiskUsd);
+      if(!MathIsValidNumber(g_riskUsdAtOpen) || g_riskUsdAtOpen < 0)
+         g_riskUsdAtOpen = 0.0;
+   }
+   if(savedMarginCapped != "")
+      g_marginCapped = (savedMarginCapped == "1");
    if(!brokerSelected)
    {
       g_currentTicket = (ulong)StringToInteger(savedTicket);
@@ -437,11 +468,20 @@ void TryRecoverOpenPosition()
       if(foreignSymbolCount > 0)
       {
          g_recoveryState = RECOVERY_BLOCKED;
-         Print("CRITICAL: A foreign/manual position already exists on ", _Symbol,
-               ". New entries are blocked to prevent netting/ownership conflicts.");
+         if(!g_blockedByForeign)
+            Print("CRITICAL: A foreign/manual position already exists on ", _Symbol,
+                  ". New entries are blocked to prevent netting/ownership conflicts"
+                  " (re-checked every 30 s; unblocks once it is closed).");
+         g_blockedByForeign = true;
+         g_lastForeignRecheck = TimeCurrent();
          if(g_panelCreated)
             g_panel.SetStatus("Foreign position", clrRed);
          return;
+      }
+      if(g_blockedByForeign)
+      {
+         Print("Foreign position on ", _Symbol, " is gone - entries unblocked.");
+         g_blockedByForeign = false;
       }
       if(!RecoverClosedPositionReport())
       {
@@ -482,6 +522,15 @@ void TryRecoverOpenPosition()
    g_eventDirection = (posType == POSITION_TYPE_BUY) ? "BUY" : "SELL";
    g_eventPair = PositionGetString(POSITION_SYMBOL);
    g_originalLots = PositionGetDouble(POSITION_VOLUME);
+   // Risk at the stop: a late fill of THIS EA's own ambiguous order keeps the
+   // values CalculateLotSize computed seconds ago; any other adoption
+   // (restart, re-attach) estimates from the current stop, and trusted
+   // metadata overwrites that below with the risk at the INITIAL stop.
+   if(!g_pendingOpenOutcome || g_riskUsdAtOpen <= 0)
+   {
+      g_riskUsdAtOpen = SkyRiskAtCurrentStop(g_eventPair);
+      g_marginCapped = false;
+   }
    g_lastKnownProfit = PositionGetDouble(POSITION_PROFIT);
    g_lastTradeTime = (datetime)PositionGetInteger(POSITION_TIME);
    g_closeRetryCount = 0;
@@ -572,6 +621,19 @@ int OnInit()
             ") — need 0 < min <= max. EA not started.");
       return(INIT_PARAMETERS_INCORRECT);
    }
+
+   //--- Spread ceiling must be positive; warn when the max-spread input is
+   //--- above it (the ceiling binds first, so the operator's value is moot).
+   if(!MathIsValidNumber(InpExtremeSpreadPips) || InpExtremeSpreadPips <= 0.0)
+   {
+      Print("CONFIG ERROR: InpExtremeSpreadPips must be > 0 (got ",
+            DoubleToString(InpExtremeSpreadPips, 1), "). EA not started.");
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+   if(InpMaxSpreadPips > InpExtremeSpreadPips)
+      Print("WARNING: InpMaxSpreadPips (", DoubleToString(InpMaxSpreadPips, 1),
+            ") is above InpExtremeSpreadPips (", DoubleToString(InpExtremeSpreadPips, 1),
+            ") — the extreme ceiling blocks entries first");
 
    //--- Generate unique magic number per symbol if auto mode
    g_magicNumber = InpMagicNumber;
@@ -673,7 +735,8 @@ int OnInit()
                "tick_size=%s tick_value=%.5f contract_size=%.2f "
                "vol_min=%s vol_step=%s vol_max=%s "
                "currency_profit=%s currency_margin=%s leverage=1:%d "
-               "calc_mode=%d margin_1lot=%.2f spread_pips=%.2f",
+               "calc_mode=%d margin_1lot=%.2f spread_pips=%.2f "
+               "max_spread=%.1f extreme_spread=%.1f margin_cap=%.0f%%",
                _Symbol,
                (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS),
                DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_POINT), 8),
@@ -689,7 +752,9 @@ int OnInit()
                (int)AccountInfoInteger(ACCOUNT_LEVERAGE),
                (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_CALC_MODE),
                specMargin1Lot,
-               SkySpreadPips(_Symbol));
+               SkySpreadPips(_Symbol),
+               InpMaxSpreadPips, InpExtremeSpreadPips,
+               (InpMaxMarginUsePercent > 0) ? InpMaxMarginUsePercent : 100.0);
    Print("==============================================");
 
    //--- Check server connection
@@ -871,6 +936,14 @@ void GetZoneBasedTargets(string symbol, string direction, double entryPrice,
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   // A foreign-position block is not permanent: once the manual/other-magic
+   // position is closed the chart must trade again without a re-attach.
+   if(g_recoveryState == RECOVERY_BLOCKED && g_blockedByForeign
+      && TimeCurrent() - g_lastForeignRecheck >= 30)
+   {
+      g_lastForeignRecheck = TimeCurrent();
+      g_recoveryState = RECOVERY_PENDING;
+   }
    if(g_recoveryState == RECOVERY_PENDING)
    {
       TryRecoverOpenPosition();
@@ -1230,10 +1303,20 @@ void PushMarketData()
    long spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
    double spreadPips = SkySpreadPips(_Symbol);
 
+   // broker_utc_offset_sec: the EA KNOWS its broker clock offset; the
+   // server used to infer it from the newest bar's age, which is ambiguous
+   // whenever bars stall (gold daily break, weekend) and snapped to a value
+   // 30/60 min off. The echo wins; inference stays the fallback.
+   // TimeCurrent()-TimeGMT() drifts by the seconds since the last tick;
+   // snap to the 15-min broker grid so the server's minute-exact bar lookups
+   // line up (the server snaps again — belt and braces).
+   int offsetSec = (int)(MathRound(GetBrokerTimezoneOffset() / 900.0) * 900.0);
    string json = StringFormat(
       "{\"pair\":\"%s\",\"current_price\":%.5f,\"spread_points\":%d,"
-      "\"spread_pips\":%.2f,\"pip_size\":%.5f,\"ohlc_multi\":{",
-      _Symbol, currentPrice, (int)spread, spreadPips, SkyPipSize(_Symbol));
+      "\"spread_pips\":%.2f,\"pip_size\":%.5f,\"broker_utc_offset_sec\":%d,"
+      "\"ohlc_multi\":{",
+      _Symbol, currentPrice, (int)spread, spreadPips, SkyPipSize(_Symbol),
+      offsetSec);
 
    string ohlcPart = "";
    AppendOhlcJson(ohlcPart, "M1", PERIOD_M1, 60);   // fine pre-news picture
@@ -1709,7 +1792,8 @@ void ExecuteEventTrade()
 
    if(spreadMultiplier <= 0)
    {
-      Print("Spread EXTREME: ", DoubleToString(spread, 1), " pips. No trade.");
+      Print("Spread EXTREME: ", DoubleToString(spread, 1), " pips >= ceiling ",
+            DoubleToString(InpExtremeSpreadPips, 1), " (InpExtremeSpreadPips). No trade.");
       ResetEventWait();
       return;
    }
@@ -1971,6 +2055,31 @@ void ExecuteEventTrade()
          success = trade.Sell(lots, symbol, bid, sl, 0, "SkyTower-AI");
    }
 
+   // Requote / price changed / off-quotes: nothing executed, so ONE retry at
+   // the fresh quote with a doubled deviation is safe and cannot double-open.
+   // Before this the whole event was lost to a tolerance rejection on a tape
+   // that moves several points per tick in the last seconds before a print.
+   if(!success)
+   {
+      uint rc = trade.ResultRetcode();
+      if(rc == TRADE_RETCODE_REQUOTE || rc == TRADE_RETCODE_PRICE_CHANGED
+         || rc == TRADE_RETCODE_PRICE_OFF)
+      {
+         MqlTick fresh;
+         if(SymbolInfoTick(symbol, fresh) && fresh.ask > 0 && fresh.bid > 0)
+         {
+            Print("Order rejected with retcode ", rc,
+                  " - retrying once at the fresh quote with 2x deviation");
+            trade.SetDeviationInPoints(InpSlippage * 2);
+            if(g_eventDirection == "BUY")
+               success = trade.Buy(lots, symbol, fresh.ask, sl, tp, "SkyTower-AI");
+            else
+               success = trade.Sell(lots, symbol, fresh.bid, sl, tp, "SkyTower-AI");
+            trade.SetDeviationInPoints(InpSlippage);
+         }
+      }
+   }
+
    // 10019 (no money): the free-margin cap in CalculateLotSize should keep
    // this from happening; if it still does, no retry — sizing must change.
    if(!success && trade.ResultRetcode() == TRADE_RETCODE_NO_MONEY)
@@ -2009,6 +2118,16 @@ void ExecuteEventTrade()
    g_currentPositionId = livePositionId;
    g_lastTradeTime = TimeCurrent();
    g_originalLots = liveLots;
+   // True post-fill risk: the requote retry / slippage can move the fill
+   // away from the price the lot was sized at while the stop stays put.
+   if(liveSL > 0 && liveEntry > 0 && liveLots > 0)
+   {
+      double filledPnL = 0;
+      if(OrderCalcProfit((liveDirection == "BUY") ? ORDER_TYPE_BUY : ORDER_TYPE_SELL,
+                         symbol, liveLots, liveEntry, liveSL, filledPnL)
+         && MathIsValidNumber(filledPnL) && filledPnL < 0)
+         g_riskUsdAtOpen = MathAbs(filledPnL);
+   }
    g_lastKnownProfit = 0.0;
    g_realizedPnL = 0.0;
    g_lastSeenLots = liveLots;
@@ -2299,7 +2418,8 @@ void ReportAndGetCommand(string symbol, double profit, double spreadPips)
       "\"profit_usd\":%.2f,\"realized_usd\":%.2f,\"tick_value\":%.4f,"
       "\"spread_pips\":%.1f,\"pip_size\":%.5f,\"account_balance\":%.2f,"
       "\"zone_bias\":%.3f,\"nearest_resistance\":%.5f,\"nearest_support\":%.5f,"
-      "\"max_loss_usd\":%.2f,\"open_time\":%I64d,"
+      "\"max_loss_usd\":%.2f,\"risk_usd\":%.2f,\"margin_capped\":%s,"
+      "\"open_time\":%I64d,"
       "\"event_name\":\"%s\",\"decision_id\":\"%s\","
       "\"forced\":%s,\"reconcile\":true}",
       ticketText, positionIdText, magicText, symbol, g_eventDirection,
@@ -2309,7 +2429,8 @@ void ReportAndGetCommand(string symbol, double profit, double spreadPips)
       profit, g_realizedPnL, tickValue,
       spreadPips, SkyPipSize(symbol), balance,
       g_zoneBias, g_nearestLiqHigh, g_nearestLiqLow,
-      g_maxLossUSD, openTimeUtc,
+      g_maxLossUSD, g_riskUsdAtOpen, (g_marginCapped ? "true" : "false"),
+      openTimeUtc,
       EscapeJson(g_currentEventName), EscapeJson(g_tradeDecisionId),
       // A reconcile report REBUILDS server state after a restart, so the
       // forced marker must travel with it or the trade is re-registered as
@@ -2453,13 +2574,15 @@ void NotifyPositionOpened()
       "\"symbol\":\"%s\",\"direction\":\"%s\","
       "\"entry_price\":%.5f,\"lots\":%.2f,\"sl\":%.5f,\"tp\":%.5f,"
       "\"tick_value\":%.4f,\"account_balance\":%.2f,"
-      "\"max_loss_usd\":%.2f,\"open_time\":%I64d,"
+      "\"max_loss_usd\":%.2f,\"risk_usd\":%.2f,\"margin_capped\":%s,"
+      "\"open_time\":%I64d,"
       "\"event_name\":\"%s\",\"decision_id\":\"%s\","
       "\"forced\":%s,\"recovered\":%s,\"reconcile\":true}",
       ticketText, positionIdText, magicText, symbol, g_eventDirection,
       entryPrice, lots, sl, tp,
       tickValue, balance,
-      g_maxLossUSD, openTimeUtc,
+      g_maxLossUSD, g_riskUsdAtOpen, (g_marginCapped ? "true" : "false"),
+      openTimeUtc,
       EscapeJson(g_currentEventName), EscapeJson(g_tradeDecisionId),
       // THIS is the endpoint used to re-adopt a position after a restart, so
       // the forced marker matters here even more than in the periodic report:
@@ -2905,6 +3028,8 @@ void ResetSmartExitState()
    g_tp1Hit = false;
    g_slMovedToBE = false;
    g_originalLots = 0;
+   g_riskUsdAtOpen = 0;
+   g_marginCapped = false;
 }
 
 //+------------------------------------------------------------------+
@@ -2952,14 +3077,20 @@ double CalculateLotSize(string symbol, string direction, double lotPercent,
    // exceed what the account can carry and the broker answers 10019
    // (no money). Margin is symmetric for CFDs, so the trade's own side and
    // entry price are used only because they are already known here.
+   // InpMaxMarginUsePercent = 0 means AUTO: exactly the free margin (100%),
+   // i.e. the broker's own acceptance limit — a lot above it is never
+   // "today's behaviour", it is a 10019 and a lost event, so the auto cap
+   // only ever turns a rejection into a smaller fill and NEVER touches a lot
+   // the broker would have filled (forex at 1:500 stays as before).
    double marginPerLot = 0;
-   if(InpMaxMarginUsePercent > 0
-      && OrderCalcMargin(orderType, symbol, 1.0, entryPrice, marginPerLot)
+   double marginCapPct = (InpMaxMarginUsePercent > 0) ? InpMaxMarginUsePercent : 100.0;
+   g_marginCapped = false;
+   if(OrderCalcMargin(orderType, symbol, 1.0, entryPrice, marginPerLot)
       && MathIsValidNumber(marginPerLot) && marginPerLot > 0)
    {
       double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
       double maxLotsByMargin =
-         (freeMargin * InpMaxMarginUsePercent / 100.0) / marginPerLot;
+         (freeMargin * marginCapPct / 100.0) / marginPerLot;
       if(MathIsValidNumber(maxLotsByMargin) && lots > maxLotsByMargin)
       {
          Print("Lot capped by free margin: risk-based ",
@@ -2967,13 +3098,50 @@ double CalculateLotSize(string symbol, string direction, double lotPercent,
                DoubleToString(maxLotsByMargin, 4),
                " lots (free margin ", DoubleToString(freeMargin, 2),
                ", margin/lot ", DoubleToString(marginPerLot, 2),
-               ", cap ", DoubleToString(InpMaxMarginUsePercent, 0), "%)");
+               ", cap ", DoubleToString(marginCapPct, 0), "%",
+               (InpMaxMarginUsePercent > 0) ? "" : " auto", ")");
          lots = maxLotsByMargin;
+         g_marginCapped = true;
       }
    }
 
    // Never promote an under-minimum risk result to the broker minimum.
-   return SkyNormalizeVolumeDown(symbol, lots);
+   double finalLots = SkyNormalizeVolumeDown(symbol, lots);
+   // Real money at the initial stop — echoed to the server as risk_usd.
+   g_riskUsdAtOpen = (finalLots > 0) ? finalLots * lossPerLot : 0.0;
+   if(g_riskUsdAtOpen > 0)
+      Print("Risk at stop: $", DoubleToString(g_riskUsdAtOpen, 2),
+            " for ", DoubleToString(finalLots, 4), " lots",
+            g_marginCapped ? " (MARGIN-CAPPED below the budget)" : "",
+            " | budget $", DoubleToString(riskAmount, 2));
+   return finalLots;
+}
+
+//+------------------------------------------------------------------+
+//| Risk at the CURRENT broker stop of an adopted position (recovery   |
+//| without metadata). 0 when there is no stop or the broker cannot    |
+//| value it — the server then falls back to max_loss_usd.             |
+//+------------------------------------------------------------------+
+double SkyRiskAtCurrentStop(string symbol)
+{
+   double sl = PositionGetDouble(POSITION_SL);
+   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+   double lots = PositionGetDouble(POSITION_VOLUME);
+   if(sl <= 0 || entry <= 0 || lots <= 0)
+      return 0.0;
+   ENUM_ORDER_TYPE orderType =
+      ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+         ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double pnl = 0;
+   if(!OrderCalcProfit(orderType, symbol, lots, entry, sl, pnl)
+      || !MathIsValidNumber(pnl))
+      return 0.0;
+   // A stop already on the profit side (break-even / trailed) carries no
+   // risk information about the trade's ORIGINAL exposure — report 0 so
+   // the server keeps its persisted value / falls back to the budget.
+   if(pnl >= 0)
+      return 0.0;
+   return MathAbs(pnl);
 }
 
 //+------------------------------------------------------------------+
@@ -3174,21 +3342,37 @@ double ExtractJsonDouble(string json, string key)
 //| Get lot multiplier based on spread level                           |
 //| Based on SPREAD_LOT_REDUCTION from config.py                       |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Spread tier scale: the forex table (3/6/10/15 pips) was tuned for  |
+//| pairs that move 30-50 pips on a print. A chart whose unit differs  |
+//| (XAUUSD: 1 pip = $0.10, prints move 80+ pips) keeps the SAME       |
+//| proportions by raising InpExtremeSpreadPips; 15 (default) = 1.0,   |
+//| so every forex chart is byte-identical to before.                  |
+//+------------------------------------------------------------------+
+double SkySpreadTierScale()
+{
+   if(!MathIsValidNumber(InpExtremeSpreadPips) || InpExtremeSpreadPips <= 0.0)
+      return 1.0;
+   return InpExtremeSpreadPips / 15.0;
+}
+
 double GetSpreadLotMultiplier(double spreadPips)
 {
-   //--- Spread thresholds (from python config)
+   //--- Spread thresholds (from python config), scaled by the chart's
+   //--- extreme ceiling (SkySpreadTierScale):
    //--- low: < 3 pips = 100%
    //--- medium: < 6 pips = 80%
    //--- high: < 10 pips = 60%
    //--- extreme: >= 15 pips = 0% (no trade)
+   double k = SkySpreadTierScale();
 
-   if(spreadPips < 3.0)
+   if(spreadPips < 3.0 * k)
       return 1.0;      // 100% lot
-   else if(spreadPips < 6.0)
+   else if(spreadPips < 6.0 * k)
       return 0.8;      // 80% lot
-   else if(spreadPips < 10.0)
+   else if(spreadPips < 10.0 * k)
       return 0.6;      // 60% lot
-   else if(spreadPips < 15.0)
+   else if(spreadPips < 15.0 * k)
       return 0.4;      // 40% lot (additional level)
    else
       return 0.0;      // No trade - spread extreme
@@ -3199,13 +3383,14 @@ double GetSpreadLotMultiplier(double spreadPips)
 //+------------------------------------------------------------------+
 string GetSpreadStatus(double spreadPips)
 {
-   if(spreadPips < 3.0)
+   double k = SkySpreadTierScale();
+   if(spreadPips < 3.0 * k)
       return "OK";
-   else if(spreadPips < 6.0)
+   else if(spreadPips < 6.0 * k)
       return "MEDIUM";
-   else if(spreadPips < 10.0)
+   else if(spreadPips < 10.0 * k)
       return "HIGH";
-   else if(spreadPips < 15.0)
+   else if(spreadPips < 15.0 * k)
       return "VERY_HIGH";
    else
       return "EXTREME";
